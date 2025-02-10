@@ -22,6 +22,7 @@ current_schema = config['schema']['name']
 
 db = SQLAlchemy(app)
 
+
 class Category(db.Model):
     __tablename__ = 'categories'
     __table_args__ = {'schema': current_schema}
@@ -30,6 +31,7 @@ class Category(db.Model):
     position = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow)
+
 
 class Task(db.Model):
     __tablename__ = 'tasks'
@@ -41,15 +43,28 @@ class Task(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+
 class TaskAssignment(db.Model):
     __tablename__ = 'task_assignment'
     __table_args__ = {'schema': current_schema}
     id = db.Column(db.Integer, primary_key=True)
-    task_id = db.Column(db.Integer, db.ForeignKey(f'{current_schema}.tasks.id', ondelete='CASCADE'), nullable=False)
-    category_id = db.Column(db.Integer, db.ForeignKey(f'{current_schema}.categories.id', ondelete='CASCADE'), nullable=False)
+
+    task_id = db.Column(
+        db.Integer,
+        db.ForeignKey(f'{current_schema}.tasks.id', ondelete='CASCADE'),
+        nullable=False
+    )
+
+    category_id = db.Column(
+        db.Integer,
+        db.ForeignKey(f'{current_schema}.categories.id', ondelete='CASCADE'),
+        nullable=False
+    )
+
     assigned_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-# Main page – retrieves categories and their associated tasks via task_assignment
+
+# Main page
 @app.route('/')
 def index():
     categories = Category.query.order_by(Category.position).all()
@@ -62,15 +77,21 @@ def index():
 
         # Filter tasks by undone first and by name
         if task_ids:
-            tasks = Task.query.filter(Task.id.in_(task_ids)).order_by(Task.is_done, Task.name).all()
+            tasks = (
+                Task.query.filter(Task.id.in_(task_ids))
+                .order_by(Task.is_done, Task.name)
+                .all()
+            )
         else:
             tasks = []
 
         tasks_by_category[cat.id] = tasks
 
-    return render_template('index.html',
-                         categories=categories,
-                         tasks_by_category=tasks_by_category)
+    return render_template(
+        'index.html',
+        categories=categories,
+        tasks_by_category=tasks_by_category)
+
 
 # Add new category
 @app.route('/add_category', methods=['POST'])
@@ -78,11 +99,15 @@ def add_category():
     category_name = request.form.get('category_name')
     if category_name:
         # Determine new category position: max(position) + 1
-        max_position = db.session.query(db.func.max(Category.position)).scalar() or 0
+        max_position = db.session.query(
+            db.func.max(Category.position)
+        ).scalar() or 0
+
         new_category = Category(name=category_name, position=max_position + 1)
         db.session.add(new_category)
         db.session.commit()
     return redirect(url_for('index'))
+
 
 # Update category name
 @app.route('/update_category/<int:category_id>', methods=['POST'])
@@ -93,14 +118,22 @@ def update_category(category_id):
         category.updated_at = datetime.utcnow()
         db.session.commit()
         return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Category not found"})
+    return jsonify({
+        "status": "error",
+        "message": "Category not found"
+    })
+
 
 # Delete category with all assigned tasks
 @app.route('/delete_category/<int:category_id>', methods=['POST'])
 def delete_category(category_id):
     category = Category.query.get(category_id)
     if category:
-        assignments = TaskAssignment.query.filter_by(category_id=category.id).all()
+        assignments = (
+            TaskAssignment.query
+            .filter_by(category_id=category.id)
+            .all()
+        )
 
         for assign in assignments:
             task = Task.query.get(assign.task_id)
@@ -110,7 +143,11 @@ def delete_category(category_id):
         db.session.delete(category)
         db.session.commit()
         return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Category not found"})
+    return jsonify({
+        "status": "error",
+        "message": "Category not found"
+    })
+
 
 # Assign task to category
 @app.route('/add_task', methods=['POST'])
@@ -122,10 +159,15 @@ def add_task():
         db.session.add(new_task)
         db.session.commit()
         # Powiązanie zadania z kategorią przez task_assignment
-        assignment = TaskAssignment(task_id=new_task.id, category_id=category_id)
+        assignment = TaskAssignment(
+            task_id=new_task.id,
+            category_id=category_id
+        )
+
         db.session.add(assignment)
         db.session.commit()
     return redirect(url_for('index'))
+
 
 # Update task – change name and description
 @app.route('/update_task/<int:task_id>', methods=['POST'])
@@ -137,7 +179,11 @@ def update_task(task_id):
         task.updated_at = datetime.utcnow()
         db.session.commit()
         return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Task not found"})
+    return jsonify({
+        "status": "error",
+        "message": "Task not found"
+    })
+
 
 # Delete task
 @app.route('/delete_task/<int:task_id>', methods=['POST'])
@@ -147,7 +193,11 @@ def delete_task(task_id):
         db.session.delete(task)
         db.session.commit()
         return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Task not found"})
+    return jsonify({
+        "status": "error",
+        "message": "Task not found"
+    })
+
 
 # Move task to other category
 @app.route('/move_task', methods=['POST'])
@@ -161,8 +211,16 @@ def move_task():
             db.session.commit()
             return jsonify({"status": "success"})
         else:
-            return jsonify({"status": "error", "message": "Assignment not found"})
-    return jsonify({"status": "error", "message": "Invalid parameters"})
+            return jsonify({
+                "status": "error",
+                "message": "Assignment not found"
+            })
+
+    return jsonify({
+        "status": "error",
+        "message": "Invalid parameters"
+    })
+
 
 # Rename category
 @app.route('/rename_category/<int:category_id>', methods=['POST'])
@@ -174,7 +232,10 @@ def rename_category(category_id):
         cat.updated_at = datetime.utcnow()
         db.session.commit()
         return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Error renaming category"})
+    return jsonify({
+        "status": "error",
+        "message": "Error renaming category"
+    })
 
 
 # Move category
@@ -193,7 +254,10 @@ def move_category():
             db.session.commit()
             return jsonify({"status": "success"})
         else:
-            return jsonify({"status": "error", "message": "Category not found"})
+            return jsonify({
+                "status": "error",
+                "message": "Category not found"
+            })
     else:
         # Handling arrow buttons ('up' or 'down')
         category_id = request.form.get('category_id')
@@ -201,13 +265,33 @@ def move_category():
         if category_id and direction:
             cat = Category.query.get(int(category_id))
             if not cat:
-                return jsonify({"status": "error", "message": "Category not found"})
+                return jsonify({
+                    "status": "error",
+                    "message": "Category not found"
+                })
+
             if direction == 'up':
-                swap_cat = Category.query.filter(Category.position < cat.position).order_by(Category.position.desc()).first()
+                swap_cat = (
+                    Category.query
+                    .filter(Category.position < cat.position)
+                    .order_by(Category.position.desc())
+                    .first()
+                )
+
             elif direction == 'down':
-                swap_cat = Category.query.filter(Category.position > cat.position).order_by(Category.position).first()
+                swap_cat = (
+                    Category.query
+                    .filter(Category.position > cat.position)
+                    .order_by(Category.position)
+                    .first()
+                )
+
             else:
-                return jsonify({"status": "error", "message": "Invalid direction"})
+                return jsonify({
+                    "status": "error",
+                    "message": "Invalid direction"
+                })
+
             if swap_cat:
                 temp = cat.position
                 cat.position = swap_cat.position
@@ -216,23 +300,34 @@ def move_category():
                 return jsonify({"status": "success"})
             else:
                 return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Invalid parameters"})
+    return jsonify({
+        "status": "error",
+        "message": "Invalid parameters"
+    })
+
 
 # Update task status
 @app.route('/toggle_task/<int:task_id>', methods=['POST'])
 def toggle_task(task_id):
     task = Task.query.get(task_id)
     if not task:
-        return jsonify({"status": "error", "message": "Task not found"})
+        return jsonify({
+            "status": "error",
+            "message": "Task not found"
+        })
+
     data = request.get_json()
     if not data or "is_done" not in data:
-        return jsonify({"status": "error", "message": "Invalid request"})
+        return jsonify({
+            "status": "error",
+            "message": "Invalid request"
+        })
+
     # Set is_done status from frontend input (True/False)
     task.is_done = data["is_done"]
     task.updated_at = datetime.utcnow()
     db.session.commit()
     return jsonify({"status": "success"})
-
 
 
 if __name__ == '__main__':
