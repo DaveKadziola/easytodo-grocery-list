@@ -97,16 +97,26 @@ def index():
 @app.route('/add_category', methods=['POST'])
 def add_category():
     category_name = request.form.get('category_name')
-    if category_name:
-        # Determine new category position: max(position) + 1
-        max_position = db.session.query(
-            db.func.max(Category.position)
-        ).scalar() or 0
+    if not category_name:
+        return jsonify({'status': 'error', 'message': 'Nazwa kategorii jest wymagana'}), 400
 
+    try:
+        max_position = db.session.query(db.func.max(Category.position)).scalar() or 0
         new_category = Category(name=category_name, position=max_position + 1)
         db.session.add(new_category)
         db.session.commit()
-    return redirect(url_for('index'))
+
+        return jsonify({
+            'status': 'success',
+            'category_id': new_category.id,
+            'category_name': new_category.name,
+            'category_position': new_category.position
+        }), 200
+
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 
 
 # Update category name
@@ -154,19 +164,26 @@ def delete_category(category_id):
 def add_task():
     category_id = request.form.get('category_id')
     task_name = request.form.get('task_name')
-    if task_name and category_id:
+
+    if not task_name or not category_id:
+        return jsonify({'status': 'error', 'message': 'Brak wymaganych pól'}), 400
+
+    try:
         new_task = Task(name=task_name)
         db.session.add(new_task)
         db.session.commit()
-        # Powiązanie zadania z kategorią przez task_assignment
+
         assignment = TaskAssignment(
             task_id=new_task.id,
             category_id=category_id
         )
-
         db.session.add(assignment)
         db.session.commit()
-    return redirect(url_for('index'))
+
+        return jsonify({'status': 'success'}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 
 # Update task – change name and description
@@ -314,20 +331,51 @@ def toggle_task(task_id):
         return jsonify({
             "status": "error",
             "message": "Task not found"
-        })
+        }), 404
 
     data = request.get_json()
     if not data or "is_done" not in data:
         return jsonify({
             "status": "error",
             "message": "Invalid request"
-        })
+        }), 400
 
     # Set is_done status from frontend input (True/False)
     task.is_done = data["is_done"]
     task.updated_at = datetime.utcnow()
     db.session.commit()
-    return jsonify({"status": "success"})
+
+    return jsonify({
+        "status": "success",
+        "is_done": task.is_done
+    })
+
+@app.route('/get_tasks_by_category/<int:category_id>', methods=['GET'])
+def get_tasks_by_category(category_id):
+    # Get all task with assignments
+    assignments = TaskAssignment.query.filter_by(category_id=category_id).all()
+    task_ids = [assign.task_id for assign in assignments]
+
+    # Filter tasks by undone first and by name
+    if task_ids:
+        tasks = (
+            Task.query.filter(Task.id.in_(task_ids))
+            .order_by(Task.is_done, Task.name)
+            .all()
+        )
+    else:
+        tasks = []
+
+    task_list = []
+    for task in tasks:
+        task_list.append({
+            'id': task.id,
+            'name': task.name,
+            'is_done': task.is_done,
+            'description': task.description
+        })
+
+    return jsonify(task_list)
 
 
 if __name__ == '__main__':

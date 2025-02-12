@@ -41,12 +41,15 @@
         margin: 0 auto;
         column-count: 3;
         column-gap: 1rem;
+        scroll-behavior: smooth;
+        transition: scroll-top 0.5s ease-in-out;
       }
     }
     .category-block {
       display: inline-block;
       width: 100%;
       margin-bottom: 1rem;
+      transition: transform 0.5s ease-in-out, opacity 0.3s ease;
     }
     /* Move category arrow buttons */
     .move-btn {
@@ -90,7 +93,9 @@
     <div class="col-12">
       <div class="card bg-secondary">
         <div class="card-body">
-          <form method="POST" action="{{ url_for('add_category') }}">
+          <form method="POST"
+                action="{{ url_for('add_category') }}"
+                onsubmit="addCategory(event)">
             <div class="input-group">
               <input type="text" name="category_name" class="form-control" placeholder="Dodaj nową kategorię" required>
               <button class="btn btn-outline-light" type="submit">Dodaj kategorię</button>
@@ -105,7 +110,7 @@
   <div class="masonry-container">
     <div id="categoriesMasonry">
       {% for category in categories %}
-      <div class="category-block" draggable="true"
+      <div class="category-block" id="category{{ category.id }}" draggable="true"
            ondragstart="dragCategory(event, {{ category.id }})"
            ondragover="allowDropCategory(event)"
            ondragenter="highlightCategory(event)"
@@ -148,7 +153,9 @@
               </div>
               {% endfor %}
               <!-- Task form -->
-              <form method="POST" action="{{ url_for('add_task') }}">
+              <form method="POST" action="{{ url_for('add_task') }}"
+              id="addTaskForm{{ category.id }}"
+              onsubmit="addTask(event, {{ category.id }})">
                 <div class="input-group mt-3">
                   <input type="hidden" name="category_id" value="{{ category.id }}">
                   <input type="text" id="newTask_{{ category.id }}" name="task_name" class="form-control" placeholder="Dodaj nowe zadanie" required>
@@ -165,7 +172,9 @@
     <div class="new-category-mobile mt-4">
       <div class="card bg-secondary">
         <div class="card-body">
-          <form method="POST" action="{{ url_for('add_category') }}">
+          <form method="POST"
+                action="{{ url_for('add_category') }}"
+                onsubmit="addCategory(event)">
             <div class="input-group">
               <input type="text" id="newCategory" name="category_name" class="form-control" placeholder="Dodaj nową kategorię" required>
               <button class="btn btn-outline-light" type="submit">Dodaj kategorię</button>
@@ -210,8 +219,12 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
   // Functions for task handling
-  function toggleTask(taskId) {
+function toggleTask(taskId) {
     var checkbox = document.getElementById('taskCheckbox' + taskId);
+    var taskLabel = checkbox.nextElementSibling;
+    var categoryBlock = checkbox.closest('.category-block');
+    var categoryId = categoryBlock.id.replace('category', '');
+
     fetch('/toggle_task/' + taskId, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -220,12 +233,63 @@
     .then(response => response.json())
     .then(data => {
         if (data.status === 'success') {
-            window.location.href = window.location.href.split('#')[0];
+            // Zaciągnięcie aktualnego stanu zadań dla danej kategorii
+            fetch('/get_tasks_by_category/' + categoryId)
+            .then(response => response.json())
+            .then(tasks => {
+                // Aktualizacja widoku zadań dla danej kategorii
+                updateTasksView(categoryId, tasks);
+            })
+            .catch(error => {
+                console.error('Błąd pobierania zadań:', error);
+                alert('Błąd pobierania aktualnej listy zadań');
+            });
         } else {
             alert('Błąd aktualizacji statusu zadania');
+            // Przywrócenie poprzedniego stanu checkboxa
+            checkbox.checked = !checkbox.checked;
         }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Wystąpił błąd podczas aktualizacji zadania');
+        // Przywrócenie poprzedniego stanu checkboxa
+        checkbox.checked = !checkbox.checked;
     });
-  }
+}
+
+
+function updateTasksView(categoryId, tasks) {
+    const cardBody = document.querySelector(`#category${categoryId} .card-body`);
+    cardBody.innerHTML = ''; // Wyczyść istniejące zadania
+
+    tasks.forEach(task => {
+        const taskDiv = document.createElement('div');
+        taskDiv.classList.add('form-check', 'mb-2');
+
+        const checkbox = document.createElement('input');
+        checkbox.classList.add('form-check-input');
+        checkbox.type = 'checkbox';
+        checkbox.id = 'taskCheckbox' + task.id;
+        checkbox.checked = task.is_done;
+        checkbox.onchange = function() { toggleTask(task.id); };
+
+        const taskLabel = document.createElement('span');
+        taskLabel.classList.add('form-check-label', 'task-item');
+        if (task.is_done) {
+            taskLabel.classList.add('task-done');
+        }
+        taskLabel.textContent = task.name;
+        taskLabel.onclick = function() { openTaskModal(task.id, task.name, task.description); event.stopPropagation(); };
+
+        taskDiv.appendChild(checkbox);
+        taskDiv.appendChild(taskLabel);
+        cardBody.appendChild(taskDiv);
+    });
+}
+
+
+
 
   function openTaskModal(taskId, name, description) {
     document.getElementById('currentTaskId').value = taskId;
@@ -325,11 +389,81 @@
       body: 'category_id=' + encodeURIComponent(categoryId) + '&direction=' + encodeURIComponent(direction)
     }).then(response => response.json())
       .then(data => { if(data.status === 'success'){
+      window.location.hash = '#category' + categoryId;
       location.reload();
-      location.href = location.pathname + "#moveCategory_" + categoryId;
       }
       else { alert('Błąd zmiany kolejności kategorii'); } });
   }
+
+
+  function addTask(event, categoryId) {
+      event.preventDefault();
+      const form = event.target;
+
+      fetch(form.action, {
+          method: 'POST',
+          body: new FormData(form)
+      })
+      .then(response => {
+          if (!response.ok) throw new Error('Błąd sieciowy');
+          return response.json();
+      })
+      .then(data => {
+          if(data.status === 'success') {
+              // Reset formularza przed przeładowaniem
+              form.reset();
+              window.location.hash = '#category' + categoryId;
+              location.reload();
+          }
+      })
+      .catch(error => {
+          console.error('Error:', error);
+          alert('Błąd dodawania zadania');
+      });
+  }
+
+  function addCategory(event) {
+        event.preventDefault();
+        const form = event.target;
+
+        fetch(form.action, {
+            method: 'POST',
+            body: new FormData(form)
+        })
+        .then(response => {
+            if (!response.ok) throw new Error('Błąd sieciowy');
+            return response.json();
+        })
+        .then(data => {
+            if(data.status === 'success') {
+                form.reset();
+                window.location.hash = '#category' + data.category_id;
+                location.reload();
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Błąd dodawania kategorii: ' + error.message);
+        });
+  }
+
+
+
+
+
+
+
+  // Dodatkowa obsługa po załadowaniu strony
+  document.addEventListener('DOMContentLoaded', function() {
+      if(window.location.hash) {
+          const element = document.querySelector(window.location.hash);
+          if(element) {
+              setTimeout(() => {
+                  element.scrollIntoView({behavior: 'smooth', block: 'start', inline: 'nearest'});
+              }, 100);
+          }
+      }
+});
 
 </script>
 </body>
