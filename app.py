@@ -1,9 +1,24 @@
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
+from flask_socketio import SocketIO, emit
 from datetime import datetime
 import configparser
+import psycopg2
+import threading
+import json
+import select
+from flask_cors import CORS
 
 app = Flask(__name__)
+socketio = SocketIO(app,
+    async_mode='eventlet',
+    cors_allowed_origins="*",
+    logger=True,
+    engineio_logger=True
+)
 
 # Load configuration from file
 config = configparser.ConfigParser()
@@ -115,6 +130,7 @@ def add_category():
 
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 
 
@@ -352,6 +368,11 @@ def toggle_task(task_id):
     task.updated_at = datetime.utcnow()
     db.session.commit()
 
+    emit_update('task_toggled', {
+        'task_id': task_id,
+        'is_done': task.is_done
+    })
+
     return jsonify({
         "status": "success",
         "is_done": task.is_done
@@ -385,5 +406,47 @@ def get_tasks_by_category(category_id):
     return jsonify(task_list)
 
 
+def listen_to_db():
+    with app.app_context():
+        conn = psycopg2.connect(
+            host=db_config['host'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['dbname'],
+            options=f"-c search_path={config['schema']['name']}"
+            )
+        conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+        cursor = conn.cursor()
+        cursor.execute("LISTEN data_changes;")
+
+        while True:
+            eventlet.sleep(0.1)
+            if select.select([conn], [], [], 5) == ([], [], []):
+                continue
+            conn.poll()
+            while conn.notifies:
+                notify = conn.notifies.pop()
+                data = json.loads(notify.payload)
+                socketio.emit('update', data)
+
+
+@socketio.on('connect')
+def handle_connect(auth=None):
+    print(f"Client connected: {request.sid}")
+    emit('connection_status', {
+        'status': 'connected',
+        'sid': request.sid
+    })
+
+
+def emit_update(event_type, data):
+    socketio.emit('update', {'type': event_type, 'data': data})
+
 if __name__ == '__main__':
-    app.run(debug=True, host="0.0.0.0", port=8100)
+    #app.run(debug=True, host="0.0.0.0", port=8100)
+    #threading.Thread(target=listen_to_db, daemon=True).start()
+    eventlet.spawn(listen_to_db)
+
+    socketio.run(app, debug=True, host="0.0.0.0", port=8100)
+

@@ -76,19 +76,38 @@
     }
 
     @media (max-width: 767.98px) {
-  .new-category-mobile .form-control::placeholder {
-    color: #adb5bd;
-    opacity: 1;
-  }
+    .new-category-mobile .form-control::placeholder {
+      color: #adb5bd;
+      opacity: 1;
+      }
+    }
   .task-done {
     text-decoration: line-through;
     opacity: 0.6;
-}
+  }
 
-.card-body {
-    transition: opacity 0.3s ease-in-out;
-}
-}
+  .card-body {
+      transition: opacity 0.3s ease-in-out;
+  }
+
+  @keyframes task-highlight {
+      0% {
+          background: rgba(255, 165, 0, 0.3);
+          transform: scale(1);
+      }
+      50% {
+          background: rgba(255, 165, 0, 0.7);
+          transform: scale(1.02);
+      }
+      100% {
+          background: transparent;
+          transform: scale(1);
+      }
+  }
+  .task-highlight {
+    animation: task-highlight 1.5s ease-out;
+  }
+
 
   </style>
 </head>
@@ -126,13 +145,13 @@
            ondrop="dropCategory(event, {{ category.id }})">
         <div class="card bg-secondary">
           <div class="card-header d-flex justify-content-between align-items-center">
-            <a data-bs-toggle="collapse" href="#collapseCategory{{ category.id }}" role="button" aria-expanded="true" aria-controls="collapseCategory{{ category.id }}" class="text-white text-decoration-none">
+            <a data-bs-toggle="collapse" href="#collapseCategory{{ category.id }}" role="button" aria-expanded="true" aria-controls="collapseCategory{{ category.id }}" class="text-white text-decoration-none col">
               {{ category.name }}
             </a>
             <div class="d-flex align-items-center">
               <!-- Arrow buttons for category position change -->
-              <button class="move-btn" id="moveCategory_{{ category.id }}" onclick="moveCategory({{ category.id }}, 'up')" {% if loop.first %}disabled{% endif %}>&#8593;</button>
-              <button class="move-btn" id="moveCategory_{{ category.id }}" onclick="moveCategory({{ category.id }}, 'down')" {% if loop.last %}disabled{% endif %}>&#8595;</button>
+              <button class="btn btn-outline-secondary move-btn" id="moveCategory_{{ category.id }}" onclick="moveCategory({{ category.id }}, 'up')" {% if loop.first %}disabled{% endif %}>&#8593;</button>
+              <button class="btn btn-outline-secondary move-btn" id="moveCategory_{{ category.id }}" onclick="moveCategory({{ category.id }}, 'down')" {% if loop.last %}disabled{% endif %}>&#8595;</button>
               <div class="dropdown">
                 <button class="btn btn-sm btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
                   &#x22EE;
@@ -152,11 +171,11 @@
             <div class="card-body" ondragover="allowDrop(event)" ondrop="dropTask(event, {{ category.id }})">
               {% set tasks = tasks_by_category.get(category.id, []) %}
               {% for task in tasks %}
-              <div class="form-check mb-2" draggable="true" ondragstart="dragTask(event, {{ task.id }})">
+              <div class="form-check mb-2" id="taskBlock{{ task.id }}" draggable="true" ondragstart="dragTask(event, {{ task.id }})">
                 <!-- Checkbox for task -->
                 <input class="form-check-input" type="checkbox" id="taskCheckbox{{ task.id }}" onchange="toggleTask({{ task.id }})" {% if task.is_done %}checked{% endif %}>
                 <span class="form-check-label task-item {% if task.is_done %}task-done{% endif %}" onclick="openTaskModal({{ task.id }}, '{{ task.name }}', '{{ task.description|default('') }}'); event.stopPropagation();">
-                  {{ task.name }}
+                 <div class="col"> {{ task.name }}</div>
                 </span>
               </div>
               {% endfor %}
@@ -225,6 +244,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.socket.io/4.8.1/socket.io.min.js" integrity="sha384-mkQ3/7FUtcGyoppY6bz/PORYoGqOl7/aSUMn2ymDOJcapfS6PHqxhRTMh1RR0Q6+" crossorigin="anonymous"></script>
 <script>
   // Functions for task handling
 // Zmodyfikowana funkcja toggleTask
@@ -278,6 +298,9 @@ function updateTasksView(categoryId, tasks) {
         tasks.forEach(task => {
             const taskDiv = document.createElement('div');
             taskDiv.className = 'form-check mb-2';
+            taskDiv.id = `taskBlock${task.id}`;
+            taskDiv.draggable = true;
+            taskDiv.ondragstart = (e) => dragTask(e, task.id);
 
             const checkbox = document.createElement('input');
             checkbox.className = 'form-check-input';
@@ -286,23 +309,28 @@ function updateTasksView(categoryId, tasks) {
             checkbox.checked = task.is_done;
             checkbox.onchange = () => toggleTask(task.id);
 
-            const label = document.createElement('label');
-            label.className = `form-check-label ${task.is_done ? 'task-done' : ''}`;
-            label.htmlFor = checkbox.id;
-            label.textContent = task.name;
-            label.onclick = (e) => {
+            const span = document.createElement('span');
+            span.className = `form-check-label task-item ${task.is_done ? 'task-done' : ''}`;
+            span.onclick = (e) => {
                 e.stopPropagation();
                 openTaskModal(task.id, task.name, task.description);
             };
 
+            const colDiv = document.createElement('div');
+            colDiv.className = 'col';
+            colDiv.textContent = task.name;
+
+            span.appendChild(colDiv);
             taskDiv.appendChild(checkbox);
-            taskDiv.appendChild(label);
+            taskDiv.appendChild(span);
             cardBody.insertBefore(taskDiv, taskForm);
         });
 
         // Animacja pojawiania się
         cardBody.style.opacity = '1';
     }, animationDuration);
+
+    console.log(`Aktualizacja kategorii ${categoryId}`, tasks);
 }
 
 
@@ -554,6 +582,81 @@ function addCategory(event) {
           }
       }
 });
+
+
+const socket = io('http://192.168.100.18:8100', {  // Twój lokalny IPv4
+    reconnection: true,
+    transports: ['websocket'],
+    upgrade: false
+});
+
+socket.on('connect', () => {
+    console.log('Połączono z serwerem WebSocket');
+});
+
+socket.on('update', (data) => {
+    console.log('Otrzymano aktualizację:', data);
+    if (data.category_id) {
+        fetch(`/get_tasks_by_category/${data.category_id}`)
+            .then(response => response.json())
+            .then(tasks => {
+                updateTasksView(data.category_id, tasks);
+                setTimeout(() => {
+                    if (data.task_id) {
+                        highlightUpdatedTask(data.task_id);
+                    }
+                }, 500);
+            })
+            .catch(error => console.error('Błąd aktualizacji:', error));
+    }
+
+});
+
+function highlightUpdatedTask(taskId) {
+    const taskElement = document.getElementById(`taskBlock${taskId}`);
+    if (!taskElement) {
+        console.error(`Element #task-${taskId} nie istnieje`);
+        return;
+    }
+
+    // Reset animacji
+    taskElement.classList.remove('task-highlight');
+
+    taskElement.classList.add('task-highlight');
+
+    taskElement.addEventListener('animationend', () => {
+        taskElement.classList.remove('task-highlight');
+    }, {once: true});
+}
+
+/*
+socket.on('connection_status', (data) => {
+    console.log('Status połączenia:', data.status);
+    console.log('SID:', data.sid);
+});
+
+
+
+socket.onmessage = function(event) {
+    const data = JSON.parse(event.data);
+    if (data.type === 'update') {
+        fetch(`/get_tasks_by_category/${data.category_id}`)
+            .then(response => response.json())
+            .then(tasks => updateTasksView(data.category_id, tasks))
+            .catch(error => console.error('Błąd aktualizacji:', error));
+    }
+};
+
+socket.on('update', (data) => {
+    console.log('Otrzymano aktualizację:', data);
+    if (data.type === 'task_toggled') {
+        const checkbox = document.querySelector(`#task-${data.task_id} input[type="checkbox"]`);
+        if (checkbox) {
+            checkbox.checked = data.is_done;
+        }
+    }
+});*/
+
 
 </script>
 </body>
