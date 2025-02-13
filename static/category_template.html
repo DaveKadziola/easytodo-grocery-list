@@ -1,0 +1,46 @@
+<div class="category-block" id="category${categoryId}" draggable="true"
+     ondragstart="dragCategory(event, ${categoryId})"
+     ondragover="allowDropCategory(event)"
+     ondragenter="highlightCategory(event)"
+     ondragleave="removeHighlight(event)"
+     ondrop="dropCategory(event, ${categoryId})">
+    <div class="card bg-secondary">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <a data-bs-toggle="collapse" href="#collapseCategory${categoryId}" role="button" aria-expanded="true" aria-controls="collapseCategory${categoryId}" class="text-white text-decoration-none">
+                ${categoryName}
+            </a>
+            <div class="d-flex align-items-center">
+                <!-- Arrow buttons for category position change -->
+                <button class="move-btn" id="moveCategory_${categoryId}" onclick="moveCategory(${categoryId}, 'up')">&#8593;</button>
+                <button class="move-btn" id="moveCategory_${categoryId}" onclick="moveCategory(${categoryId}, 'down')">&#8595;</button>
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                        &#x22EE;
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-dark">
+                        <li>
+                            <a class="dropdown-item" href="#" onclick="renameCategory(${categoryId}, '${categoryName}')">Zmień nazwę</a>
+                        </li>
+                        <li>
+                            <a class="dropdown-item text-danger" href="#" onclick="deleteCategory(${categoryId})">Usuń kategorię</a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="collapse show" id="collapseCategory${categoryId}">
+            <div class="card-body" ondragover="allowDrop(event)" ondrop="dropTask(event, ${categoryId})">
+                <!-- Task form -->
+                <form method="POST" action="{{ url_for('add_task') }}"
+                      id="addTaskForm${categoryId}"
+                      onsubmit="addTask(event, ${categoryId})">
+                    <div class="input-group mt-3">
+                        <input type="hidden" name="category_id" value="${categoryId}">
+                        <input type="text" id="newTask_${categoryId}" name="task_name" class="form-control" placeholder="Dodaj nowe zadanie" required>
+                        <button class="btn btn-outline-light" type="submit">Dodaj</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>

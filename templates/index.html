@@ -80,6 +80,14 @@
     color: #adb5bd;
     opacity: 1;
   }
+  .task-done {
+    text-decoration: line-through;
+    opacity: 0.6;
+}
+
+.card-body {
+    transition: opacity 0.3s ease-in-out;
+}
 }
 
   </style>
@@ -219,9 +227,9 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
   // Functions for task handling
+// Zmodyfikowana funkcja toggleTask
 function toggleTask(taskId) {
     var checkbox = document.getElementById('taskCheckbox' + taskId);
-    var taskLabel = checkbox.nextElementSibling;
     var categoryBlock = checkbox.closest('.category-block');
     var categoryId = categoryBlock.id.replace('category', '');
 
@@ -233,59 +241,112 @@ function toggleTask(taskId) {
     .then(response => response.json())
     .then(data => {
         if (data.status === 'success') {
-            // Zaciągnięcie aktualnego stanu zadań dla danej kategorii
-            fetch('/get_tasks_by_category/' + categoryId)
-            .then(response => response.json())
-            .then(tasks => {
-                // Aktualizacja widoku zadań dla danej kategorii
-                updateTasksView(categoryId, tasks);
-            })
-            .catch(error => {
-                console.error('Błąd pobierania zadań:', error);
-                alert('Błąd pobierania aktualnej listy zadań');
-            });
+            // Pobierz zaktualizowaną listę zadań i odśwież widok
+            fetch(`/get_tasks_by_category/${categoryId}`)
+                .then(response => response.json())
+                .then(tasks => updateTasksView(categoryId, tasks))
+                .catch(error => console.error('Błąd pobierania zadań:', error));
         } else {
-            alert('Błąd aktualizacji statusu zadania');
-            // Przywrócenie poprzedniego stanu checkboxa
-            checkbox.checked = !checkbox.checked;
+            throw new Error('Błąd aktualizacji statusu');
         }
     })
     .catch(error => {
         console.error('Error:', error);
-        alert('Wystąpił błąd podczas aktualizacji zadania');
-        // Przywrócenie poprzedniego stanu checkboxa
         checkbox.checked = !checkbox.checked;
+        alert('Wystąpił błąd: ' + error.message);
     });
 }
 
-
 function updateTasksView(categoryId, tasks) {
     const cardBody = document.querySelector(`#category${categoryId} .card-body`);
-    cardBody.innerHTML = ''; // Wyczyść istniejące zadania
+    const taskForm = document.querySelector(`#addTaskForm${categoryId}`); // Wybierz formularz po ID
+    const animationDuration = 300;
 
-    tasks.forEach(task => {
-        const taskDiv = document.createElement('div');
-        taskDiv.classList.add('form-check', 'mb-2');
+    // Animacja zanikania
+    cardBody.style.transition = `opacity ${animationDuration}ms`;
+    cardBody.style.opacity = '0';
 
-        const checkbox = document.createElement('input');
-        checkbox.classList.add('form-check-input');
-        checkbox.type = 'checkbox';
-        checkbox.id = 'taskCheckbox' + task.id;
-        checkbox.checked = task.is_done;
-        checkbox.onchange = function() { toggleTask(task.id); };
+    setTimeout(() => {
+        // Usuń tylko zadania, zachowując formularz
+        const childrenToRemove = Array.from(cardBody.children).filter(child => child.id !== `addTaskForm${categoryId}`);
+        childrenToRemove.forEach(child => child.remove());
 
-        const taskLabel = document.createElement('span');
-        taskLabel.classList.add('form-check-label', 'task-item');
-        if (task.is_done) {
-            taskLabel.classList.add('task-done');
+        // Sortowanie zadań
+        tasks.sort((a, b) => a.is_done - b.is_done || a.name.localeCompare(b.name));
+
+        // Dodawanie zadań przed formularzem
+        tasks.forEach(task => {
+            const taskDiv = document.createElement('div');
+            taskDiv.className = 'form-check mb-2';
+
+            const checkbox = document.createElement('input');
+            checkbox.className = 'form-check-input';
+            checkbox.type = 'checkbox';
+            checkbox.id = `taskCheckbox${task.id}`;
+            checkbox.checked = task.is_done;
+            checkbox.onchange = () => toggleTask(task.id);
+
+            const label = document.createElement('label');
+            label.className = `form-check-label ${task.is_done ? 'task-done' : ''}`;
+            label.htmlFor = checkbox.id;
+            label.textContent = task.name;
+            label.onclick = (e) => {
+                e.stopPropagation();
+                openTaskModal(task.id, task.name, task.description);
+            };
+
+            taskDiv.appendChild(checkbox);
+            taskDiv.appendChild(label);
+            cardBody.insertBefore(taskDiv, taskForm);
+        });
+
+        // Animacja pojawiania się
+        cardBody.style.opacity = '1';
+    }, animationDuration);
+}
+
+
+
+
+
+async function addTask(event, categoryId) {
+    event.preventDefault();
+    const form = event.target;
+
+    try {
+        const response = await fetch(form.action, {
+            method: 'POST',
+            body: new FormData(form)
+        });
+
+        if (!response.ok) {
+            throw new Error('Błąd sieciowy');
         }
-        taskLabel.textContent = task.name;
-        taskLabel.onclick = function() { openTaskModal(task.id, task.name, task.description); event.stopPropagation(); };
 
-        taskDiv.appendChild(checkbox);
-        taskDiv.appendChild(taskLabel);
-        cardBody.appendChild(taskDiv);
-    });
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            // Fetch the task template
+            const templateResponse = await fetch('static/task_template.html');
+            let templateHtml = await templateResponse.text();
+
+            // Replace placeholders with actual data
+            templateHtml = templateHtml.replace(/\${taskId}/g, data.task_id)
+                .replace(/\${taskName}/g, data.task_name)
+                .replace(/\${isDone}/g, data.is_done)
+                .replace(/\${taskDescription}/g, data.description);
+
+            const taskList = document.querySelector(`#category${categoryId} .card-body`);
+            taskList.insertAdjacentHTML('afterbegin', templateHtml);
+
+            form.reset();
+        } else {
+            alert('Błąd dodawania zadania: ' + data.message);
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Błąd dodawania zadania: ' + error.message);
+    }
 }
 
 
@@ -396,56 +457,85 @@ function updateTasksView(categoryId, tasks) {
   }
 
 
-  function addTask(event, categoryId) {
-      event.preventDefault();
-      const form = event.target;
 
-      fetch(form.action, {
-          method: 'POST',
-          body: new FormData(form)
-      })
-      .then(response => {
-          if (!response.ok) throw new Error('Błąd sieciowy');
-          return response.json();
-      })
-      .then(data => {
-          if(data.status === 'success') {
-              // Reset formularza przed przeładowaniem
-              form.reset();
-              window.location.hash = '#category' + categoryId;
-              location.reload();
-          }
-      })
-      .catch(error => {
-          console.error('Error:', error);
-          alert('Błąd dodawania zadania');
-      });
-  }
 
-  function addCategory(event) {
-        event.preventDefault();
-        const form = event.target;
 
-        fetch(form.action, {
-            method: 'POST',
-            body: new FormData(form)
-        })
-        .then(response => {
-            if (!response.ok) throw new Error('Błąd sieciowy');
-            return response.json();
-        })
-        .then(data => {
-            if(data.status === 'success') {
-                form.reset();
-                window.location.hash = '#category' + data.category_id;
-                location.reload();
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            alert('Błąd dodawania kategorii: ' + error.message);
-        });
-  }
+
+
+
+
+
+function addCategory(event) {
+    event.preventDefault();
+    const form = event.target;
+    const formData = new FormData(form);
+
+    fetch(form.action, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            const masonryContainer = document.getElementById('categoriesMasonry');
+            const newCategoryHtml = `
+                <div class="category-block" id="category${data.category_id}" draggable="true"
+                     ondragstart="dragCategory(event, ${data.category_id})"
+                     ondragover="allowDropCategory(event)"
+                     ondragenter="highlightCategory(event)"
+                     ondragleave="removeHighlight(event)"
+                     ondrop="dropCategory(event, ${data.category_id})">
+                    <div class="card bg-secondary">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <a data-bs-toggle="collapse" href="#collapseCategory${data.category_id}" role="button" aria-expanded="true" aria-controls="collapseCategory${data.category_id}" class="text-white text-decoration-none">
+                                ${data.category_name}
+                            </a>
+                            <div class="d-flex align-items-center">
+                                <button class="move-btn" id="moveCategory_${data.category_id}" onclick="moveCategory(${data.category_id}, 'up')">&#8593;</button>
+                                <button class="move-btn" id="moveCategory_${data.category_id}" onclick="moveCategory(${data.category_id}, 'down')">&#8595;</button>
+                                <div class="dropdown">
+                                    <button class="btn btn-sm btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                                        &#x22EE;
+                                    </button>
+                                    <ul class="dropdown-menu dropdown-menu-dark">
+                                        <li>
+                                            <a class="dropdown-item" href="#" onclick="renameCategory(${data.category_id}, '${data.category_name}')">Zmień nazwę</a>
+                                        </li>
+                                        <li>
+                                            <a class="dropdown-item text-danger" href="#" onclick="deleteCategory(${data.category_id})">Usuń kategorię</a>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="collapse show" id="collapseCategory${data.category_id}">
+                            <div class="card-body" ondragover="allowDrop(event)" ondrop="dropTask(event, ${data.category_id})">
+                                <form method="POST" action="/add_task"
+                                id="addTaskForm${data.category_id}"
+                                onsubmit="addTask(event, ${data.category_id})">
+                                    <div class="input-group mt-3">
+                                        <input type="hidden" name="category_id" value="${data.category_id}">
+                                        <input type="text" id="newTask_${data.category_id}" name="task_name" class="form-control" placeholder="Dodaj nowe zadanie" required>
+                                        <button class="btn btn-outline-light" type="submit">Dodaj</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            masonryContainer.insertAdjacentHTML('beforeend', newCategoryHtml);
+            form.reset();
+        } else {
+            alert('Błąd dodawania kategorii: ' + data.message);
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Błąd dodawania kategorii: ' + error.message);
+    });
+}
+
 
 
 

@@ -180,9 +180,16 @@ def add_task():
         db.session.add(assignment)
         db.session.commit()
 
-        return jsonify({'status': 'success'}), 200
+        return jsonify({
+            'status': 'success',
+            'task_id': new_task.id,
+            'task_name': new_task.name,
+            'is_done': new_task.is_done,
+            'description': new_task.description
+        }), 200
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 
 
