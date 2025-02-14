@@ -176,13 +176,19 @@ def delete_category(category_id):
 
 
 # Assign task to category
-@app.route('/add_task', methods=['POST'])
+@app.route('/add_task/', methods=['POST'])
 def add_task():
-    category_id = request.form.get('category_id')
-    task_name = request.form.get('task_name')
 
-    if not task_name or not category_id:
-        return jsonify({'status': 'error', 'message': 'Brak wymaganych pól'}), 400
+    data = request.get_json()
+
+    if not data or 'category_id' not in data or 'task_name' not in data:
+        return jsonify({
+            "status": "error",
+            "message": "Brak wymaganych pól"
+        }), 400
+
+    category_id = data['category_id']
+    task_name = data['task_name']
 
     try:
         new_task = Task(name=task_name)
@@ -198,6 +204,7 @@ def add_task():
 
         return jsonify({
             'status': 'success',
+            'category_id': category_id,
             'task_id': new_task.id,
             'task_name': new_task.name,
             'is_done': new_task.is_done,
@@ -368,10 +375,7 @@ def toggle_task(task_id):
     task.updated_at = datetime.utcnow()
     db.session.commit()
 
-    emit_update('task_toggled', {
-        'task_id': task_id,
-        'is_done': task.is_done
-    })
+
 
     return jsonify({
         "status": "success",

@@ -180,15 +180,13 @@
               </div>
               {% endfor %}
               <!-- Task form -->
-              <form method="POST" action="{{ url_for('add_task') }}"
-              id="addTaskForm{{ category.id }}"
-              onsubmit="addTask(event, {{ category.id }})">
-                <div class="input-group mt-3">
-                  <input type="hidden" name="category_id" value="{{ category.id }}">
-                  <input type="text" id="newTask_{{ category.id }}" name="task_name" class="form-control" placeholder="Dodaj nowe zadanie" required>
-                  <button class="btn btn-outline-light" type="submit">Dodaj</button>
-                </div>
-              </form>
+<div id="addTaskForm{{ category.id }}">
+    <div class="input-group mt-3">
+        <input type="hidden" id="category_id_{{ category.id }}" value="{{ category.id }}">
+        <input type="text" id="newTask_{{ category.id }}" class="form-control" placeholder="Dodaj nowe zadanie" required>
+        <button class="btn btn-outline-light" onclick="addTask({{ category.id }})">Dodaj</button>
+    </div>
+</div>
             </div>
           </div>
         </div>
@@ -247,7 +245,6 @@
 <script src="https://cdn.socket.io/4.8.1/socket.io.min.js" integrity="sha384-mkQ3/7FUtcGyoppY6bz/PORYoGqOl7/aSUMn2ymDOJcapfS6PHqxhRTMh1RR0Q6+" crossorigin="anonymous"></script>
 <script>
   // Functions for task handling
-// Zmodyfikowana funkcja toggleTask
 function toggleTask(taskId) {
     var checkbox = document.getElementById('taskCheckbox' + taskId);
     var categoryBlock = checkbox.closest('.category-block');
@@ -261,10 +258,8 @@ function toggleTask(taskId) {
     .then(response => response.json())
     .then(data => {
         if (data.status === 'success') {
-            // Pobierz zaktualizowaną listę zadań i odśwież widok
             fetch(`/get_tasks_by_category/${categoryId}`)
                 .then(response => response.json())
-                .then(tasks => updateTasksView(categoryId, tasks))
                 .catch(error => console.error('Błąd pobierania zadań:', error));
         } else {
             throw new Error('Błąd aktualizacji statusu');
@@ -281,6 +276,8 @@ function updateTasksView(categoryId, tasks) {
     const cardBody = document.querySelector(`#category${categoryId} .card-body`);
     const taskForm = document.querySelector(`#addTaskForm${categoryId}`); // Wybierz formularz po ID
     const animationDuration = 300;
+
+    console.log("TEST")
 
     // Animacja zanikania
     cardBody.style.transition = `opacity ${animationDuration}ms`;
@@ -333,11 +330,47 @@ function updateTasksView(categoryId, tasks) {
     console.log(`Aktualizacja kategorii ${categoryId}`, tasks);
 }
 
+function addTask(categoryId) {
+    const taskInput = document.getElementById('newTask_' + categoryId);
+    const taskName = taskInput.value.trim();
 
+    if (!taskName) {
+        alert('Nazwa zadania nie może być pusta');
+        return;
+    }
 
+    const data = {
+        category_id: categoryId,
+        task_name: taskName
+    };
 
+    fetch('/add_task', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            taskInput.value = '';
+            fetch(`/get_tasks_by_category/${categoryId}`)
+                .then(response => response.json())
+                .catch(error => console.error('Błąd pobierania zadań:', error));
+        } else {
+            throw new Error('Błąd aktualizacji statusu');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        checkbox.checked = !checkbox.checked;
+        alert('Wystąpił błąd: ' + error.message);
+    });
+}
 
-async function addTask(event, categoryId) {
+/*async function addTask(event, categoryId) {
     event.preventDefault();
     const form = event.target;
 
@@ -368,6 +401,11 @@ async function addTask(event, categoryId) {
             taskList.insertAdjacentHTML('afterbegin', templateHtml);
 
             form.reset();
+
+            fetch(`/get_tasks_by_category/${categoryId}`)
+                .then(response => response.json())
+                .then(tasks => updateTasksView(categoryId, tasks))
+                .catch(error => console.error('Błąd pobierania zadań:', error));
         } else {
             alert('Błąd dodawania zadania: ' + data.message);
         }
@@ -375,8 +413,7 @@ async function addTask(event, categoryId) {
         console.error('Error:', error);
         alert('Błąd dodawania zadania: ' + error.message);
     }
-}
-
+}*/
 
 
 
@@ -567,6 +604,45 @@ function addCategory(event) {
 
 
 
+function addTask(categoryId) {
+    const taskInput = document.getElementById('newTask_' + categoryId);
+    const taskName = taskInput.value.trim();
+
+    if (!taskName) {
+        alert('Nazwa zadania nie może być pusta');
+        return;
+    }
+
+    const data = {
+        category_id: categoryId,
+        task_name: taskName
+    };
+
+    fetch('/add_task', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            taskInput.value = '';
+            fetch(`/get_tasks_by_category/${categoryId}`)
+                .then(response => response.json())
+                .catch(error => console.error('Błąd pobierania zadań:', error));
+        } else {
+            throw new Error('Błąd aktualizacji statusu');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        checkbox.checked = !checkbox.checked;
+        alert('Wystąpił błąd: ' + error.message);
+    });
+}
 
 
 
@@ -584,7 +660,7 @@ function addCategory(event) {
 });
 
 
-const socket = io('http://192.168.100.18:8100', {  // Twój lokalny IPv4
+const socket = io('http://192.168.100.18:8100', {
     reconnection: true,
     transports: ['websocket'],
     upgrade: false
@@ -609,8 +685,9 @@ socket.on('update', (data) => {
             })
             .catch(error => console.error('Błąd aktualizacji:', error));
     }
-
+    else console.log("DUPA");
 });
+
 
 function highlightUpdatedTask(taskId) {
     const taskElement = document.getElementById(`taskBlock${taskId}`);
