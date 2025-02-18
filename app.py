@@ -410,6 +410,7 @@ def get_tasks_by_category(category_id):
     return jsonify(task_list)
 
 
+
 def listen_to_db():
     with app.app_context():
         conn = psycopg2.connect(

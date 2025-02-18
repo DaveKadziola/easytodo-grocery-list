@@ -134,65 +134,47 @@
   </div>
 
   <!-- Masonry layout container for categories -->
-  <div class="masonry-container">
-    <div id="categoriesMasonry">
-      {% for category in categories %}
-      <div class="category-block" id="category{{ category.id }}" draggable="true"
-           ondragstart="dragCategory(event, {{ category.id }})"
-           ondragover="allowDropCategory(event)"
-           ondragenter="highlightCategory(event)"
-           ondragleave="removeHighlight(event)"
-           ondrop="dropCategory(event, {{ category.id }})">
-        <div class="card bg-secondary">
-          <div class="card-header d-flex justify-content-between align-items-center">
-            <a data-bs-toggle="collapse" href="#collapseCategory{{ category.id }}" role="button" aria-expanded="true" aria-controls="collapseCategory{{ category.id }}" class="text-white text-decoration-none col">
-              {{ category.name }}
-            </a>
-            <div class="d-flex align-items-center">
-              <!-- Arrow buttons for category position change -->
-              <button class="btn btn-outline-secondary move-btn" id="moveCategory_{{ category.id }}" onclick="moveCategory({{ category.id }}, 'up')" {% if loop.first %}disabled{% endif %}>&#8593;</button>
-              <button class="btn btn-outline-secondary move-btn" id="moveCategory_{{ category.id }}" onclick="moveCategory({{ category.id }}, 'down')" {% if loop.last %}disabled{% endif %}>&#8595;</button>
-              <div class="dropdown">
-                <button class="btn btn-sm btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                  &#x22EE;
-                </button>
-                <ul class="dropdown-menu dropdown-menu-dark">
-                  <li>
-                    <a class="dropdown-item" href="#" onclick="renameCategory({{ category.id }}, '{{ category.name }}')">Zmień nazwę</a>
-                  </li>
-                  <li>
-                    <a class="dropdown-item text-danger" href="#" onclick="deleteCategory({{ category.id }})">Usuń kategorię</a>
-                  </li>
-                </ul>
-              </div>
+<div class="masonry-container">
+  <div id="categoriesMasonry">
+      <!-- template for first category-->
+      <template id="categoryTemplate" data-server-template>
+            <div class="category-block" draggable="true">
+                <div class="card bg-secondary">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <a class="category-name text-white text-decoration-none col" data-bs-toggle="collapse"></a>
+                        <div class="d-flex align-items-center">
+                            <button class="btn btn-outline-secondary move-btn">↑</button>
+                            <button class="btn btn-outline-secondary move-btn">↓</button>
+                            <div class="dropdown">
+                                <button class="btn btn-sm btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                                    ⋮
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-dark">
+                                    <li><a class="dropdown-item rename-link" href="#">Zmień nazwę</a></li>
+                                    <li><a class="dropdown-item text-danger delete-link" href="#">Usuń kategorię</a></li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="category-collapse collapse show">
+                        <div class="card-body">
+                          <div class="form" id="addTaskForm">
+                              <div class="input-group mt-3">
+                                  <input type="hidden" id="category_id_" value="">
+                                  <input type="text" id="newTask_" class="form-control" placeholder="Dodaj nowe zadanie" required>
+                                  <button class="btn btn-outline-light" onclick="addTask()">Dodaj</button>
+                              </div>
+                          </div>
+                        </div>
+                    </div>
+                </div>
             </div>
-          </div>
-          <div class="collapse show" id="collapseCategory{{ category.id }}">
-            <div class="card-body" ondragover="allowDrop(event)" ondrop="dropTask(event, {{ category.id }})">
-              {% set tasks = tasks_by_category.get(category.id, []) %}
-              {% for task in tasks %}
-              <div class="form-check mb-2" id="taskBlock{{ task.id }}" draggable="true" ondragstart="dragTask(event, {{ task.id }})">
-                <!-- Checkbox for task -->
-                <input class="form-check-input" type="checkbox" id="taskCheckbox{{ task.id }}" onchange="toggleTask({{ task.id }})" {% if task.is_done %}checked{% endif %}>
-                <span class="form-check-label task-item {% if task.is_done %}task-done{% endif %}" onclick="openTaskModal({{ task.id }}, '{{ task.name }}', '{{ task.description|default('') }}'); event.stopPropagation();">
-                 <div class="col"> {{ task.name }}</div>
-                </span>
-              </div>
-              {% endfor %}
-              <!-- Task form -->
-<div id="addTaskForm{{ category.id }}">
-    <div class="input-group mt-3">
-        <input type="hidden" id="category_id_{{ category.id }}" value="{{ category.id }}">
-        <input type="text" id="newTask_{{ category.id }}" class="form-control" placeholder="Dodaj nowe zadanie" required>
-        <button class="btn btn-outline-light" onclick="addTask({{ category.id }})">Dodaj</button>
-    </div>
-</div>
-            </div>
-          </div>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
+        </template>
+    {% for category in categories %}
+      {% set outer_loop = loop %}
+      {% include "partials/_category.html" %}
+    {% endfor %}
+  </div>
     <!-- Mobile category form – at the bottom -->
     <div class="new-category-mobile mt-4">
       <div class="card bg-secondary">
@@ -209,6 +191,8 @@
       </div>
     </div>
   </div>
+
+
 </div>
 
 <!-- Modal for task details -->
@@ -260,6 +244,14 @@ function toggleTask(taskId) {
         if (data.status === 'success') {
             fetch(`/get_tasks_by_category/${categoryId}`)
                 .then(response => response.json())
+                .then(tasks => {
+                  updateTasksView(data.category_id, tasks);
+                    setTimeout(() => {
+                        if (data.task_id) {
+                            highlightUpdatedTask(data.task_id);
+                        }
+                    }, 500);
+                })
                 .catch(error => console.error('Błąd pobierania zadań:', error));
         } else {
             throw new Error('Błąd aktualizacji statusu');
@@ -277,7 +269,7 @@ function updateTasksView(categoryId, tasks) {
     const taskForm = document.querySelector(`#addTaskForm${categoryId}`); // Wybierz formularz po ID
     const animationDuration = 300;
 
-    console.log("TEST")
+    console.log("FUNC: updateTasksView");
 
     // Animacja zanikania
     cardBody.style.transition = `opacity ${animationDuration}ms`;
@@ -330,6 +322,12 @@ function updateTasksView(categoryId, tasks) {
     console.log(`Aktualizacja kategorii ${categoryId}`, tasks);
 }
 
+
+
+
+
+
+
 function addTask(categoryId) {
     const taskInput = document.getElementById('newTask_' + categoryId);
     const taskName = taskInput.value.trim();
@@ -343,6 +341,9 @@ function addTask(categoryId) {
         category_id: categoryId,
         task_name: taskName
     };
+
+
+    console.log("FUNC: addTask cat id: " + categoryId);
 
     fetch('/add_task', {
         method: 'POST',
@@ -358,6 +359,15 @@ function addTask(categoryId) {
             taskInput.value = '';
             fetch(`/get_tasks_by_category/${categoryId}`)
                 .then(response => response.json())
+                .then(tasks => {
+                  console.log("FUNC: addTask");
+                  updateTasksView(data.category_id, tasks);
+                  setTimeout(() => {
+                      if (data.task_id) {
+                          highlightUpdatedTask(data.task_id);
+                      }
+                  }, 500);
+                })
                 .catch(error => console.error('Błąd pobierania zadań:', error));
         } else {
             throw new Error('Błąd aktualizacji statusu');
@@ -369,51 +379,6 @@ function addTask(categoryId) {
         alert('Wystąpił błąd: ' + error.message);
     });
 }
-
-/*async function addTask(event, categoryId) {
-    event.preventDefault();
-    const form = event.target;
-
-    try {
-        const response = await fetch(form.action, {
-            method: 'POST',
-            body: new FormData(form)
-        });
-
-        if (!response.ok) {
-            throw new Error('Błąd sieciowy');
-        }
-
-        const data = await response.json();
-
-        if (data.status === 'success') {
-            // Fetch the task template
-            const templateResponse = await fetch('static/task_template.html');
-            let templateHtml = await templateResponse.text();
-
-            // Replace placeholders with actual data
-            templateHtml = templateHtml.replace(/\${taskId}/g, data.task_id)
-                .replace(/\${taskName}/g, data.task_name)
-                .replace(/\${isDone}/g, data.is_done)
-                .replace(/\${taskDescription}/g, data.description);
-
-            const taskList = document.querySelector(`#category${categoryId} .card-body`);
-            taskList.insertAdjacentHTML('afterbegin', templateHtml);
-
-            form.reset();
-
-            fetch(`/get_tasks_by_category/${categoryId}`)
-                .then(response => response.json())
-                .then(tasks => updateTasksView(categoryId, tasks))
-                .catch(error => console.error('Błąd pobierania zadań:', error));
-        } else {
-            alert('Błąd dodawania zadania: ' + data.message);
-        }
-    } catch (error) {
-        console.error('Error:', error);
-        alert('Błąd dodawania zadania: ' + error.message);
-    }
-}*/
 
 
 
@@ -543,53 +508,58 @@ function addCategory(event) {
     .then(data => {
         if (data.status === 'success') {
             const masonryContainer = document.getElementById('categoriesMasonry');
-            const newCategoryHtml = `
-                <div class="category-block" id="category${data.category_id}" draggable="true"
-                     ondragstart="dragCategory(event, ${data.category_id})"
-                     ondragover="allowDropCategory(event)"
-                     ondragenter="highlightCategory(event)"
-                     ondragleave="removeHighlight(event)"
-                     ondrop="dropCategory(event, ${data.category_id})">
-                    <div class="card bg-secondary">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <a data-bs-toggle="collapse" href="#collapseCategory${data.category_id}" role="button" aria-expanded="true" aria-controls="collapseCategory${data.category_id}" class="text-white text-decoration-none">
-                                ${data.category_name}
-                            </a>
-                            <div class="d-flex align-items-center">
-                                <button class="move-btn" id="moveCategory_${data.category_id}" onclick="moveCategory(${data.category_id}, 'up')">&#8593;</button>
-                                <button class="move-btn" id="moveCategory_${data.category_id}" onclick="moveCategory(${data.category_id}, 'down')">&#8595;</button>
-                                <div class="dropdown">
-                                    <button class="btn btn-sm btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                                        &#x22EE;
-                                    </button>
-                                    <ul class="dropdown-menu dropdown-menu-dark">
-                                        <li>
-                                            <a class="dropdown-item" href="#" onclick="renameCategory(${data.category_id}, '${data.category_name}')">Zmień nazwę</a>
-                                        </li>
-                                        <li>
-                                            <a class="dropdown-item text-danger" href="#" onclick="deleteCategory(${data.category_id})">Usuń kategorię</a>
-                                        </li>
-                                    </ul>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="collapse show" id="collapseCategory${data.category_id}">
-                            <div class="card-body" ondragover="allowDrop(event)" ondrop="dropTask(event, ${data.category_id})">
-                                <form method="POST" action="/add_task"
-                                id="addTaskForm${data.category_id}"
-                                onsubmit="addTask(event, ${data.category_id})">
-                                    <div class="input-group mt-3">
-                                        <input type="hidden" name="category_id" value="${data.category_id}">
-                                        <input type="text" id="newTask_${data.category_id}" name="task_name" class="form-control" placeholder="Dodaj nowe zadanie" required>
-                                        <button class="btn btn-outline-light" type="submit">Dodaj</button>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-            masonryContainer.insertAdjacentHTML('beforeend', newCategoryHtml);
+            //const templateCategory = document.querySelector('.category-block');
+           // const newCategory = templateCategory.cloneNode(true);
+
+            const template = document.getElementById('categoryTemplate');
+        const newCategory = document.importNode(template.content, true).querySelector('.category-block');
+
+            newCategory.id = `category${data.category_id}`;
+            newCategory.setAttribute('ondragstart', `dragCategory(event, ${data.category_id})`);
+            newCategory.setAttribute('ondrop', `dropCategory(event, ${data.category_id})`);
+
+            const categoryNameElement = newCategory.querySelector('.card-header a');
+            categoryNameElement.textContent = data.category_name;
+            categoryNameElement.setAttribute('href', `#collapseCategory${data.category_id}`);
+            categoryNameElement.setAttribute('aria-controls', `collapseCategory${data.category_id}`);
+
+            const collapseElement = newCategory.querySelector('.collapse');
+            collapseElement.id = `collapseCategory${data.category_id}`;
+
+            const moveUpButton = newCategory.querySelector('.move-btn:first-of-type');
+            moveUpButton.setAttribute('onclick', `moveCategory(${data.category_id}, 'up')`);
+
+            const moveDownButton = newCategory.querySelector('.move-btn:last-of-type');
+            moveDownButton.setAttribute('onclick', `moveCategory(${data.category_id}, 'down')`);
+
+            const renameLink = newCategory.querySelector('.dropdown-item');
+            renameLink.setAttribute('onclick', `renameCategory(${data.category_id}, '${data.category_name}')`);
+
+            const deleteLink = newCategory.querySelector('.dropdown-item.text-danger');
+            deleteLink.setAttribute('onclick', `deleteCategory(${data.category_id})`);
+
+            const cardBody = newCategory.querySelector('.card-body');
+            cardBody.setAttribute('ondrop', `dropTask(event, ${data.category_id})`);
+
+            const taskBlocks = newCategory.querySelectorAll('.form-check');
+            taskBlocks.forEach(task => task.remove());
+
+            const addTaskForm = newCategory.querySelector('.form');
+            addTaskForm.id = `addTaskForm${data.category_id}`;
+            addTaskForm.setAttribute('onsubmit', `addTask(event, ${data.category_id})`);
+
+            const categoryIdInput = addTaskForm.querySelector('input[type="hidden"]');
+            categoryIdInput.id = `category_id_${data.category_id}`;
+            categoryIdInput.value = data.category_id;
+
+            const newTaskInput = addTaskForm.querySelector('input[type="text"]');
+            newTaskInput.id = `newTask_${data.category_id}`;
+
+            const newTaskButton = addTaskForm.querySelector('button[class="btn btn-outline-light"]');
+            newTaskButton.setAttribute('onclick', `addTask(${data.category_id})`);
+
+            masonryContainer.appendChild(newCategory);
+            updateMoveButtons();
             form.reset();
         } else {
             alert('Błąd dodawania kategorii: ' + data.message);
@@ -602,47 +572,84 @@ function addCategory(event) {
 }
 
 
+function updateMoveButtons() {
+    const categories = document.querySelectorAll('.category-block');
+
+    categories.forEach((category, index) => {
+        const upButton = category.querySelector('[onclick*="up"]');
+        const downButton = category.querySelector('[onclick*="down"]');
+
+        // Aktualizuj stan przycisków
+        upButton.disabled = index === 0;
+        downButton.disabled = index === categories.length - 1;
+
+        // Aktualizuj atrybuty Bootstrap
+        upButton.classList.toggle('disabled', index === 0);
+        downButton.classList.toggle('disabled', index === categories.length - 1);
+    });
+}
 
 
-function addTask(categoryId) {
-    const taskInput = document.getElementById('newTask_' + categoryId);
-    const taskName = taskInput.value.trim();
+/*
+function addCategory(event) {
+    event.preventDefault();
+    const form = event.target;
+    const formData = new FormData(form);
 
-    if (!taskName) {
-        alert('Nazwa zadania nie może być pusta');
-        return;
-    }
-
-    const data = {
-        category_id: categoryId,
-        task_name: taskName
-    };
-
-    fetch('/add_task', {
+    fetch(form.action, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: JSON.stringify(data)
+        body: formData
     })
     .then(response => response.json())
     .then(data => {
         if (data.status === 'success') {
-            taskInput.value = '';
-            fetch(`/get_tasks_by_category/${categoryId}`)
-                .then(response => response.json())
-                .catch(error => console.error('Błąd pobierania zadań:', error));
+            const masonryContainer = document.getElementById('categoryTemplate');
+
+            // Pobierz szablon z ukrytego elementu w DOM
+            const template = document.getElementById('categoryTemplate');
+            const newCategory = document.importNode(template.content, true).firstElementChild;
+
+            // Aktualizuj właściwości nowej kategorii
+            newCategory.id = `category${data.category_id}`;
+            newCategory.setAttribute('ondragstart', `dragCategory(event, ${data.category_id})`);
+            newCategory.setAttribute('ondrop', `dropCategory(event, ${data.category_id})`);
+
+            // Aktualizuj elementy wewnętrzne
+            const categoryNameElement = newCategory.querySelector('.category-name');
+            const collapseElement = newCategory.querySelector('.category-collapse');
+            const moveButtons = newCategory.querySelectorAll('.move-btn');
+            const renameLink = newCategory.querySelector('.rename-link');
+            const deleteLink = newCategory.querySelector('.delete-link');
+            const addTaskForm = newCategory.querySelector('.task-form');
+
+            categoryNameElement.textContent = data.category_name;
+            categoryNameElement.href = `#collapseCategory${data.category_id}`;
+
+            collapseElement.id = `collapseCategory${data.category_id}`;
+            moveButtons[0].setAttribute('onclick', `moveCategory(${data.category_id}, 'up')`);
+            moveButtons[1].setAttribute('onclick', `moveCategory(${data.category_id}, 'down')`);
+
+            renameLink.setAttribute('onclick', `renameCategory(${data.category_id}, '${data.category_name}')`);
+            deleteLink.setAttribute('onclick', `deleteCategory(${data.category_id})`);
+
+            addTaskForm.id = `addTaskForm${data.category_id}`;
+            addTaskForm.querySelector('input[type="hidden"]').value = data.category_id;
+            addTaskForm.querySelector('input[type="text"]').id = `newTask_${data.category_id}`;
+            addTaskForm.querySelector('button').setAttribute('onclick', `addTask(${data.category_id})`);
+
+            masonryContainer.appendChild(newCategory);
+            form.reset();
         } else {
-            throw new Error('Błąd aktualizacji statusu');
+            alert('Błąd dodawania kategorii: ' + data.message);
         }
     })
-    .catch(error => {
-        console.error('Error:', error);
-        checkbox.checked = !checkbox.checked;
-        alert('Wystąpił błąd: ' + error.message);
-    });
+    .catch(error => console.error('Error:', error));
 }
+*/
+
+
+
+
 
 
 
@@ -676,6 +683,7 @@ socket.on('update', (data) => {
         fetch(`/get_tasks_by_category/${data.category_id}`)
             .then(response => response.json())
             .then(tasks => {
+                console.log("FUNC: socket update");
                 updateTasksView(data.category_id, tasks);
                 setTimeout(() => {
                     if (data.task_id) {
