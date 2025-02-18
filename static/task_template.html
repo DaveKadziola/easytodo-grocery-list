@@ -1,6 +1,0 @@
-<div class="form-check mb-2" draggable="true" ondragstart="dragTask(event, ${taskId})">
-    <input class="form-check-input" type="checkbox" id="taskCheckbox${taskId}" onchange="toggleTask(${taskId})" ${isDone ? 'checked' : ''}>
-    <span class="form-check-label task-item ${isDone ? 'task-done' : ''}" onclick="openTaskModal(${taskId}, '${taskName}', '${taskDescription}'); event.stopPropagation();">
-        <div class="col"> ${taskName}</div>
-    </span>
-</div>

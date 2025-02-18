@@ -1,6 +1,20 @@
 <div class="form-check mb-2" id="taskBlock{{ task.id }}" draggable="true" ondragstart="dragTask(event, {{ task.id }})">
-  <input class="form-check-input" type="checkbox" id="taskCheckbox{{ task.id }}" onchange="toggleTask({{ task.id }})" {% if task.is_done %}checked{% endif %}>
-  <span class="form-check-label task-item {% if task.is_done %}task-done{% endif %}" onclick="openTaskModal({{ task.id }}, '{{ task.name }}', '{{ task.description|default('') }}'); event.stopPropagation();">
+  <input
+    class="form-check-input"
+    type="checkbox"
+    id="taskCheckbox{{ task.id }}"
+    onchange="toggleTask({{ task.id }})"
+    {%
+    if
+    task.is_done
+    %}checked{%
+    endif
+    %}
+  />
+  <span
+    class="form-check-label task-item {% if task.is_done %}task-done{% endif %}"
+    onclick="openTaskModal({{ category.id }}, {{ task.id }}, '{{ task.name }}', '{{ task.description|default('') }}'); event.stopPropagation();"
+  >
     <div class="col">{{ task.name }}</div>
   </span>
 </div>
