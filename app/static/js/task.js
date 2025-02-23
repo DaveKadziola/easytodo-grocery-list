@@ -55,6 +55,8 @@ function toggleTask(taskId) {
   let categoryBlock = checkbox.closest(".category-block");
   let categoryId = categoryBlock.id.replace("category", "");
 
+  console.log("taskid: ", taskId);
+
   fetch("/toggle_task/" + taskId, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -87,7 +89,7 @@ function toggleTask(taskId) {
 
 function updateTasksView(categoryId, tasks) {
   const cardBody = document.querySelector(`#category${categoryId} .card-body`);
-  const taskForm = document.querySelector(`#addTaskForm${categoryId}`); // Wybierz formularz po ID
+  const taskForm = document.querySelector(`#addTaskForm${categoryId}`);
   const animationDuration = 300;
 
   console.log("FUNC: updateTasksView");

@@ -17,7 +17,7 @@
         <div class="col-12">
           <div class="card bg-secondary">
             <div class="card-body">
-              <form method="POST" action="{{ url_for('add_category') }}" onsubmit="addCategory(event)">
+              <form method="POST" action="{{ url_for('categories.add_category') }}" onsubmit="addCategory(event)">
                 <div class="input-group">
                   <input type="text" name="category_name" class="form-control" placeholder="Dodaj nową kategorię" required />
                   <button class="btn btn-outline-light" type="submit">Dodaj kategorię</button>
@@ -75,7 +75,7 @@
         <div class="new-category-mobile mt-4">
           <div class="card bg-secondary">
             <div class="card-body">
-              <form method="POST" action="{{ url_for('add_category') }}" onsubmit="addCategory(event)">
+              <form method="POST" action="{{ url_for('categories.add_category') }}" onsubmit="addCategory(event)">
                 <div class="input-group">
                   <input
                     type="text"
