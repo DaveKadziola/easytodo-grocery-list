@@ -1,0 +1,4 @@
+config.ini
+easytodo/
+*.cpython-312.pyc
+formatted_commit_message.txt
