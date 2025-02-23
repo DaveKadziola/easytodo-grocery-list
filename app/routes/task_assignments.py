@@ -4,9 +4,9 @@ from ..models import TaskAssignment, Task
 task_assignments_bp = Blueprint("task_assignments", __name__)
 
 
+# Get all tasks by category
 @task_assignments_bp.route("/get_tasks_by_category/<int:category_id>", methods=["GET"])
 def get_tasks_by_category(category_id):
-    # Get all task with assignments
     assignments = TaskAssignment.query.filter_by(category_id=category_id).all()
     task_ids = [assign.task_id for assign in assignments]
 
