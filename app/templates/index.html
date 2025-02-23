@@ -57,13 +57,22 @@
                 </div>
                 <div class="category-collapse collapse show">
                   <div class="card-body">
-                    <form method="POST" action="{{ url_for('tasks.add_task') }}" onsubmit="addTask()">
-                      <div class="input-group mt-3" id="addTaskForm`{categoryId}`">
-                        <input type="hidden" id="category_id_" value="" />
-                        <input type="text" id="newTask_" class="form-control" placeholder="Dodaj nowe zadanie" required />
-                        <button class="btn btn-outline-light" type="submit">Dodaj</button>
-                      </div>
-                    </form>
+                    <!--Task form -->
+                    <div class="form" id="addTaskForm">
+                      <form method="POST" action="{{ url_for('tasks.add_task') }}" onsubmit="c addTask()">
+                        <div class="input-group mt-3">
+                          <input type="hidden" id="category_id_{{ categoryId }}" value="" />
+                          <input
+                            type="text"
+                            id="newTask_{{ categoryId }}"
+                            class="form-control"
+                            placeholder="Dodaj nowe zadanie"
+                            required
+                          />
+                          <button class="btn btn-outline-light" type="submit">Dodaj</button>
+                        </div>
+                      </form>
+                    </div>
                   </div>
                 </div>
               </div>

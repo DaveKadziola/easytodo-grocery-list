@@ -66,11 +66,17 @@
         {% include "partials/_tasks.html" %}
         <!--Task form -->
         <div class="form" id="addTaskForm{{ category.id }}">
-          <div class="input-group mt-3">
-            <input type="hidden" id="category_id_{{ category.id }}" value="{{ category.id }}" />
-            <input type="text" id="newTask_{{ category.id }}" class="form-control" placeholder="Dodaj nowe zadanie" required />
-            <button class="btn btn-outline-light" onclick="addTask({{ category.id }})">Dodaj</button>
-          </div>
+          <form
+            method="POST"
+            action="{{ url_for('tasks.add_task') }}"
+            onsubmit="event.preventDefault(); addTask({{ category.id }})"
+          >
+            <div class="input-group mt-3">
+              <input type="hidden" id="category_id_{{ category.id }}" value="{{ category.id }}" />
+              <input type="text" id="newTask_{{ category.id }}" class="form-control" placeholder="Dodaj nowe zadanie" required />
+              <button class="btn btn-outline-light" type="submit">Dodaj</button>
+            </div>
+          </form>
         </div>
       </div>
     </div>

@@ -1,5 +1,7 @@
 function addTask(categoryId) {
   const taskInput = document.getElementById("newTask_" + categoryId);
+  console.log("taskinput ", taskInput);
+  console.log("categoryId ", categoryId);
   const taskName = taskInput.value.trim();
 
   if (!taskName) {
@@ -7,20 +9,17 @@ function addTask(categoryId) {
     return;
   }
 
-  const data = {
-    category_id: categoryId,
-    task_name: taskName,
-  };
-
   console.log("FUNC: addTask cat id: " + categoryId);
 
-  fetch("/add_task", {
+  fetch("/add_task/", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Requested-With": "XMLHttpRequest",
     },
-    body: JSON.stringify(data),
+    body: JSON.stringify({
+      category_id: categoryId,
+      task_name: taskName,
+    }),
   })
     .then((response) => response.json())
     .then((data) => {

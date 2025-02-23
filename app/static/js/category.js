@@ -46,7 +46,7 @@ function addCategory(event) {
 
         const addTaskForm = newCategory.querySelector(".form");
         addTaskForm.id = `addTaskForm${data.category_id}`;
-        addTaskForm.setAttribute("onsubmit", `addTask(event, ${data.category_id})`);
+        addTaskForm.setAttribute("onsubmit", `event.preventDefault(); addTask(${data.category_id})`);
 
         const categoryIdInput = addTaskForm.querySelector('input[type="hidden"]');
         categoryIdInput.id = `category_id_${data.category_id}`;
@@ -56,7 +56,7 @@ function addCategory(event) {
         newTaskInput.id = `newTask_${data.category_id}`;
 
         const newTaskButton = addTaskForm.querySelector('button[class="btn btn-outline-light"]');
-        newTaskButton.setAttribute("onclick", `addTask(${data.category_id})`);
+        newTaskButton.setAttribute("type", "submit");
 
         masonryContainer.appendChild(newCategory);
         updateCategoryMoveButtons();
