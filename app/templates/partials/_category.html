@@ -1,13 +1,4 @@
-<div
-  class="category-block"
-  id="category{{ category.id }}"
-  draggable="true"
-  ondragstart="dragCategory(event, {{ category.id }})"
-  ondragover="allowDropCategory(event)"
-  ondragenter="highlightCategory(event)"
-  ondragleave="removeHighlight(event)"
-  ondrop="dropCategory(event, {{ category.id }})"
->
+<div class="category-block" id="category{{ category.id }}">
   <div class="card bg-secondary">
     <div class="card-header d-flex justify-content-between align-items-center">
       <a

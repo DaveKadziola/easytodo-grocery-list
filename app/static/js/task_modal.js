@@ -11,15 +11,15 @@ function openTaskModal(categoryId, taskId, name, description) {
 }
 
 function saveTask() {
-  let categoryId = document.getElementById("currentCategoryId").value;
-  let taskId = document.getElementById("currentTaskId").value;
-  let oldTaskName = document.getElementById("oldTaskName").value;
-  let newTaskName = document.getElementById("taskName").value;
-  let oldTaskDescription = document.getElementById("oldTaskDescription").value;
-  let newTaskDescription = document.getElementById("taskDescription").value;
+  const categoryId = document.getElementById("currentCategoryId").value;
+  const taskId = document.getElementById("currentTaskId").value;
+  const oldTaskName = document.getElementById("oldTaskName").value;
+  const newTaskName = document.getElementById("taskName").value;
+  const oldTaskDescription = document.getElementById("oldTaskDescription").value;
+  const newTaskDescription = document.getElementById("taskDescription").value;
 
   if ((oldTaskName === newTaskName && oldTaskDescription === newTaskDescription) || newTaskName === "") {
-    // Jeśli nazwa jest pusta, zamknij modal bez zmiany
+    // Close modal if no changes
     let modalEl = document.getElementById("taskModal");
     let modalInstance = bootstrap.Modal.getInstance(modalEl);
     if (modalInstance) {
@@ -27,10 +27,16 @@ function saveTask() {
     }
     return;
   }
-  let formData = new FormData(document.getElementById("taskForm"));
-  fetch("/update_task/" + taskId, {
+
+  fetch(`/update_task/${taskId}`, {
     method: "POST",
-    body: formData,
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      name: newTaskName,
+      description: newTaskDescription,
+    }),
   })
     .then((response) => response.json())
     .then((data) => {
@@ -65,13 +71,16 @@ function saveTask() {
 }
 
 function deleteTask() {
-  let taskId = document.getElementById("currentTaskId").value;
-  let categoryId = document.getElementById("currentCategoryId").value;
+  const taskId = document.getElementById("currentTaskId").value;
+  const categoryId = document.getElementById("currentCategoryId").value;
+
   if (confirm("Czy napewno chcesz usunąć zadanie?")) {
-    let formData = new FormData(document.getElementById("taskForm"));
-    fetch("/delete_task/" + taskId, {
+    fetch(`/delete_task/${taskId}`, {
       method: "POST",
-      body: formData,
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
     })
       .then((response) => response.json())
       .then((data) => {

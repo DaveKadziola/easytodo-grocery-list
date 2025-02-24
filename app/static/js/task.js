@@ -1,7 +1,5 @@
 function addTask(categoryId) {
   const taskInput = document.getElementById("newTask_" + categoryId);
-  console.log("taskinput ", taskInput);
-  console.log("categoryId ", categoryId);
   const taskName = taskInput.value.trim();
 
   if (!taskName) {
@@ -50,16 +48,18 @@ function addTask(categoryId) {
 
 // Functions for task handling
 function toggleTask(taskId) {
-  let checkbox = document.getElementById("taskCheckbox" + taskId);
-  let categoryBlock = checkbox.closest(".category-block");
-  let categoryId = categoryBlock.id.replace("category", "");
+  const checkbox = document.getElementById("taskCheckbox" + taskId);
+  const categoryBlock = checkbox.closest(".category-block");
+  const categoryId = categoryBlock.id.replace("category", "");
 
   console.log("taskid: ", taskId);
 
   fetch("/toggle_task/" + taskId, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ is_done: checkbox.checked }),
+    body: JSON.stringify({
+      is_done: checkbox.checked,
+    }),
   })
     .then((response) => response.json())
     .then((data) => {

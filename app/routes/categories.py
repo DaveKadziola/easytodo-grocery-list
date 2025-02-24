@@ -9,7 +9,8 @@ categories_bp = Blueprint("categories", __name__)
 # Add new category
 @categories_bp.route("/add_category", methods=["POST"])
 def add_category():
-    category_name = request.form.get("category_name")
+    data = request.get_json()
+    category_name = data.get("category_name")
     if not category_name:
         return (
             jsonify({"status": "error", "message": "Nazwa kategorii jest wymagana"}),
@@ -41,13 +42,31 @@ def add_category():
 # Update category name
 @categories_bp.route("/update_category/<int:category_id>", methods=["POST"])
 def update_category(category_id):
-    category = Category.query.get(category_id)
-    if category:
-        category.name = request.form.get("name", category.name)
+    try:
+        data = request.get_json()
+
+        if not data or "name" not in data:
+            return jsonify({"status": "error", "message": "Brak wymaganego pola 'name'"}), 400
+
+        category = Category.query.get(category_id)
+        if not category:
+            return jsonify({"status": "error", "message": "Kategoria nie znaleziona"}), 404
+
+        new_name = data["name"].strip()
+        if not new_name:
+            return (
+                jsonify({"status": "error", "message": "Nazwa kategorii nie może być pusta"}),
+                400,
+            )
+
+        category.name = new_name
         category.updated_at = datetime.now()
         db.session.commit()
-        return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Category not found"})
+
+        return jsonify({"status": "success", "category_id": category_id, "new_name": new_name}), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # Delete category with all assigned tasks

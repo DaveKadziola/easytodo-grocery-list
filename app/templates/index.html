@@ -17,9 +17,20 @@
         <div class="col-12">
           <div class="card bg-secondary">
             <div class="card-body">
-              <form method="POST" action="{{ url_for('categories.add_category') }}" onsubmit="addCategory(event)">
+              <form
+                method="POST"
+                action="{{ url_for('categories.add_category') }}"
+                onsubmit="event.preventDefault(); addCategory()"
+              >
                 <div class="input-group">
-                  <input type="text" name="category_name" class="form-control" placeholder="Dodaj nową kategorię" required />
+                  <input
+                    type="text"
+                    id="newCategoryDesktop"
+                    name="category_name"
+                    class="form-control"
+                    placeholder="Dodaj nową kategorię"
+                    required
+                  />
                   <button class="btn btn-outline-light" type="submit">Dodaj kategorię</button>
                 </div>
               </form>
@@ -33,7 +44,7 @@
         <div id="categoriesMasonry">
           <!-- template for first category-->
           <template id="categoryTemplate" data-server-template>
-            <div class="category-block" draggable="true">
+            <div class="category-block">
               <div class="card bg-secondary">
                 <div class="card-header d-flex justify-content-between align-items-center">
                   <a class="category-name text-white text-decoration-none col" data-bs-toggle="collapse"></a>
@@ -59,7 +70,7 @@
                   <div class="card-body">
                     <!--Task form -->
                     <div class="form" id="addTaskForm">
-                      <form method="POST" action="{{ url_for('tasks.add_task') }}" onsubmit="c addTask()">
+                      <form method="POST" action="{{ url_for('tasks.add_task') }}" onsubmit="event.preventDefault(); addTask()">
                         <div class="input-group mt-3">
                           <input type="hidden" id="category_id_{{ categoryId }}" value="" />
                           <input
@@ -84,11 +95,15 @@
         <div class="new-category-mobile mt-4">
           <div class="card bg-secondary">
             <div class="card-body">
-              <form method="POST" action="{{ url_for('categories.add_category') }}" onsubmit="addCategory(event)">
+              <form
+                method="POST"
+                action="{{ url_for('categories.add_category') }}"
+                onsubmit="event.preventDefault(); addCategory()"
+              >
                 <div class="input-group">
                   <input
                     type="text"
-                    id="newCategory"
+                    id="newCategoryMobile"
                     name="category_name"
                     class="form-control"
                     placeholder="Dodaj nową kategorię"

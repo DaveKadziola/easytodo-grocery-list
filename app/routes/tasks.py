@@ -9,7 +9,6 @@ tasks_bp = Blueprint("tasks", __name__)
 # Assign task to category
 @tasks_bp.route("/add_task/", methods=["POST"])
 def add_task():
-
     data = request.get_json()
 
     if not data or "category_id" not in data or "task_name" not in data:
@@ -50,25 +49,45 @@ def add_task():
 # Update task – change name and description
 @tasks_bp.route("/update_task/<int:task_id>", methods=["POST"])
 def update_task(task_id):
+    data = request.get_json()
+
+    if not data:
+        return jsonify({"status": "error", "message": "Brak danych"}), 400
+
     task = Task.query.get(task_id)
-    if task:
-        task.name = request.form.get("name", task.name)
-        task.description = request.form.get("description", task.description)
+    if not task:
+        return jsonify({"status": "error", "message": "Zadanie nie znalezione"}), 404
+
+    new_name = data.get("name", "").strip()
+    new_description = data.get("description", "").strip()
+
+    if not new_name:
+        return jsonify({"status": "error", "message": "Nazwa zadania jest wymagana"}), 400
+
+    try:
+        task.name = new_name
+        task.description = new_description
         task.updated_at = datetime.now()
         db.session.commit()
         return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Task not found"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # Delete task
 @tasks_bp.route("/delete_task/<int:task_id>", methods=["POST"])
 def delete_task(task_id):
-    task = Task.query.get(task_id)
-    if task:
+    try:
+        task = Task.query.get(task_id)
+        if not task:
+            return jsonify({"status": "error", "message": "Zadanie nie znalezione"}), 404
+
         db.session.delete(task)
         db.session.commit()
         return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Task not found"})
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # Move task to other category
@@ -91,17 +110,20 @@ def move_task():
 # Update task status
 @tasks_bp.route("/toggle_task/<int:task_id>", methods=["POST"])
 def toggle_task(task_id):
-    task = Task.query.get(task_id)
-    if not task:
-        return jsonify({"status": "error", "message": "Task not found"}), 404
+    try:
+        task = Task.query.get(task_id)
+        if not task:
+            return jsonify({"status": "error", "message": "Task not found"}), 404
 
-    data = request.get_json()
-    if not data or "is_done" not in data:
-        return jsonify({"status": "error", "message": "Invalid request"}), 400
+        data = request.get_json()
+        if not data or "is_done" not in data:
+            return jsonify({"status": "error", "message": "Invalid request"}), 400
 
-    # Set is_done status from frontend input (True/False)
-    task.is_done = data["is_done"]
-    task.updated_at = datetime.now()
-    db.session.commit()
+        # Set is_done status from frontend input (True/False)
+        task.is_done = data["is_done"]
+        task.updated_at = datetime.now()
+        db.session.commit()
 
-    return jsonify({"status": "success", "is_done": task.is_done})
+        return jsonify({"status": "success", "is_done": task.is_done})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
