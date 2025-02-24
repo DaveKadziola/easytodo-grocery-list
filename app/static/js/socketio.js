@@ -13,9 +13,9 @@ socket.on("update", (data) => {
   if (data.category_id) {
     fetch(`/get_tasks_by_category/${data.category_id}`)
       .then((response) => response.json())
-      .then((tasks) => {
+      .then((task_list) => {
         console.log("FUNC: socket update");
-        updateTasksView(data.category_id, tasks);
+        updateTasksView(data.category_id, task_list.tasks);
         setTimeout(() => {
           if (data.task_id) {
             highlightUpdatedTask(data.task_id);

@@ -54,9 +54,9 @@ function saveTask() {
 
         fetch(`/get_tasks_by_category/${categoryId}`)
           .then((response) => response.json())
-          .then((tasks) => {
+          .then((task_list) => {
             console.log("FUNC: updateTask");
-            updateTasksView(data.category_id, tasks);
+            updateTasksView(data.category_id, task_list.tasks);
             setTimeout(() => {
               if (data.task_id) {
                 highlightUpdatedTask(data.task_id);
@@ -94,9 +94,9 @@ function deleteTask() {
           console.log("FUNC: deleteTask");
           fetch(`/get_tasks_by_category/${categoryId}`)
             .then((response) => response.json())
-            .then((tasks) => {
+            .then((task_list) => {
               console.log("FUNC: deleteTask");
-              updateTasksView(categoryId, tasks);
+              updateTasksView(categoryId, task_list.tasks);
             })
             .catch((error) => console.error("Błąd pobierania zadań:", error));
         } else {

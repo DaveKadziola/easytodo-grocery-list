@@ -1,4 +1,9 @@
-<div class="form-check mb-2" id="taskBlock{{ task.id }}" draggable="true" ondragstart="dragTask(event, {{ task.id }})">
+<div
+  class="form-check mb-2"
+  id="taskBlock{{ task.id }}"
+  draggable="true"
+  ondragstart="dragTask(event, {{ task.id }}, {{ category.id }})"
+>
   <input
     class="form-check-input"
     type="checkbox"

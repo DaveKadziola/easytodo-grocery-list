@@ -9,18 +9,20 @@ tasks_bp = Blueprint("tasks", __name__)
 # Assign task to category
 @tasks_bp.route("/add_task/", methods=["POST"])
 def add_task():
-    data = request.get_json()
-
-    if not data or "category_id" not in data or "task_name" not in data:
-        return (
-            jsonify({"status": "error", "message": "Brak wymaganych pól"}),
-            400,
-        )
-
-    category_id = data["category_id"]
-    task_name = data["task_name"]
-
     try:
+        # Require header Content-Type: application/json
+        if not request.is_json:
+            return jsonify({"status": "error", "message": "Nieprawidłowy format żądania"}), 400
+
+        data = request.get_json()
+
+        # Validate fields
+        if not data or "category_id" not in data or "task_name" not in data:
+            return jsonify({"status": "error", "message": "Brak wymaganych pól"}), 400
+
+        category_id = data["category_id"]
+        task_name = data["task_name"]
+
         new_task = Task(name=task_name)
         db.session.add(new_task)
         db.session.commit()
@@ -42,6 +44,7 @@ def add_task():
             ),
             200,
         )
+
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -49,27 +52,33 @@ def add_task():
 # Update task – change name and description
 @tasks_bp.route("/update_task/<int:task_id>", methods=["POST"])
 def update_task(task_id):
-    data = request.get_json()
-
-    if not data:
-        return jsonify({"status": "error", "message": "Brak danych"}), 400
-
-    task = Task.query.get(task_id)
-    if not task:
-        return jsonify({"status": "error", "message": "Zadanie nie znalezione"}), 404
-
-    new_name = data.get("name", "").strip()
-    new_description = data.get("description", "").strip()
-
-    if not new_name:
-        return jsonify({"status": "error", "message": "Nazwa zadania jest wymagana"}), 400
-
     try:
+        # Require header Content-Type: application/json
+        if not request.is_json:
+            return jsonify({"status": "error", "message": "Nieprawidłowy format żądania"}), 400
+
+        data = request.get_json()
+
+        # Validate fields
+        if not data or "name" not in data:
+            return jsonify({"status": "error", "message": "Brak wymaganych pól"}), 400
+
+        task = Task.query.get(task_id)
+        if not task:
+            return jsonify({"status": "error", "message": "Zadanie nie znalezione"}), 404
+
+        new_name = data["name"].strip()
+        new_description = data.get("description", "").strip()
+
+        if not new_name:
+            return jsonify({"status": "error", "message": "Nazwa zadania jest wymagana"}), 400
+
         task.name = new_name
         task.description = new_description
         task.updated_at = datetime.now()
         db.session.commit()
         return jsonify({"status": "success"})
+
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -93,29 +102,48 @@ def delete_task(task_id):
 # Move task to other category
 @tasks_bp.route("/move_task", methods=["POST"])
 def move_task():
-    task_id = request.form.get("task_id")
-    new_category_id = request.form.get("new_category_id")
-    if task_id and new_category_id:
+    try:
+        # Require header Content-Type: application/json
+        if not request.is_json:
+            return jsonify({"status": "error", "message": "Nieprawidłowy format żądania"}), 400
+
+        data = request.get_json()
+
+        # Validate fields
+        if not data or "task_id" not in data or "new_category_id" not in data:
+            return jsonify({"status": "error", "message": "Brak wymaganych pól"}), 400
+
+        task_id = data["task_id"]
+        new_category_id = data["new_category_id"]
+
         assignment = TaskAssignment.query.filter_by(task_id=task_id).first()
         if assignment:
             assignment.category_id = new_category_id
             db.session.commit()
             return jsonify({"status": "success"})
-        else:
-            return jsonify({"status": "error", "message": "Assignment not found"})
 
-    return jsonify({"status": "error", "message": "Invalid parameters"})
+        return jsonify({"status": "error", "message": "Nie znaleziono przypisania"}), 404
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # Update task status
 @tasks_bp.route("/toggle_task/<int:task_id>", methods=["POST"])
 def toggle_task(task_id):
     try:
+        # Require header Content-Type: application/json
+        if not request.is_json:
+            return jsonify({"status": "error", "message": "Nieprawidłowy format żądania"}), 400
+
         task = Task.query.get(task_id)
+
         if not task:
             return jsonify({"status": "error", "message": "Task not found"}), 404
 
         data = request.get_json()
+
+        # Validate fields
         if not data or "is_done" not in data:
             return jsonify({"status": "error", "message": "Invalid request"}), 400
 

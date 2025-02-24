@@ -9,15 +9,22 @@ categories_bp = Blueprint("categories", __name__)
 # Add new category
 @categories_bp.route("/add_category", methods=["POST"])
 def add_category():
-    data = request.get_json()
-    category_name = data.get("category_name")
-    if not category_name:
-        return (
-            jsonify({"status": "error", "message": "Nazwa kategorii jest wymagana"}),
-            400,
-        )
-
     try:
+        # Require header Content-Type: application/json
+        if not request.is_json:
+            return jsonify({"status": "error", "message": "Nieprawidłowy format żądania"}), 400
+
+        data = request.get_json()
+        category_name = data.get("category_name")
+
+        # Validate fields
+        if not category_name:
+            return (
+                jsonify({"status": "error", "message": "Nazwa kategorii jest wymagana"}),
+                400,
+            )
+
+        # Determine position value for new category to put it in the end of the list
         max_position = db.session.query(db.func.max(Category.position)).scalar() or 0
         new_category = Category(name=category_name, position=max_position + 1)
         db.session.add(new_category)
@@ -39,19 +46,26 @@ def add_category():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# Update category name
-@categories_bp.route("/update_category/<int:category_id>", methods=["POST"])
-def update_category(category_id):
+# Rename category
+@categories_bp.route("/rename_category/<int:category_id>", methods=["POST"])
+def rename_category(category_id):
     try:
+        # Require header Content-Type: application/json
+        if not request.is_json:
+            return jsonify({"status": "error", "message": "Nieprawidłowy format żądania"}), 400
+
         data = request.get_json()
 
+        # Validate fields
         if not data or "name" not in data:
             return jsonify({"status": "error", "message": "Brak wymaganego pola 'name'"}), 400
 
         category = Category.query.get(category_id)
+
         if not category:
             return jsonify({"status": "error", "message": "Kategoria nie znaleziona"}), 404
 
+        # Apply new name if confition is meet
         new_name = data["name"].strip()
         if not new_name:
             return (
@@ -72,10 +86,19 @@ def update_category(category_id):
 # Delete category with all assigned tasks
 @categories_bp.route("/delete_category/<int:category_id>", methods=["POST"])
 def delete_category(category_id):
-    category = Category.query.get(category_id)
-    if category:
-        assignments = TaskAssignment.query.filter_by(category_id=category.id).all()
+    try:
+        # Require header Content-Type: application/json
+        if not request.is_json:
+            return jsonify({"status": "error", "message": "Nieprawidłowy format żądania"}), 400
 
+        category = Category.query.get(category_id)
+
+        # Validate fields
+        if not category:
+            return jsonify({"status": "error", "message": "Kategoria nie znaleziona"}), 404
+
+        # Remove tasks assigned to category
+        assignments = TaskAssignment.query.filter_by(category_id=category.id).all()
         for assign in assignments:
             task = Task.query.get(assign.task_id)
             if task:
@@ -83,72 +106,81 @@ def delete_category(category_id):
 
         db.session.delete(category)
         db.session.commit()
-        return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Category not found"})
 
+        return (
+            jsonify(
+                {"status": "success", "message": "Kategoria usunięta", "category_id": category_id}
+            ),
+            200,
+        )
 
-# Rename category
-@categories_bp.route("/rename_category/<int:category_id>", methods=["POST"])
-def rename_category(category_id):
-    cat = Category.query.get(category_id)
-    new_name = request.form.get("name")
-    if cat and new_name:
-        cat.name = new_name
-        cat.updated_at = datetime.now()
-        db.session.commit()
-        return jsonify({"status": "success", "new_category_name": new_name})
-    return jsonify({"status": "error", "message": "Error renaming category"})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": f"Błąd serwera: {str(e)}"}), 500
 
 
 # Move category
 @categories_bp.route("/move_category", methods=["POST"])
 def move_category():
-    # Obsługa przeciągania: swap pozycji
-    dragged_category_id = request.form.get("dragged_category_id")
-    target_category_id = request.form.get("target_category_id")
-    if dragged_category_id and target_category_id:
-        cat1 = Category.query.get(int(dragged_category_id))
-        cat2 = Category.query.get(int(target_category_id))
-        if cat1 and cat2:
-            temp = cat1.position
-            cat1.position = cat2.position
-            cat2.position = temp
-            db.session.commit()
-            return jsonify({"status": "success"})
+    try:
+        # Require header Content-Type: application/json
+        if not request.is_json:
+            return jsonify({"status": "error", "message": "Nieprawidłowy format żądania"}), 400
+
+        data = request.get_json()
+
+        # Validate fields
+        if not data or "category_id" not in data or "direction" not in data:
+            return (
+                jsonify(
+                    {"status": "error", "message": "Brak wymaganych pól: category_id i direction"}
+                ),
+                400,
+            )
+
+        category_id = data["category_id"]
+        direction = data["direction"].lower()
+
+        # Find source category in db
+        category = Category.query.get(category_id)
+        if not category:
+            return jsonify({"status": "error", "message": "Nie znaleziono kategorii"}), 404
+
+        # Find target category in db
+        query = Category.query
+        if direction == "up":
+            swap_category = (
+                query.filter(Category.position < category.position)
+                .order_by(Category.position.desc())
+                .first()
+            )
+        elif direction == "down":
+            swap_category = (
+                query.filter(Category.position > category.position)
+                .order_by(Category.position)
+                .first()
+            )
         else:
-            return jsonify({"status": "error", "message": "Category not found"})
-    else:
-        # Handling arrow buttons ('up' or 'down')
-        category_id = request.form.get("category_id")
-        direction = request.form.get("direction")
-        if category_id and direction:
-            cat = Category.query.get(int(category_id))
-            if not cat:
-                return jsonify({"status": "error", "message": "Category not found"})
+            return jsonify({"status": "error", "message": "Nieprawidłowy kierunek"}), 400
 
-            if direction == "up":
-                swap_cat = (
-                    Category.query.filter(Category.position < cat.position)
-                    .order_by(Category.position.desc())
-                    .first()
-                )
+        # Swap category positions
+        if swap_category:
+            category.position, swap_category.position = swap_category.position, category.position
+            db.session.commit()
+            return (
+                jsonify(
+                    {
+                        "status": "success",
+                        "category_id": category_id,
+                        "new_position": category.position,
+                        "swap_category_id": swap_category.id,
+                    }
+                ),
+                200,
+            )
 
-            elif direction == "down":
-                swap_cat = (
-                    Category.query.filter(Category.position > cat.position)
-                    .order_by(Category.position)
-                    .first()
-                )
+        return jsonify({"status": "success"}), 200
 
-            else:
-                return jsonify({"status": "error", "message": "Invalid direction"})
-
-            if swap_cat:
-                temp = cat.position
-                cat.position = swap_cat.position
-                swap_cat.position = temp
-                db.session.commit()
-                return jsonify({"status": "success"})
-            else:
-                return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Invalid parameters"})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": f"Błąd serwera: {str(e)}"}), 500

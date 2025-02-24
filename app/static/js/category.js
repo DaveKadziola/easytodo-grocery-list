@@ -89,12 +89,13 @@ function addCategory() {
     });
 }
 
-function renameCategory(categoryId, currentName) {
+function renameCategory(categoryId) {
+  const currentName = document.querySelector(`a[href^="#collapseCategory${categoryId}"]`).textContent.trim();
   const newName = prompt("Podaj nową nazwę kategorii", currentName)?.trim();
 
   if (!newName || newName === currentName) return;
 
-  fetch(`/update_category/${categoryId}`, {
+  fetch(`/rename_category/${categoryId}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -113,41 +114,60 @@ function renameCategory(categoryId, currentName) {
     })
     .catch((error) => {
       console.error("Error:", error);
-      showNotification(error.message, "error");
     });
 }
 
 function deleteCategory(categoryId) {
-  if (confirm("Czy napewno chcesz usunąć kategorię?")) {
-    fetch("/delete_category/" + categoryId, {
+  if (confirm("Czy na pewno chcesz usunąć kategorię?")) {
+    fetch(`/delete_category/${categoryId}`, {
       method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
     })
-      .then((response) => response.json())
+      .then((response) => {
+        if (!response.ok) throw new Error("Błąd sieciowy");
+        return response.json();
+      })
       .then((data) => {
         if (data.status === "success") {
-          location.reload();
+          setWindowViewAtCurrentCategory("delete", categoryId);
         } else {
-          alert("Błąd usunięcia kategorii");
+          throw new Error(data.message || "Błąd usuwania kategorii");
         }
+      })
+      .catch((error) => {
+        console.error("Error:", error);
+        showNotification(error.message, "error");
       });
   }
 }
 
-// Change category position
 function moveCategory(categoryId, direction) {
   fetch("/move_category", {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: "category_id=" + encodeURIComponent(categoryId) + "&direction=" + encodeURIComponent(direction),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      category_id: categoryId,
+      direction: direction,
+    }),
   })
-    .then((response) => response.json())
+    .then((response) => {
+      if (!response.ok) throw new Error("Błąd sieciowy");
+      return response.json();
+    })
     .then((data) => {
       if (data.status === "success") {
-        window.location.hash = "#category" + categoryId;
-        location.reload();
+        setWindowViewAtCurrentCategory("move", categoryId);
       } else {
-        alert("Błąd zmiany kolejności kategorii");
+        throw new Error(data.message || "Błąd zmiany kolejności");
       }
+    })
+    .catch((error) => {
+      console.error("Error:", error);
     });
 }
 
@@ -174,12 +194,42 @@ function updateCategoryMoveButtons() {
     const upButton = category.querySelector('[onclick*="up"]');
     const downButton = category.querySelector('[onclick*="down"]');
 
-    // Aktualizuj stan przycisków
+    // Update button state
     upButton.disabled = index === 0;
     downButton.disabled = index === categories.length - 1;
 
-    // Aktualizuj atrybuty Bootstrap
+    // Update Bootstrap attributes
     upButton.classList.toggle("disabled", index === 0);
     downButton.classList.toggle("disabled", index === categories.length - 1);
   });
+}
+
+function setWindowViewAtCurrentCategory(action, categoryId) {
+  let currentElement;
+  let previousElement;
+  let nextElement;
+
+  switch (action) {
+    case "move":
+      sessionStorage.setItem("scrollToCategoryId", categoryId);
+      location.reload();
+      break;
+    case "delete":
+      currentElement = document.querySelector("#category" + categoryId + ".category-block");
+      previousElement = currentElement.previousElementSibling;
+      nextElement = currentElement.nextElementSibling;
+
+      if (previousElement.classList.contains("category-block")) {
+        let prevCategoryId = previousElement.id.replace("category", "");
+        sessionStorage.setItem("scrollToCategoryId", prevCategoryId);
+        location.reload();
+      } else if (nextElement.classList.contains("category-block")) {
+        let nextCategoryId = nextElement.id.replace("category", "");
+        sessionStorage.setItem("scrollToCategoryId", nextCategoryId);
+        location.reload();
+      } else {
+        location.reload();
+      }
+      break;
+  }
 }

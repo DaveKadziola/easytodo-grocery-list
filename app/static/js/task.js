@@ -25,9 +25,9 @@ function addTask(categoryId) {
         taskInput.value = "";
         fetch(`/get_tasks_by_category/${categoryId}`)
           .then((response) => response.json())
-          .then((tasks) => {
+          .then((task_list) => {
             console.log("FUNC: addTask");
-            updateTasksView(data.category_id, tasks);
+            updateTasksView(data.category_id, task_list.tasks);
             setTimeout(() => {
               if (data.task_id) {
                 highlightUpdatedTask(data.task_id);
@@ -46,7 +46,6 @@ function addTask(categoryId) {
     });
 }
 
-// Functions for task handling
 function toggleTask(taskId) {
   const checkbox = document.getElementById("taskCheckbox" + taskId);
   const categoryBlock = checkbox.closest(".category-block");
@@ -66,8 +65,8 @@ function toggleTask(taskId) {
       if (data.status === "success") {
         fetch(`/get_tasks_by_category/${categoryId}`)
           .then((response) => response.json())
-          .then((tasks) => {
-            updateTasksView(data.category_id, tasks);
+          .then((task_list) => {
+            updateTasksView(data.category_id, task_list.tasks);
             setTimeout(() => {
               if (data.task_id) {
                 highlightUpdatedTask(data.task_id);
@@ -93,25 +92,25 @@ function updateTasksView(categoryId, tasks) {
 
   console.log("FUNC: updateTasksView");
 
-  // Animacja zanikania
+  // Hide animation
   cardBody.style.transition = `opacity ${animationDuration}ms`;
   cardBody.style.opacity = "0";
 
   setTimeout(() => {
-    // Usuń tylko zadania, zachowując formularz
+    // Remove checked/unchecked task and keep form only
     const childrenToRemove = Array.from(cardBody.children).filter((child) => child.id !== `addTaskForm${categoryId}`);
     childrenToRemove.forEach((child) => child.remove());
 
-    // Sortowanie zadań
+    // Sort tasks
     tasks.sort((a, b) => a.is_done - b.is_done || a.name.localeCompare(b.name));
 
-    // Dodawanie zadań przed formularzem
+    // Add tasks before form
     tasks.forEach((task) => {
       const taskDiv = document.createElement("div");
       taskDiv.className = "form-check mb-2";
       taskDiv.id = `taskBlock${task.id}`;
       taskDiv.draggable = true;
-      taskDiv.ondragstart = (e) => dragTask(e, task.id);
+      taskDiv.ondragstart = (e) => dragTask(e, task.id, categoryId);
 
       const checkbox = document.createElement("input");
       checkbox.className = "form-check-input";
@@ -137,7 +136,7 @@ function updateTasksView(categoryId, tasks) {
       cardBody.insertBefore(taskDiv, taskForm);
     });
 
-    // Animacja pojawiania się
+    // Show up animation
     cardBody.style.opacity = "1";
   }, animationDuration);
 
@@ -151,9 +150,10 @@ function highlightUpdatedTask(taskId) {
     return;
   }
 
-  // Reset animacji
+  // Reset animation
   taskElement.classList.remove("task-highlight");
 
+  // Apply animationl
   taskElement.classList.add("task-highlight");
 
   taskElement.addEventListener(

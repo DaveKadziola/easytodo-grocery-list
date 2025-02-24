@@ -1,15 +1,13 @@
-// Scrooling view to last position after page reload
+// Scrooling view to last/previous/next category after page reload
 document.addEventListener("DOMContentLoaded", function () {
-  if (window.location.hash) {
-    const element = document.querySelector(window.location.hash);
+  const categoryId = sessionStorage.getItem("scrollToCategoryId");
+  if (categoryId) {
+    const element = document.getElementById("category" + categoryId);
     if (element) {
-      setTimeout(() => {
-        element.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
-          inline: "nearest",
-        });
-      }, 100);
+      element.scrollIntoView(true);
+
+      // Remove id from sessionStorage after scroll
+      sessionStorage.removeItem("scrollToCategoryId");
     }
   }
 });
