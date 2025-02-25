@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify, request
+from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime
 from ..models import Category, TaskAssignment, Task
 from ..extensions import db
@@ -184,3 +185,31 @@ def move_category():
     except Exception as e:
         db.session.rollback()
         return jsonify({"status": "error", "message": f"Błąd serwera: {str(e)}"}), 500
+
+
+# Get all categories
+@categories_bp.route("/get_all_categories/", methods=["GET"])
+def get_all_categories():
+    try:
+        # Get all categories
+        categories = (
+            Category.query.with_entities(Category.id, Category.name).order_by(Category.name).all()
+        )
+
+        category_list = []
+        for category in categories:
+            category_list.append({"id": category.id, "name": category.name})
+
+        return (
+            jsonify(
+                {"status": "success", "count": len(category_list), "categories": category_list}
+            ),
+            200,
+        )
+
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": f"Błąd bazy danych: {str(e)}"}), 500
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Krytyczny błąd serwera: {str(e)}"}), 500

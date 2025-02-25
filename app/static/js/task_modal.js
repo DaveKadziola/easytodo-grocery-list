@@ -1,15 +1,19 @@
 function openTaskModal(categoryId, taskId, name, description) {
+  loadCategories(categoryId);
+
   document.getElementById("currentCategoryId").value = categoryId;
   document.getElementById("currentTaskId").value = taskId;
   document.getElementById("taskName").value = name;
   document.getElementById("oldTaskName").value = name;
   document.getElementById("taskDescription").value = description;
   document.getElementById("oldTaskDescription").value = description;
+  document.getElementById("categoryList").value = categoryId;
 
   let taskModal = new bootstrap.Modal(document.getElementById("taskModal"));
   taskModal.show();
 }
 
+//to fix handling task change and cat change
 function saveTask() {
   const categoryId = document.getElementById("currentCategoryId").value;
   const taskId = document.getElementById("currentTaskId").value;
@@ -68,6 +72,14 @@ function saveTask() {
         alert("Błąd zapisu");
       }
     });
+
+  const selectedElement = document.getElementById("categoryList");
+  const selectedElementCategoryId = selectedElement.value;
+
+  // to fix
+  if (selectedElementCategoryId !== categoryId) {
+    moveTask(taskId, categoryId, selectedElementCategoryId);
+  }
 }
 
 function deleteTask() {
@@ -104,4 +116,28 @@ function deleteTask() {
         }
       });
   }
+}
+
+function loadCategories(selectedId) {
+  fetch("/get_all_categories/")
+    .then((response) => {
+      if (!response.ok) throw new Error("Błąd pobierania danych");
+      return response.json();
+    })
+    .then((data) => {
+      const select = document.getElementById("categoryList");
+      select.innerHTML = "";
+
+      console.log("selectedId ", selectedId);
+
+      data.categories.forEach((category) => {
+        const option = new Option(category.name, category.id);
+        option.selected = category.id == selectedId;
+        select.add(option);
+      });
+    })
+    .catch((error) => {
+      console.error("Błąd ładowania kategorii:", error);
+      alert("Wystąpił błąd: " + error.message);
+    });
 }

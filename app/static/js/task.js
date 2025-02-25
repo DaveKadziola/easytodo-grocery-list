@@ -121,9 +121,9 @@ function updateTasksView(categoryId, tasks) {
 
       const span = document.createElement("span");
       span.className = `form-check-label task-item ${task.is_done ? "task-done" : ""}`;
-      span.onclick = (e) => {
-        e.stopPropagation();
+      span.onclick = (event) => {
         openTaskModal(categoryId, task.id, task.name, task.description);
+        event.stopPropagation();
       };
 
       const colDiv = document.createElement("div");

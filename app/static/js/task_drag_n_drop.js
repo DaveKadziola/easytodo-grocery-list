@@ -15,6 +15,10 @@ function dropTask(ev, newCategoryId) {
   let taskId = ev.dataTransfer.getData("application/task");
   let oldCategoryId = ev.dataTransfer.getData("application/category");
 
+  moveTask(taskId, oldCategoryId, newCategoryId);
+}
+
+function moveTask(taskId, oldCategoryId, newCategoryId) {
   fetch("/move_task", {
     method: "POST",
     headers: {
