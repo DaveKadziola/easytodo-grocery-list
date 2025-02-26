@@ -1,0 +1,36 @@
+<!-- Modal for task details -->
+<div class="modal fade" id="taskModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content bg-dark text-light">
+      <div class="modal-header">
+        <h5 class="modal-title" id="taskModalTitle">Task details</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <form id="taskForm">
+          <div class="mb-3">
+            <label for="categoryList" class="form-label">Category</label>
+            <select class="form-select" id="categoryList" aria-label="Category list"></select>
+          </div>
+          <div class="mb-3">
+            <label for="taskName" class="form-label">Task name</label>
+            <input type="text" class="form-control" id="taskName" name="name" />
+          </div>
+          <div class="mb-3">
+            <label for="taskDescription" class="form-label">Task description</label>
+            <textarea class="form-control" id="taskDescription" name="description"></textarea>
+          </div>
+          <input type="hidden" id="currentCategoryId" />
+          <input type="hidden" id="currentTaskId" />
+          <input type="hidden" id="oldTaskName" />
+          <input type="hidden" id="oldTaskDescription" />
+        </form>
+      </div>
+      <div class="modal-footer d-flex flex-nowrap">
+        <button type="button" class="btn btn-secondary text-nowrap ms-auto" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger text-nowrap" onclick="deleteTask()">Delete Task</button>
+        <button type="button" class="btn btn-primary text-nowrap me-auto" onclick="saveTask()">Save changes</button>
+      </div>
+    </div>
+  </div>
+</div>

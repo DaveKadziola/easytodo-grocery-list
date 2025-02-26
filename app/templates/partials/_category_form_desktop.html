@@ -1,0 +1,22 @@
+<!-- Desktop category form – full-width at the top -->
+<div class="row new-category-desktop mb-4">
+  <div class="col-12">
+    <div class="card bg-secondary">
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('categories.add_category') }}" onsubmit="event.preventDefault(); addCategory()">
+          <div class="input-group">
+            <input
+              type="text"
+              id="newCategoryDesktop"
+              name="category_name"
+              class="form-control"
+              placeholder="Add new category"
+              required
+            />
+            <button class="btn btn-outline-light" type="submit">Add category</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>

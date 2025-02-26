@@ -7,7 +7,7 @@
         role="button"
         aria-expanded="true"
         aria-controls="collapseCategory{{ category.id }}"
-        class="text-white text-decoration-none col"
+        class="text-white text-decoration-none col category-wrap-name"
       >
         {{ category.name }}
       </a>
@@ -24,7 +24,7 @@
           endif
           %}
         >
-          &#8593;
+          &nbsp;&nbsp;&#8593;&nbsp;&nbsp;
         </button>
         <button
           class="btn btn-outline-secondary move-btn"
@@ -37,16 +37,18 @@
           endif
           %}
         >
-          &#8595;
+          &nbsp;&nbsp;&#8595;&nbsp;&nbsp;
         </button>
         <div class="dropdown">
-          <button class="btn btn-sm btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">&#x22EE;</button>
+          <button class="btn btn-sm btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
+            &nbsp;&#x22EE;&nbsp;
+          </button>
           <ul class="dropdown-menu dropdown-menu-dark">
             <li>
-              <a class="dropdown-item" href="#" onclick="renameCategory({{ category.id }})">Zmień nazwę</a>
+              <a class="dropdown-item" href="#" onclick="renameCategory({{ category.id }})">Rename</a>
             </li>
             <li>
-              <a class="dropdown-item text-danger" href="#" onclick="deleteCategory({{ category.id }})">Usuń kategorię</a>
+              <a class="dropdown-item text-danger" href="#" onclick="deleteCategory({{ category.id }})">Delete</a>
             </li>
           </ul>
         </div>
@@ -64,8 +66,8 @@
           >
             <div class="input-group mt-3">
               <input type="hidden" id="category_id_{{ category.id }}" value="{{ category.id }}" />
-              <input type="text" id="newTask_{{ category.id }}" class="form-control" placeholder="Dodaj nowe zadanie" required />
-              <button class="btn btn-outline-light" type="submit">Dodaj</button>
+              <input type="text" id="newTask_{{ category.id }}" class="form-control" placeholder="Add new task" required />
+              <button class="btn btn-outline-light" type="submit">Add</button>
             </div>
           </form>
         </div>

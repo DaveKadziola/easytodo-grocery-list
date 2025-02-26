@@ -5,25 +5,14 @@ const socket = io("http://192.168.100.18:8100", {
 });
 
 socket.on("connect", () => {
-  console.log("Połączono z serwerem WebSocket");
+  console.log("Connected to WebSocket");
 });
 
 socket.on("update", (data) => {
-  console.log("Otrzymano aktualizację:", data);
+  console.log("Received an update:", data);
   if (data.category_id) {
-    fetch(`/get_tasks_by_category/${data.category_id}`)
-      .then((response) => response.json())
-      .then((task_list) => {
-        console.log("FUNC: socket update");
-        updateTasksView(data.category_id, task_list.tasks);
-        setTimeout(() => {
-          if (data.task_id) {
-            highlightUpdatedTask(data.task_id);
-          }
-        }, 500);
-      })
-      .catch((error) => console.error("Błąd aktualizacji:", error));
-  } else console.log("DUPA");
+    getTasksByCategory(data.category_id, data.task_id, true);
+  }
 });
 
 /*

@@ -1,159 +1,37 @@
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <!-- Viewport tag for responsive behavior -->
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Easy ToDo & Grocery List</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/body.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/category.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/task.css') }}" />
   </head>
   <body>
     <div class="container py-4">
       <h1 class="mb-4">Easy ToDo & Grocery List</h1>
-
-      <!-- Desktop category form – full-width at the top -->
-      <div class="row new-category-desktop mb-4">
-        <div class="col-12">
-          <div class="card bg-secondary">
-            <div class="card-body">
-              <form
-                method="POST"
-                action="{{ url_for('categories.add_category') }}"
-                onsubmit="event.preventDefault(); addCategory()"
-              >
-                <div class="input-group">
-                  <input
-                    type="text"
-                    id="newCategoryDesktop"
-                    name="category_name"
-                    class="form-control"
-                    placeholder="Dodaj nową kategorię"
-                    required
-                  />
-                  <button class="btn btn-outline-light" type="submit">Dodaj kategorię</button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- Add category form for dekstop mode -->
+      {% include "partials/_category_form_desktop.html" %}
 
       <!-- Masonry layout container for categories -->
       <div class="masonry-container">
         <div id="categoriesMasonry">
-          <!-- template for first category-->
-          <template id="categoryTemplate" data-server-template>
-            <div class="category-block">
-              <div class="card bg-secondary">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                  <a class="category-name text-white text-decoration-none col" data-bs-toggle="collapse"></a>
-                  <div class="d-flex align-items-center">
-                    <button class="btn btn-outline-secondary move-btn">&#8593;</button>
-                    <button class="btn btn-outline-secondary move-btn">&#8595;</button>
-                    <div class="dropdown">
-                      <button class="btn btn-sm btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                        &#x22EE;
-                      </button>
-                      <ul class="dropdown-menu dropdown-menu-dark">
-                        <li>
-                          <a class="dropdown-item rename-link" href="#">Zmień nazwę</a>
-                        </li>
-                        <li>
-                          <a class="dropdown-item text-danger delete-link" href="#">Usuń kategorię</a>
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-                <div class="category-collapse collapse show">
-                  <div class="card-body">
-                    <!--Task form -->
-                    <div class="form" id="addTaskForm">
-                      <form method="POST" action="{{ url_for('tasks.add_task') }}" onsubmit="event.preventDefault(); addTask()">
-                        <div class="input-group mt-3">
-                          <input type="hidden" id="category_id_{{ categoryId }}" value="" />
-                          <input
-                            type="text"
-                            id="newTask_{{ categoryId }}"
-                            class="form-control"
-                            placeholder="Dodaj nowe zadanie"
-                            required
-                          />
-                          <button class="btn btn-outline-light" type="submit">Dodaj</button>
-                        </div>
-                      </form>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
+          <!-- If there are no categories first one must be added using template -->
+          {% include "partials/_category_template.html" %}
+
+          <!-- The loop to fetch all categories and tasks in them -->
           {% for category in categories %} {% set outer_loop = loop %} {% include "partials/_category.html" %} {% endfor %}
         </div>
-        <!-- Mobile category form – at the bottom -->
-        <div class="new-category-mobile mt-4">
-          <div class="card bg-secondary">
-            <div class="card-body">
-              <form
-                method="POST"
-                action="{{ url_for('categories.add_category') }}"
-                onsubmit="event.preventDefault(); addCategory()"
-              >
-                <div class="input-group">
-                  <input
-                    type="text"
-                    id="newCategoryMobile"
-                    name="category_name"
-                    class="form-control"
-                    placeholder="Dodaj nową kategorię"
-                    required
-                  />
-                  <button class="btn btn-outline-light" type="submit">Dodaj kategorię</button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>
+        <!-- Add category form for mobile mode -->
+        {% include "partials/_category_form_mobile.html" %}
       </div>
     </div>
 
-    <!-- Modal for task details -->
-    <div class="modal fade" id="taskModal" tabindex="-1">
-      <div class="modal-dialog">
-        <div class="modal-content bg-dark text-light">
-          <div class="modal-header">
-            <h5 class="modal-title" id="taskModalTitle">Szczegóły zadania</h5>
-            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-          </div>
-          <div class="modal-body">
-            <form id="taskForm">
-              <div class="mb-3">
-                <label for="categoryList" class="form-label">Kategoria</label>
-                <select class="form-select" id="categoryList" aria-label="Category list"></select>
-              </div>
-              <div class="mb-3">
-                <label for="taskName" class="form-label">Nazwa zadania</label>
-                <input type="text" class="form-control" id="taskName" name="name" />
-              </div>
-              <div class="mb-3">
-                <label for="taskDescription" class="form-label">Notatka</label>
-                <textarea class="form-control" id="taskDescription" name="description"></textarea>
-              </div>
-              <input type="hidden" id="currentCategoryId" />
-              <input type="hidden" id="currentTaskId" />
-              <input type="hidden" id="oldTaskName" />
-              <input type="hidden" id="oldTaskDescription" />
-            </form>
-          </div>
-          <div class="modal-footer d-flex flex-nowrap">
-            <button type="button" class="btn btn-secondary text-nowrap ms-auto" data-bs-dismiss="modal">Anuluj</button>
-            <button type="button" class="btn btn-danger text-nowrap" onclick="deleteTask()">Usuń zadanie</button>
-            <button type="button" class="btn btn-primary text-nowrap me-auto" onclick="saveTask()">Zapisz zmiany</button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- Modal to manage task details-->
+    {% include "partials/_task_modal.html" %}
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script
@@ -162,10 +40,12 @@
       crossorigin="anonymous"
     ></script>
     <script src="{{ url_for('static', filename='js/socketio.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/category.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/task.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/category_crud.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/category_view.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/task_crud.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/task_view.js') }}"></script>
     <script src="{{ url_for('static', filename='js/task_drag_n_drop.js') }}"></script>
     <script src="{{ url_for('static', filename='js/task_modal.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/helpers.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
   </body>
 </html>

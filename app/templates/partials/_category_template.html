@@ -1,0 +1,41 @@
+<!-- template for very first category-->
+<template id="categoryTemplate" data-server-template>
+  <div class="category-block">
+    <div class="card bg-secondary">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <a class="category-name text-white text-decoration-none col category-wrap-name" data-bs-toggle="collapse"></a>
+        <div class="d-flex align-items-center">
+          <button class="btn btn-outline-secondary move-btn">&nbsp;&nbsp;&#8593;&nbsp;&nbsp;</button>
+          <button class="btn btn-outline-secondary move-btn">&nbsp;&nbsp;&#8595;&nbsp;&nbsp;</button>
+          <div class="dropdown">
+            <button class="btn btn-sm btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
+              &nbsp;&#x22EE;&nbsp;
+            </button>
+            <ul class="dropdown-menu dropdown-menu-dark">
+              <li>
+                <a class="dropdown-item rename-link" href="#">Rename</a>
+              </li>
+              <li>
+                <a class="dropdown-item text-danger delete-link" href="#">Remove</a>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="category-collapse collapse show">
+        <div class="card-body">
+          <!--Task form -->
+          <div class="form" id="addTaskForm">
+            <form method="POST" action="{{ url_for('tasks.add_task') }}" onsubmit="event.preventDefault(); addTask()">
+              <div class="input-group mt-3">
+                <input type="hidden" id="category_id_{{ categoryId }}" value="" />
+                <input type="text" id="newTask_{{ categoryId }}" class="form-control" placeholder="Add new task" required />
+                <button class="btn btn-outline-light" type="submit">Add</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>

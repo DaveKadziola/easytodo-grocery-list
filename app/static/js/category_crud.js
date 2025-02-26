@@ -11,7 +11,7 @@ function addCategory() {
   }
 
   if (!categoryName) {
-    alert("Nazwa kategorii nie może być pusta");
+    alert("The category name cannot be empty!");
     return;
   }
 
@@ -24,7 +24,10 @@ function addCategory() {
       category_name: categoryName,
     }),
   })
-    .then((response) => response.json())
+    .then((response) => {
+      if (!response.ok) throw new Error("Network error.");
+      return response.json();
+    })
     .then((data) => {
       if (data.status === "success") {
         categoryDesktopInput.value = "";
@@ -58,6 +61,7 @@ function addCategory() {
         deleteLink.setAttribute("onclick", `deleteCategory(${data.category_id})`);
 
         const cardBody = newCategory.querySelector(".card-body");
+        cardBody.setAttribute("ondragover", "allowDrop(event)");
         cardBody.setAttribute("ondrop", `dropTask(event, ${data.category_id})`);
 
         const taskBlocks = newCategory.querySelectorAll(".form-check");
@@ -78,20 +82,20 @@ function addCategory() {
         newTaskButton.setAttribute("type", "submit");
 
         masonryContainer.appendChild(newCategory);
-        updateCategoryMoveButtons();
+        updateViewCategoryMoveButtons();
       } else {
-        alert("Błąd dodawania kategorii: " + data.message);
+        alert("Error: " + data.message);
       }
     })
     .catch((error) => {
-      console.error("Error:", error);
-      alert("Błąd dodawania kategorii: " + error.message);
+      console.error("Error at adding category:", error);
+      alert("Error: " + error.message);
     });
 }
 
 function renameCategory(categoryId) {
   const currentName = document.querySelector(`a[href^="#collapseCategory${categoryId}"]`).textContent.trim();
-  const newName = prompt("Podaj nową nazwę kategorii", currentName)?.trim();
+  const newName = prompt("Enter a new category name:", currentName)?.trim();
 
   if (!newName || newName === currentName) return;
 
@@ -104,21 +108,25 @@ function renameCategory(categoryId) {
       name: newName,
     }),
   })
-    .then((response) => response.json())
+    .then((response) => {
+      if (!response.ok) throw new Error("Network error.");
+      return response.json();
+    })
     .then((data) => {
       if (data.status === "success") {
-        updateCategoryName(categoryId, data.new_name);
+        updateViewCategoryName(categoryId, data.new_name);
       } else {
-        throw new Error(data.message || "Błąd aktualizacji kategorii");
+        throw new Error(data.message || "Error updating category.");
       }
     })
     .catch((error) => {
-      console.error("Error:", error);
+      console.error("Error at renameCategory:", error);
+      alert("Error: " + error.message);
     });
 }
 
 function deleteCategory(categoryId) {
-  if (confirm("Czy na pewno chcesz usunąć kategorię?")) {
+  if (confirm("Are you sure you want to delete this category?")) {
     fetch(`/delete_category/${categoryId}`, {
       method: "POST",
       headers: {
@@ -127,21 +135,43 @@ function deleteCategory(categoryId) {
       body: JSON.stringify({}),
     })
       .then((response) => {
-        if (!response.ok) throw new Error("Błąd sieciowy");
+        if (!response.ok) throw new Error("Network error.");
         return response.json();
       })
       .then((data) => {
         if (data.status === "success") {
           setWindowViewAtCurrentCategory("delete", categoryId);
         } else {
-          throw new Error(data.message || "Błąd usuwania kategorii");
+          throw new Error(data.message || "Error deleting category.");
         }
       })
       .catch((error) => {
-        console.error("Error:", error);
-        showNotification(error.message, "error");
+        console.error("Error at deleteCategory:", error);
+        alert("Error: " + error.message);
       });
   }
+}
+
+function getAllCategories(selectedId) {
+  fetch("/get_all_categories/")
+    .then((response) => {
+      if (!response.ok) throw new Error("Error fetching data.");
+      return response.json();
+    })
+    .then((data) => {
+      const select = document.getElementById("categoryList");
+      select.innerHTML = "";
+
+      data.categories.forEach((category) => {
+        const option = new Option(category.name, category.id);
+        option.selected = category.id == selectedId;
+        select.add(option);
+      });
+    })
+    .catch((error) => {
+      console.error("Error at getAllCategories:", error);
+      alert("Error: " + error.message);
+    });
 }
 
 function moveCategory(categoryId, direction) {
@@ -156,80 +186,18 @@ function moveCategory(categoryId, direction) {
     }),
   })
     .then((response) => {
-      if (!response.ok) throw new Error("Błąd sieciowy");
+      if (!response.ok) throw new Error("Network error.");
       return response.json();
     })
     .then((data) => {
       if (data.status === "success") {
         setWindowViewAtCurrentCategory("move", categoryId);
       } else {
-        throw new Error(data.message || "Błąd zmiany kolejności");
+        throw new Error(data.message || "Category reorder error.");
       }
     })
     .catch((error) => {
-      console.error("Error:", error);
+      console.error("Error at moveCategory:", error);
+      alert("Error: " + error.message);
     });
-}
-
-function updateCategoryName(categoryId, newName) {
-  const categoryLink = document.querySelector(`a[href^="#collapseCategory${categoryId}"]`);
-
-  if (categoryLink) {
-    categoryLink.textContent = newName;
-
-    const currentCollapseId = categoryLink.getAttribute("href").replace("#", "");
-    const newCollapseId = `collapseCategory${categoryId}`;
-
-    if (currentCollapseId !== newCollapseId) {
-      categoryLink.setAttribute("href", `#${newCollapseId}`);
-      categoryLink.setAttribute("aria-controls", newCollapseId);
-    }
-  }
-}
-
-function updateCategoryMoveButtons() {
-  const categories = document.querySelectorAll(".category-block");
-
-  categories.forEach((category, index) => {
-    const upButton = category.querySelector('[onclick*="up"]');
-    const downButton = category.querySelector('[onclick*="down"]');
-
-    // Update button state
-    upButton.disabled = index === 0;
-    downButton.disabled = index === categories.length - 1;
-
-    // Update Bootstrap attributes
-    upButton.classList.toggle("disabled", index === 0);
-    downButton.classList.toggle("disabled", index === categories.length - 1);
-  });
-}
-
-function setWindowViewAtCurrentCategory(action, categoryId) {
-  let currentElement;
-  let previousElement;
-  let nextElement;
-
-  switch (action) {
-    case "move":
-      sessionStorage.setItem("scrollToCategoryId", categoryId);
-      location.reload();
-      break;
-    case "delete":
-      currentElement = document.querySelector("#category" + categoryId + ".category-block");
-      previousElement = currentElement.previousElementSibling;
-      nextElement = currentElement.nextElementSibling;
-
-      if (previousElement.classList.contains("category-block")) {
-        let prevCategoryId = previousElement.id.replace("category", "");
-        sessionStorage.setItem("scrollToCategoryId", prevCategoryId);
-        location.reload();
-      } else if (nextElement.classList.contains("category-block")) {
-        let nextCategoryId = nextElement.id.replace("category", "");
-        sessionStorage.setItem("scrollToCategoryId", nextCategoryId);
-        location.reload();
-      } else {
-        location.reload();
-      }
-      break;
-  }
 }
