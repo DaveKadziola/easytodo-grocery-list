@@ -50,14 +50,17 @@ function setWindowViewAtCurrentCategory(action, categoryId) {
       if (previousElement.classList.contains("category-block")) {
         let prevCategoryId = previousElement.id.replace("category", "");
         sessionStorage.setItem("scrollToCategoryId", prevCategoryId);
-        location.reload();
+        currentElement.remove();
+        scrollToView();
       } else if (nextElement == null) {
         sessionStorage.setItem("removeLocationHash", true);
-        location.reload();
+        currentElement.remove();
+        scrollToView();
       } else {
         let nextCategoryId = nextElement.id.replace("category", "");
         sessionStorage.setItem("scrollToCategoryId", nextCategoryId);
-        location.reload();
+        currentElement.remove();
+        scrollToView();
       }
       break;
   }
@@ -65,7 +68,9 @@ function setWindowViewAtCurrentCategory(action, categoryId) {
 
 // Scrooling view to last/previous/next category after page reload
 // and/or remove location hash from address
-document.addEventListener("DOMContentLoaded", function () {
+document.addEventListener("DOMContentLoaded", scrollToView);
+
+function scrollToView() {
   const categoryId = sessionStorage.getItem("scrollToCategoryId");
   const remLocationHash = sessionStorage.getItem("removeLocationHash");
   if (categoryId) {
@@ -83,4 +88,4 @@ document.addEventListener("DOMContentLoaded", function () {
     sessionStorage.removeItem("removeLocationHash");
     removeLocationHash();
   }
-});
+}

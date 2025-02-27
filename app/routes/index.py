@@ -18,10 +18,13 @@ def index():
 
         # Filter tasks by undone first and by name
         if task_ids:
-            tasks = Task.query.filter(Task.id.in_(task_ids)).order_by(Task.is_done, Task.name).all()
+            tasks = Task.query.filter(Task.id.in_(task_ids)).order_by(
+                Task.is_done, Task.name).all()
         else:
             tasks = []
 
         tasks_by_category[cat.id] = tasks
 
-    return render_template("index.html", categories=categories, tasks_by_category=tasks_by_category)
+    return render_template("index.html",
+                           categories=categories,
+                           tasks_by_category=tasks_by_category)

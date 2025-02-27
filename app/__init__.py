@@ -2,6 +2,7 @@ from flask import Flask
 from flask_socketio import SocketIO
 from .utils.config import Config
 from .extensions import db, socketio
+from flasgger import Swagger
 
 import threading
 import json
@@ -16,6 +17,8 @@ def create_app():
     # Init extensions
     db.init_app(app)
     socketio.init_app(app)
+
+    swagger = Swagger(app, parse=True)
 
     # Registeer blueprints
     from .routes.index import index_bp

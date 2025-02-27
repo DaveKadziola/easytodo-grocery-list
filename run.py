@@ -22,7 +22,9 @@ def listen_to_db():
             database=DB_CONFIG["dbname"],
             options=f"-c search_path={CURRENT_SCHEMA}",
         )
-        conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+        conn.set_isolation_level(
+            psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+
         cursor = conn.cursor()
         cursor.execute("LISTEN data_changes;")
 

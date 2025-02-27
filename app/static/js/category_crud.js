@@ -15,18 +15,27 @@ function addCategory() {
     return;
   }
 
-  fetch("/add_category", {
+  fetch("/v1/add_category", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      Accept: "application/vnd.myapi.v1+json",
     },
     body: JSON.stringify({
       category_name: categoryName,
     }),
   })
-    .then((response) => {
-      if (!response.ok) throw new Error("Network error.");
-      return response.json();
+    .then(async (response) => {
+      const data = await response.json();
+
+      if (!response.ok) {
+        const error = new Error(data.message || "Request failed");
+        error.status = response.status;
+        error.details = data;
+        throw error;
+      }
+
+      return data;
     })
     .then((data) => {
       if (data.status === "success") {
@@ -84,12 +93,12 @@ function addCategory() {
         masonryContainer.appendChild(newCategory);
         updateViewCategoryMoveButtons();
       } else {
-        alert("Error: " + data.message);
+        alert(error.status + ": " + error.message);
       }
     })
     .catch((error) => {
       console.error("Error at adding category:", error);
-      alert("Error: " + error.message);
+      alert(error.status + ": " + error.message);
     });
 }
 
@@ -99,18 +108,27 @@ function renameCategory(categoryId) {
 
   if (!newName || newName === currentName) return;
 
-  fetch(`/rename_category/${categoryId}`, {
-    method: "POST",
+  fetch(`/v1/rename_category/${categoryId}`, {
+    method: "PUT",
     headers: {
       "Content-Type": "application/json",
+      Accept: "application/vnd.myapi.v1+json",
     },
     body: JSON.stringify({
       name: newName,
     }),
   })
-    .then((response) => {
-      if (!response.ok) throw new Error("Network error.");
-      return response.json();
+    .then(async (response) => {
+      const data = await response.json();
+
+      if (!response.ok) {
+        const error = new Error(data.message || "Request failed");
+        error.status = response.status;
+        error.details = data;
+        throw error;
+      }
+
+      return data;
     })
     .then((data) => {
       if (data.status === "success") {
@@ -121,22 +139,31 @@ function renameCategory(categoryId) {
     })
     .catch((error) => {
       console.error("Error at renameCategory:", error);
-      alert("Error: " + error.message);
+      alert(error.status + ": " + error.message);
     });
 }
 
 function deleteCategory(categoryId) {
   if (confirm("Are you sure you want to delete this category?")) {
-    fetch(`/delete_category/${categoryId}`, {
-      method: "POST",
+    fetch(`/v1/delete_category/${categoryId}`, {
+      method: "DELETE",
       headers: {
         "Content-Type": "application/json",
+        Accept: "application/vnd.myapi.v1+json",
       },
       body: JSON.stringify({}),
     })
-      .then((response) => {
-        if (!response.ok) throw new Error("Network error.");
-        return response.json();
+      .then(async (response) => {
+        const data = await response.json();
+
+        if (!response.ok) {
+          const error = new Error(data.message || "Request failed");
+          error.status = response.status;
+          error.details = data;
+          throw error;
+        }
+
+        return data;
       })
       .then((data) => {
         if (data.status === "success") {
@@ -147,16 +174,30 @@ function deleteCategory(categoryId) {
       })
       .catch((error) => {
         console.error("Error at deleteCategory:", error);
-        alert("Error: " + error.message);
+        alert(error.status + ": " + error.message);
       });
   }
 }
 
 function getAllCategories(selectedId) {
-  fetch("/get_all_categories/")
-    .then((response) => {
-      if (!response.ok) throw new Error("Error fetching data.");
-      return response.json();
+  fetch("/v1/get_all_categories/", {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/vnd.myapi.v1+json",
+    },
+  })
+    .then(async (response) => {
+      const data = await response.json();
+
+      if (!response.ok) {
+        const error = new Error(data.message || "Request failed");
+        error.status = response.status;
+        error.details = data;
+        throw error;
+      }
+
+      return data;
     })
     .then((data) => {
       const select = document.getElementById("categoryList");
@@ -170,24 +211,33 @@ function getAllCategories(selectedId) {
     })
     .catch((error) => {
       console.error("Error at getAllCategories:", error);
-      alert("Error: " + error.message);
+      alert(error.status + ": " + error.message);
     });
 }
 
 function moveCategory(categoryId, direction) {
-  fetch("/move_category", {
-    method: "POST",
+  fetch("/v1/move_category", {
+    method: "PUT",
     headers: {
       "Content-Type": "application/json",
+      Accept: "application/vnd.myapi.v1+json",
     },
     body: JSON.stringify({
-      category_id: categoryId,
+      category_id: parseInt(categoryId, 10),
       direction: direction,
     }),
   })
-    .then((response) => {
-      if (!response.ok) throw new Error("Network error.");
-      return response.json();
+    .then(async (response) => {
+      const data = await response.json();
+
+      if (!response.ok) {
+        const error = new Error(data.message || "Request failed");
+        error.status = response.status;
+        error.details = data;
+        throw error;
+      }
+
+      return data;
     })
     .then((data) => {
       if (data.status === "success") {
@@ -198,6 +248,6 @@ function moveCategory(categoryId, direction) {
     })
     .catch((error) => {
       console.error("Error at moveCategory:", error);
-      alert("Error: " + error.message);
+      alert(error.status + ": " + error.message);
     });
 }

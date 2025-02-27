@@ -16,8 +16,7 @@ class Config:
     DB_CONFIG = config["database"]
     SQLALCHEMY_DATABASE_URI = (
         f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}"
-        f"@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
-    )
+        f"@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}")
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 

@@ -1,0 +1,89 @@
+tags:
+  - Tasks
+summary: Add a new task
+description: Creates a new task and assigns it to a category
+consumes:
+  - application/json
+produces:
+  - application/json
+parameters:
+  - in: header
+    name: Accept
+    type: string
+    required: true
+    description: API version header
+    default: application/vnd.myapi.v1+json
+  - in: body
+    name: body
+    required: true
+    schema:
+      type: object
+      required:
+        - category_id
+        - task_name
+      properties:
+        category_id:
+          type: integer
+          example: 1
+        task_name:
+          type: string
+          example: "Complete project report"
+responses:
+  200:
+    description: Task added successfully
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+          example: "Task added successfully"
+        category_id:
+          type: integer
+          example: 1
+        task_id:
+          type: integer
+          example: 5
+        task_name:
+          type: string
+          example: "Complete project report"
+        is_done:
+          type: boolean
+          example: false
+  400:
+    description: Invalid request format
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Category ID and task name are required"
+  406:
+    description: Unsupported API version
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Unsupported API version. Required header: Accept: application/vnd.myapi.v1+json"
+  500:
+    description: Internal server error
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          oneOf:
+            - example: "Database error"
+            - example: "Internal server error occurred"

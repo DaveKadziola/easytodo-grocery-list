@@ -1,0 +1,99 @@
+tags:
+  - Task Assignment
+summary: Get tasks by category
+description: Retrieves all tasks for a specific category, ordered by undone tasks first and then by name
+consumes:
+  - application/json
+produces:
+  - application/json
+parameters:
+  - in: header
+    name: Accept
+    type: string
+    required: true
+    description: API version header
+    default: application/vnd.myapi.v1+json
+  - in: path
+    name: category_id
+    type: integer
+    required: true
+    description: ID of the category to fetch tasks from
+responses:
+  200:
+    description: Tasks fetched successfully
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+          example: "Task list for category 1 fetched successfully"
+        count:
+          type: integer
+          example: 2
+        tasks:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+                example: 5
+              name:
+                type: string
+                example: "Complete project report"
+              is_done:
+                type: boolean
+                example: false
+              description:
+                type: string
+                example: "Write and submit the final project report"
+          example:
+            - id: 5
+              name: "Complete project report"
+              is_done: false
+              description: "Write and submit the final project report"
+            - id: 6
+              name: "Prepare presentation slides"
+              is_done: true
+              description: "Create slides for the project presentation"
+  404:
+    description: Category not found
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Category to fetch tasks not found"
+        category_id:
+          type: integer
+          example: 999
+  406:
+    description: Unsupported API version
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Unsupported API version. Required header: Accept: application/vnd.myapi.v1+json"
+  500:
+    description: Internal server error
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          oneOf:
+            - example: "Database error: [SQLAlchemy error message]"
+            - example: "Internal server error occurred: [Error message]"

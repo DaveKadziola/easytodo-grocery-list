@@ -1,0 +1,79 @@
+tags:
+  - Categories
+summary: Delete a category and associated tasks
+description: Permanently removes a category and all its associated tasks
+consumes:
+  - application/json
+produces:
+  - application/json
+parameters:
+  - in: header
+    name: Accept
+    type: string
+    required: true
+    description: API version header
+    default: application/vnd.myapi.v1+json
+  - in: path
+    name: category_id
+    required: true
+    type: integer
+    description: ID of the category to delete
+  - in: body
+    name: body
+    required: false
+    schema:
+      type: object
+      description: An empty JSON object
+responses:
+  200:
+    description: Category deleted successfully
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+          example: "Category deleted"
+        category_id:
+          type: integer
+          example: 445
+  404:
+    description: Category not found
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Category not found"
+        category_id:
+          type: integer
+          example: 445
+  406:
+    description: Unsupported API version
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Unsupported API version. Required header: Accept: application/vnd.myapi.v1+json"
+  500:
+    description: Internal server error
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          oneOf:
+            - example: "Database error"
+            - example: "Internal server error occurred"
