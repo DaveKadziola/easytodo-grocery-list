@@ -1,49 +1,49 @@
-function addCategoryContainer(data) {
+function addCategoryContainer(categoryId, categoryName) {
   const masonryContainer = document.getElementById("categoriesMasonry");
   const template = document.getElementById("categoryTemplate");
   const newCategory = document.importNode(template.content, true).querySelector(".category-block");
 
-  newCategory.id = `category${data.category_id}`;
-  newCategory.setAttribute("ondragstart", `dragCategory(event, ${data.category_id})`);
-  newCategory.setAttribute("ondrop", `dropCategory(event, ${data.category_id})`);
+  newCategory.id = `category${categoryId}`;
+  newCategory.setAttribute("ondragstart", `dragCategory(event, ${categoryId})`);
+  newCategory.setAttribute("ondrop", `dropCategory(event, ${categoryId})`);
 
   const categoryNameElement = newCategory.querySelector(".card-header a");
-  categoryNameElement.textContent = data.category_name;
-  categoryNameElement.setAttribute("href", `#collapseCategory${data.category_id}`);
-  categoryNameElement.setAttribute("aria-controls", `collapseCategory${data.category_id}`);
+  categoryNameElement.textContent = categoryName;
+  categoryNameElement.setAttribute("href", `#collapseCategory${categoryId}`);
+  categoryNameElement.setAttribute("aria-controls", `collapseCategory${categoryId}`);
 
   const collapseElement = newCategory.querySelector(".collapse");
-  collapseElement.id = `collapseCategory${data.category_id}`;
+  collapseElement.id = `collapseCategory${categoryId}`;
 
   const moveUpButton = newCategory.querySelector(".move-btn:first-of-type");
-  moveUpButton.setAttribute("onclick", `moveCategory(${data.category_id}, 'up')`);
+  moveUpButton.setAttribute("onclick", `moveCategory(${categoryId}, 'up')`);
 
   const moveDownButton = newCategory.querySelector(".move-btn:last-of-type");
-  moveDownButton.setAttribute("onclick", `moveCategory(${data.category_id}, 'down')`);
+  moveDownButton.setAttribute("onclick", `moveCategory(${categoryId}, 'down')`);
 
   const renameLink = newCategory.querySelector(".dropdown-item");
-  renameLink.setAttribute("onclick", `renameCategory(${data.category_id}, '${data.category_name}')`);
+  renameLink.setAttribute("onclick", `renameCategory(${categoryId}, '${categoryName}')`);
 
   const deleteLink = newCategory.querySelector(".dropdown-item.text-danger");
-  deleteLink.setAttribute("onclick", `deleteCategory(${data.category_id})`);
+  deleteLink.setAttribute("onclick", `deleteCategory(${categoryId})`);
 
   const cardBody = newCategory.querySelector(".card-body");
   cardBody.setAttribute("ondragover", "allowDrop(event)");
-  cardBody.setAttribute("ondrop", `dropTask(event, ${data.category_id})`);
+  cardBody.setAttribute("ondrop", `dropTask(event, ${categoryId})`);
 
   const taskBlocks = newCategory.querySelectorAll(".form-check");
   taskBlocks.forEach((task) => task.remove());
 
   const addTaskForm = newCategory.querySelector(".form");
-  addTaskForm.id = `addTaskForm${data.category_id}`;
-  addTaskForm.setAttribute("onsubmit", `event.preventDefault(); addTask(${data.category_id})`);
+  addTaskForm.id = `addTaskForm${categoryId}`;
+  addTaskForm.setAttribute("onsubmit", `event.preventDefault(); addTask(${categoryId})`);
 
   const categoryIdInput = addTaskForm.querySelector('input[type="hidden"]');
-  categoryIdInput.id = `category_id_${data.category_id}`;
-  categoryIdInput.value = data.category_id;
+  categoryIdInput.id = `category_id_${categoryId}`;
+  categoryIdInput.value = categoryId;
 
   const newTaskInput = addTaskForm.querySelector('input[type="text"]');
-  newTaskInput.id = `newTask_${data.category_id}`;
+  newTaskInput.id = `newTask_${categoryId}`;
 
   const newTaskButton = addTaskForm.querySelector('button[class="btn btn-outline-light"]');
   newTaskButton.setAttribute("type", "submit");

@@ -25,7 +25,9 @@ function addTask(categoryId) {
     .then((data) => {
       if (data.status === "success") {
         taskInput.value = "";
-        getTasksByCategory(categoryId, data.task_id, true);
+        /* Function already triggered by socket.io, stored only for eventual change testing and have easy access to it
+          getTasksByCategory(categoryId, data.task_id, true);
+        */
       } else {
         throw new Error("Error adding task.");
       }
@@ -99,7 +101,9 @@ function toggleTask(taskId) {
     })
     .then((data) => {
       if (data.status === "success") {
-        getTasksByCategory(categoryId, taskId, true);
+        /* Function already triggered by socket.io, stored only for eventual change testing and have easy access to it
+          getTasksByCategory(categoryId, taskId, true);
+        */
       } else {
         throw new Error("Error updating status.");
       }
@@ -146,8 +150,9 @@ function updateTask(categoryId, taskId, highlightFlag, newTaskName, newTaskDescr
         if (modalInstance) {
           modalInstance.hide();
         }
-
-        getTasksByCategory(categoryId, taskId, highlightFlag);
+        /* Function already triggered by socket.io, stored only for eventual change testing and have easy access to it
+          getTasksByCategory(categoryId, taskId, highlightFlag);
+        */
       } else {
         alert("Error updating task details.");
       }
@@ -184,11 +189,13 @@ function moveTask(taskId, oldCategoryId, newCategoryId) {
     })
     .then((data) => {
       if (data.status === "success") {
-        // Refresh previous task category
-        getTasksByCategory(oldCategoryId, taskId, false);
+        /* Functions already triggered by socket.io, stored only for eventual change testing and have easy access to it
+          // Refresh previous task category
+          getTasksByCategory(oldCategoryId, taskId, false);
 
-        // Refresh new task category
-        getTasksByCategory(newCategoryId, taskId, true);
+          // Refresh new task category
+          getTasksByCategory(newCategoryId, taskId, true);
+        */
       } else {
         alert("Error moving task.");
       }
@@ -231,8 +238,9 @@ function deleteTask() {
           if (modalInstance) {
             modalInstance.hide();
           }
-
-          getTasksByCategory(categoryId, taskId, false);
+          /* Function already triggered by socket.io, stored only for eventual change testing and have easy access to it
+            //getTasksByCategory(categoryId, taskId, false);
+          */
         } else {
           alert("Error deleting task.");
         }

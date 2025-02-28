@@ -41,7 +41,9 @@ function addCategory() {
       if (data.status === "success") {
         categoryDesktopInput.value = "";
         categoryMobileInput.value = "";
-        addCategoryContainer(data);
+        /* Function already triggered by socket.io, stored only for eventual change testing and have easy access to it
+          //addCategoryContainer(data.category_id, data.name);
+        */
       } else {
         alert(error.status + ": " + error.message);
       }
@@ -82,7 +84,9 @@ function renameCategory(categoryId) {
     })
     .then((data) => {
       if (data.status === "success") {
-        updateViewCategoryName(categoryId, data.new_name);
+        /* Function already triggered by socket.io, stored only for eventual change testing and have easy access to it
+        //updateViewCategoryName(categoryId, data.new_name);
+        */
       } else {
         throw new Error(data.message || "Error updating category.");
       }
@@ -117,7 +121,9 @@ function deleteCategory(categoryId) {
       })
       .then((data) => {
         if (data.status === "success") {
-          setWindowViewAtCurrentCategory("delete", categoryId);
+          /* Function already triggered by socket.io, stored only for eventual change testing and have easy access to it
+            //setWindowViewAtCurrentCategory("delete", categoryId);
+          */
         } else {
           throw new Error(data.message || "Error deleting category.");
         }
@@ -191,7 +197,9 @@ function moveCategory(categoryId, direction) {
     })
     .then((data) => {
       if (data.status === "success") {
-        setWindowViewAtCurrentCategory("move", categoryId);
+        /* Function already triggered by socket.io, stored only for eventual change testing and have easy access to it
+          //setWindowViewAtCurrentCategory("move", categoryId);
+        */
       } else {
         throw new Error(data.message || "Category reorder error.");
       }
