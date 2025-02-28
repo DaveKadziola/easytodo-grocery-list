@@ -42,13 +42,17 @@ def add_task():
 
         category_id = data["category_id"]
         task_name = data["task_name"]
+        creation_time = datetime.now()
 
-        new_task = Task(name=task_name)
+        new_task = Task(name=task_name,
+                        created_at=creation_time,
+                        updated_at=creation_time)
         db.session.add(new_task)
         db.session.commit()
 
         assignment = TaskAssignment(task_id=new_task.id,
-                                    category_id=category_id)
+                                    category_id=category_id,
+                                    assigned_at=creation_time)
         db.session.add(assignment)
         db.session.commit()
 
