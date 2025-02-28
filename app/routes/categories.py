@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import SQLAlchemyError
-from datetime import datetime
+from datetime import datetime, timedelta
 from flasgger import swag_from
 from ..models import Category, TaskAssignment, Task
 from ..extensions import db, BASE_DIR
@@ -290,8 +290,10 @@ def move_category():
         # Swap category positions
         if swap_category:
             category.position, swap_category.position = swap_category.position, category.position
-            category.updated_at = datetime.now()
-            swap_category.updated_at = datetime.now()
+
+            base_time = datetime.now()
+            swap_category.updated_at = base_time
+            category.updated_at = base_time + timedelta(microseconds=1000)
             db.session.commit()
             return (jsonify({
                 "status": "success",
