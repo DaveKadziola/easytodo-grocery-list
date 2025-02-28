@@ -122,7 +122,7 @@ function deleteCategory(categoryId) {
       .then((data) => {
         if (data.status === "success") {
           /* Function already triggered by socket.io, stored only for eventual change testing and have easy access to it
-            //setWindowViewAtCurrentCategory("delete", categoryId);
+            //setWindowViewAtCurrentCategory("delete", categoryId, null);
           */
         } else {
           throw new Error(data.message || "Error deleting category.");
@@ -198,7 +198,7 @@ function moveCategory(categoryId, direction) {
     .then((data) => {
       if (data.status === "success") {
         /* Function already triggered by socket.io, stored only for eventual change testing and have easy access to it
-          //setWindowViewAtCurrentCategory("move", categoryId);
+          //setWindowViewAtCurrentCategory("move", categoryId, direction);
         */
       } else {
         throw new Error(data.message || "Category reorder error.");

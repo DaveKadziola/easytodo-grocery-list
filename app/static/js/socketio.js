@@ -31,10 +31,10 @@ const handleEvent = (data) => {
       updateViewCategoryName(data.category_id, data.new_name);
       break;
     case "MOVE_CATEGORY":
-      setWindowViewAtCurrentCategory("move", data.category_id);
+      setWindowViewAtCurrentCategory("move", data.category_id, data.direction);
       break;
     case "DELETE_CATEGORY":
-      setWindowViewAtCurrentCategory("delete", data.category_id);
+      setWindowViewAtCurrentCategory("delete", data.category_id, null);
       break;
     default:
       console.log("Unhandled event:", data);

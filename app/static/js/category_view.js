@@ -86,35 +86,36 @@ function updateViewCategoryMoveButtons() {
   });
 }
 
-function setWindowViewAtCurrentCategory(action, categoryId) {
-  let currentElement;
-  let previousElement;
-  let nextElement;
+function setWindowViewAtCurrentCategory(action, categoryId, direction) {
+  let currentElement = document.querySelector(`#category${categoryId}.category-block`);
+  let previousElement = currentElement.previousElementSibling;
+  let nextElement = currentElement.nextElementSibling;
 
   switch (action) {
     case "move":
-      sessionStorage.setItem("scrollToCategoryId", categoryId);
-      location.reload();
+      if (direction === "up" && previousElement) {
+        currentElement.parentNode.insertBefore(currentElement, previousElement);
+      } else if (direction === "down" && nextElement) {
+        currentElement.parentNode.insertBefore(nextElement, currentElement);
+      }
+
+      updateViewCategoryMoveButtons();
+      scrollToView(categoryId);
       break;
     case "delete":
-      currentElement = document.querySelector("#category" + categoryId + ".category-block");
-      previousElement = currentElement.previousElementSibling;
-      nextElement = currentElement.nextElementSibling;
-
       if (previousElement.classList.contains("category-block")) {
         let prevCategoryId = previousElement.id.replace("category", "");
-        sessionStorage.setItem("scrollToCategoryId", prevCategoryId);
         currentElement.remove();
-        scrollToView();
+        scrollToView(prevCategoryId);
       } else if (nextElement == null) {
         sessionStorage.setItem("removeLocationHash", true);
         currentElement.remove();
-        scrollToView();
+        scrollToView(null);
       } else {
         let nextCategoryId = nextElement.id.replace("category", "");
-        sessionStorage.setItem("scrollToCategoryId", nextCategoryId);
         currentElement.remove();
-        scrollToView();
+        updateViewCategoryMoveButtons();
+        scrollToView(nextCategoryId);
       }
       break;
   }
@@ -124,8 +125,7 @@ function setWindowViewAtCurrentCategory(action, categoryId) {
 // and/or remove location hash from address
 document.addEventListener("DOMContentLoaded", scrollToView);
 
-function scrollToView() {
-  const categoryId = sessionStorage.getItem("scrollToCategoryId");
+function scrollToView(categoryId) {
   const remLocationHash = sessionStorage.getItem("removeLocationHash");
   if (categoryId) {
     const element = document.getElementById("category" + categoryId);
@@ -133,7 +133,6 @@ function scrollToView() {
       element.scrollIntoView(true);
 
       // Remove id from sessionStorage after scroll
-      sessionStorage.removeItem("scrollToCategoryId");
       removeLocationHash();
     }
   }
