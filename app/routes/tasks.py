@@ -237,6 +237,7 @@ def move_task():
         assignment = TaskAssignment.query.filter_by(task_id=task_id).first()
         if assignment:
             assignment.category_id = new_category_id
+            assignment.assigned_at = datetime.now()
             db.session.commit()
             return jsonify({
                 "status":

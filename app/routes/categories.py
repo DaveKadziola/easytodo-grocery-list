@@ -290,6 +290,8 @@ def move_category():
         # Swap category positions
         if swap_category:
             category.position, swap_category.position = swap_category.position, category.position
+            category.updated_at = datetime.now()
+            swap_category.updated_at = datetime.now()
             db.session.commit()
             return (jsonify({
                 "status": "success",
