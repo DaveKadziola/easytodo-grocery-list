@@ -8,35 +8,41 @@ socket.on("connect", () => {
   console.log("Connected to WebSocket");
 });
 
-socket.on("update", (data) => {
-  console.log("Received an update:", data);
-  if (data.category_id) {
-    getTasksByCategory(data.category_id, data.task_id, true);
+const handleEvent = (data) => {
+  switch (data.action) {
+    case "ADD_TASK":
+      getTasksByCategory(data.category_id, data.task_id, true);
+      break;
+    case "MOVE_TASK":
+      getTasksByCategory(data.old_category_id, data.task_id, false);
+      getTasksByCategory(data.new_category_id, data.task_id, true);
+      break;
+    case "DELETE_TASK":
+      getTasksByCategory(data.category_id, data.task_id, false);
+      break;
+    case "TOGGLE_TASK":
+    case "UPDATE_TASK":
+      getTasksByCategory(data.category_id, data.task_id, true);
+      break;
+    case "ADD_CATEGORY":
+      addCategoryContainer(data.category_id, data.name);
+      break;
+    case "RENAME_CATEGORY":
+      updateViewCategoryName(data.category_id, data.new_name);
+      break;
+    case "MOVE_CATEGORY":
+      setWindowViewAtCurrentCategory("move", data.category_id);
+      break;
+    case "DELETE_CATEGORY":
+      setWindowViewAtCurrentCategory("delete", data.category_id);
+      break;
+    default:
+      console.log("Unhandled event:", data);
   }
-});
-
-/*
-socket.on('connection_status', (data) => {
-    console.log('Status połączenia:', data.status);
-    console.log('SID:', data.sid);
-});
-
-socket.onmessage = function(event) {
-    const data = JSON.parse(event.data);
-    if (data.type === 'update') {
-        fetch(`/get_tasks_by_category/${data.category_id}`)
-            .then(response => response.json())
-            .then(tasks => updateTasksView(data.category_id, tasks))
-            .catch(error => console.error('Błąd aktualizacji:', error));
-    }
 };
 
-socket.on('update', (data) => {
-    console.log('Otrzymano aktualizację:', data);
-    if (data.type === 'task_toggled') {
-        const checkbox = document.querySelector(`#task-${data.task_id} input[type="checkbox"]`);
-        if (checkbox) {
-            checkbox.checked = data.is_done;
-        }
-    }
-});*/
+socket.onAny((eventName, data) => {
+  if (eventName === "connect") return;
+  console.log(`Received event: ${eventName}`, data);
+  handleEvent(data);
+});

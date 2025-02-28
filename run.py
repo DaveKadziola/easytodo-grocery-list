@@ -36,7 +36,12 @@ def listen_to_db():
             while conn.notifies:
                 notify = conn.notifies.pop()
                 data = json.loads(notify.payload)
-                socketio.emit("update", data)
+
+                event_name = data.get('action')
+                if event_name:
+                    socketio.emit(event_name, data)
+                else:
+                    socketio.emit("update", data)
 
 
 if __name__ == "__main__":
