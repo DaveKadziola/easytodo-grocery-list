@@ -195,6 +195,13 @@ def delete_category(category_id):
             if task:
                 db.session.delete(task)
 
+        temp_data = TemporaryData(field01="categories",
+                                  field02="DELETE_CATEGORY",
+                                  field03=category_id)
+
+        db.session.add(temp_data)
+        db.session.commit()
+
         db.session.delete(category)
         db.session.commit()
 
@@ -296,7 +303,7 @@ def move_category():
             category.updated_at = base_time + timedelta(microseconds=1000)
             db.session.commit()
 
-            temp_data = TemporaryData(field01="category",
+            temp_data = TemporaryData(field01="categories",
                                       field02="MOVE_CATEGORY",
                                       field03=category_id,
                                       field04=direction)

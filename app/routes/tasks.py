@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime
 from flasgger import swag_from
-from ..models import TaskAssignment, Task
+from ..models import TaskAssignment, Task, TemporaryData
 from ..extensions import db, BASE_DIR
 
 tasks_bp = Blueprint("tasks", __name__)
@@ -181,8 +181,16 @@ def delete_task(task_id):
                 "task_id": task_id
             }), 404
 
+        temp_data = TemporaryData(field01="tasks",
+                                  field02="DELETE_TASK",
+                                  field03=task_id)
+
+        db.session.add(temp_data)
+        db.session.commit()
+
         db.session.delete(task)
         db.session.commit()
+
         return jsonify({
             "status": "success",
             "message": "Task successfully deleted",
