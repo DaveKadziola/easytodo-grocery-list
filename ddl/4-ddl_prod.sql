@@ -49,6 +49,22 @@ CREATE SEQUENCE prod.tasks_id_seq
 ALTER SEQUENCE prod.tasks_id_seq OWNER TO postgres;
 GRANT ALL ON SEQUENCE prod.tasks_id_seq TO postgres;
 GRANT ALL ON SEQUENCE prod.tasks_id_seq TO prod_todo_grocery;
+
+-- DROP SEQUENCE prod.temporary_data_id_seq;
+
+CREATE SEQUENCE prod.temporary_data_id_seq
+	INCREMENT BY 1
+	MINVALUE 1
+	MAXVALUE 2147483647
+	START 1
+	CACHE 1
+	NO CYCLE;
+
+-- Permissions
+
+ALTER SEQUENCE prod.temporary_data_id_seq OWNER TO postgres;
+GRANT ALL ON SEQUENCE prod.temporary_data_id_seq TO postgres;
+GRANT ALL ON SEQUENCE prod.temporary_data_id_seq TO prod_todo_grocery;
 -- prod.categories definition
 
 -- Drop table
@@ -86,7 +102,7 @@ update
 
 ALTER TABLE prod.categories OWNER TO postgres;
 GRANT ALL ON TABLE prod.categories TO postgres;
-GRANT DELETE, SELECT, INSERT, UPDATE ON TABLE prod.categories TO prod_todo_grocery;
+GRANT INSERT, DELETE, SELECT, UPDATE ON TABLE prod.categories TO prod_todo_grocery;
 
 
 -- prod.tasks definition
@@ -123,7 +139,43 @@ update
 
 ALTER TABLE prod.tasks OWNER TO postgres;
 GRANT ALL ON TABLE prod.tasks TO postgres;
-GRANT DELETE, SELECT, INSERT, UPDATE ON TABLE prod.tasks TO prod_todo_grocery;
+GRANT INSERT, DELETE, SELECT, UPDATE ON TABLE prod.tasks TO prod_todo_grocery;
+
+
+-- prod.temporary_data definition
+
+-- Drop table
+
+-- DROP TABLE prod.temporary_data;
+
+CREATE TABLE prod.temporary_data (
+	id serial4 NOT NULL,
+	field01 varchar(255) DEFAULT NULL::character varying NULL,
+	field02 varchar(255) DEFAULT NULL::character varying NULL,
+	field03 varchar(255) DEFAULT NULL::character varying NULL,
+	field04 varchar(255) DEFAULT NULL::character varying NULL,
+	field05 varchar(255) DEFAULT NULL::character varying NULL,
+	field06 varchar(255) DEFAULT NULL::character varying NULL,
+	field07 varchar(255) DEFAULT NULL::character varying NULL,
+	field08 varchar(255) DEFAULT NULL::character varying NULL,
+	field09 varchar(255) DEFAULT NULL::character varying NULL,
+	field10 varchar(255) DEFAULT NULL::character varying NULL,
+	CONSTRAINT temporary_data_pkey PRIMARY KEY (id)
+);
+COMMENT ON TABLE prod.temporary_data IS 'Stores temporary data';
+
+-- Table Triggers
+
+create trigger handle_temp_move_cat_data_trigger after
+insert
+    on
+    prod.temporary_data for each row execute function prod.handle_temp_move_cat_data();
+
+-- Permissions
+
+ALTER TABLE prod.temporary_data OWNER TO postgres;
+GRANT ALL ON TABLE prod.temporary_data TO postgres;
+GRANT INSERT, DELETE, SELECT, UPDATE ON TABLE prod.temporary_data TO prod_todo_grocery;
 
 
 -- prod.task_assignment definition
@@ -169,7 +221,7 @@ update
 
 ALTER TABLE prod.task_assignment OWNER TO postgres;
 GRANT ALL ON TABLE prod.task_assignment TO postgres;
-GRANT DELETE, SELECT, INSERT, UPDATE ON TABLE prod.task_assignment TO prod_todo_grocery;
+GRANT INSERT, DELETE, SELECT, UPDATE ON TABLE prod.task_assignment TO prod_todo_grocery;
 
 
 
@@ -179,8 +231,6 @@ CREATE OR REPLACE FUNCTION prod.handle_category()
  RETURNS trigger
  LANGUAGE plpgsql
 AS $function$
-DECLARE
-    direction text;
 BEGIN
     IF TG_OP = 'INSERT' THEN
         PERFORM pg_notify('data_changes', json_build_object(
@@ -196,18 +246,6 @@ BEGIN
                 'action', 'RENAME_CATEGORY',
                 'category_id', NEW.id,
                 'new_name', NEW.name
-            )::text);
-ELSIF NEW.position <> OLD.position THEN
-            direction := CASE 
-                WHEN NEW.position > OLD.position THEN 'down'
-                ELSE 'up'
-            END;
-            
-            PERFORM pg_notify('data_changes', json_build_object(
-                'table', 'category',
-                'action', 'MOVE_CATEGORY',
-                'category_id', NEW.id,
-                'direction', direction
             )::text);
         END IF;
     ELSIF TG_OP = 'DELETE' THEN
@@ -334,10 +372,44 @@ $function$
 ALTER FUNCTION prod.handle_task_position() OWNER TO postgres;
 GRANT ALL ON FUNCTION prod.handle_task_position() TO postgres;
 
+-- DROP FUNCTION prod.handle_temp_move_cat_data();
+
+CREATE OR REPLACE FUNCTION prod.handle_temp_move_cat_data()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    temp_row prod.temporary_data%ROWTYPE;
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        SELECT * INTO temp_row FROM prod.temporary_data
+        WHERE field01 = 'category' AND field02 = 'MOVE_CATEGORY'
+        ORDER BY id DESC LIMIT 1;
+
+        IF FOUND THEN
+            PERFORM pg_notify('data_changes', json_build_object(
+                'table', temp_row.field01,
+                'action', temp_row.field02,
+                'category_id', temp_row.field03,
+                'direction', temp_row.field04
+            )::text);
+        END IF;
+		DELETE FROM prod.temporary_data WHERE id = temp_row.id;
+    END IF;
+    RETURN NEW;
+END;
+$function$
+;
+
+-- Permissions
+
+ALTER FUNCTION prod.handle_temp_move_cat_data() OWNER TO postgres;
+GRANT ALL ON FUNCTION prod.handle_temp_move_cat_data() TO postgres;
+
 
 -- Permissions
 
 GRANT ALL ON SCHEMA prod TO postgres;
 GRANT USAGE ON SCHEMA prod TO prod_todo_grocery;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA prod GRANT DELETE, SELECT, INSERT, UPDATE ON TABLES TO prod_todo_grocery;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA prod GRANT SELECT, USAGE, UPDATE ON SEQUENCES TO prod_todo_grocery;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA prod GRANT INSERT, DELETE, SELECT, UPDATE ON TABLES TO prod_todo_grocery;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA prod GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO prod_todo_grocery;

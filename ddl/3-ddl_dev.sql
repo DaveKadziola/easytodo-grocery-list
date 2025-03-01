@@ -49,6 +49,22 @@ CREATE SEQUENCE dev.tasks_id_seq
 ALTER SEQUENCE dev.tasks_id_seq OWNER TO postgres;
 GRANT ALL ON SEQUENCE dev.tasks_id_seq TO postgres;
 GRANT ALL ON SEQUENCE dev.tasks_id_seq TO dev_todo_grocery;
+
+-- DROP SEQUENCE dev.temporary_data_id_seq;
+
+CREATE SEQUENCE dev.temporary_data_id_seq
+	INCREMENT BY 1
+	MINVALUE 1
+	MAXVALUE 2147483647
+	START 1
+	CACHE 1
+	NO CYCLE;
+
+-- Permissions
+
+ALTER SEQUENCE dev.temporary_data_id_seq OWNER TO postgres;
+GRANT ALL ON SEQUENCE dev.temporary_data_id_seq TO postgres;
+GRANT ALL ON SEQUENCE dev.temporary_data_id_seq TO dev_todo_grocery;
 -- dev.categories definition
 
 -- Drop table
@@ -86,7 +102,7 @@ update
 
 ALTER TABLE dev.categories OWNER TO postgres;
 GRANT ALL ON TABLE dev.categories TO postgres;
-GRANT DELETE, SELECT, INSERT, UPDATE ON TABLE dev.categories TO dev_todo_grocery;
+GRANT INSERT, DELETE, SELECT, UPDATE ON TABLE dev.categories TO dev_todo_grocery;
 
 
 -- dev.tasks definition
@@ -123,7 +139,43 @@ update
 
 ALTER TABLE dev.tasks OWNER TO postgres;
 GRANT ALL ON TABLE dev.tasks TO postgres;
-GRANT DELETE, SELECT, INSERT, UPDATE ON TABLE dev.tasks TO dev_todo_grocery;
+GRANT INSERT, DELETE, SELECT, UPDATE ON TABLE dev.tasks TO dev_todo_grocery;
+
+
+-- dev.temporary_data definition
+
+-- Drop table
+
+-- DROP TABLE dev.temporary_data;
+
+CREATE TABLE dev.temporary_data (
+	id serial4 NOT NULL,
+	field01 varchar(255) DEFAULT NULL::character varying NULL,
+	field02 varchar(255) DEFAULT NULL::character varying NULL,
+	field03 varchar(255) DEFAULT NULL::character varying NULL,
+	field04 varchar(255) DEFAULT NULL::character varying NULL,
+	field05 varchar(255) DEFAULT NULL::character varying NULL,
+	field06 varchar(255) DEFAULT NULL::character varying NULL,
+	field07 varchar(255) DEFAULT NULL::character varying NULL,
+	field08 varchar(255) DEFAULT NULL::character varying NULL,
+	field09 varchar(255) DEFAULT NULL::character varying NULL,
+	field10 varchar(255) DEFAULT NULL::character varying NULL,
+	CONSTRAINT temporary_data_pkey PRIMARY KEY (id)
+);
+COMMENT ON TABLE dev.temporary_data IS 'Stores temporary data';
+
+-- Table Triggers
+
+create trigger handle_temp_move_cat_data_trigger after
+insert
+    on
+    dev.temporary_data for each row execute function dev.handle_temp_move_cat_data();
+
+-- Permissions
+
+ALTER TABLE dev.temporary_data OWNER TO postgres;
+GRANT ALL ON TABLE dev.temporary_data TO postgres;
+GRANT INSERT, DELETE, SELECT, UPDATE ON TABLE dev.temporary_data TO dev_todo_grocery;
 
 
 -- dev.task_assignment definition
@@ -169,7 +221,7 @@ update
 
 ALTER TABLE dev.task_assignment OWNER TO postgres;
 GRANT ALL ON TABLE dev.task_assignment TO postgres;
-GRANT DELETE, SELECT, INSERT, UPDATE ON TABLE dev.task_assignment TO dev_todo_grocery;
+GRANT INSERT, DELETE, SELECT, UPDATE ON TABLE dev.task_assignment TO dev_todo_grocery;
 
 
 
@@ -179,8 +231,6 @@ CREATE OR REPLACE FUNCTION dev.handle_category()
  RETURNS trigger
  LANGUAGE plpgsql
 AS $function$
-DECLARE
-    direction text;
 BEGIN
     IF TG_OP = 'INSERT' THEN
         PERFORM pg_notify('data_changes', json_build_object(
@@ -196,18 +246,6 @@ BEGIN
                 'action', 'RENAME_CATEGORY',
                 'category_id', NEW.id,
                 'new_name', NEW.name
-            )::text);
-ELSIF NEW.position <> OLD.position THEN
-            direction := CASE 
-                WHEN NEW.position > OLD.position THEN 'down'
-                ELSE 'up'
-            END;
-            
-            PERFORM pg_notify('data_changes', json_build_object(
-                'table', 'category',
-                'action', 'MOVE_CATEGORY',
-                'category_id', NEW.id,
-                'direction', direction
             )::text);
         END IF;
     ELSIF TG_OP = 'DELETE' THEN
@@ -334,10 +372,44 @@ $function$
 ALTER FUNCTION dev.handle_task_position() OWNER TO postgres;
 GRANT ALL ON FUNCTION dev.handle_task_position() TO postgres;
 
+-- DROP FUNCTION dev.handle_temp_move_cat_data();
+
+CREATE OR REPLACE FUNCTION dev.handle_temp_move_cat_data()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    temp_row dev.temporary_data%ROWTYPE;
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        SELECT * INTO temp_row FROM dev.temporary_data
+        WHERE field01 = 'category' AND field02 = 'MOVE_CATEGORY'
+        ORDER BY id DESC LIMIT 1;
+
+        IF FOUND THEN
+            PERFORM pg_notify('data_changes', json_build_object(
+                'table', temp_row.field01,
+                'action', temp_row.field02,
+                'category_id', temp_row.field03,
+                'direction', temp_row.field04
+            )::text);
+        END IF;
+		DELETE FROM dev.temporary_data WHERE id = temp_row.id;
+    END IF;
+    RETURN NEW;
+END;
+$function$
+;
+
+-- Permissions
+
+ALTER FUNCTION dev.handle_temp_move_cat_data() OWNER TO postgres;
+GRANT ALL ON FUNCTION dev.handle_temp_move_cat_data() TO postgres;
+
 
 -- Permissions
 
 GRANT ALL ON SCHEMA dev TO postgres;
 GRANT USAGE ON SCHEMA dev TO dev_todo_grocery;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA dev GRANT DELETE, SELECT, INSERT, UPDATE ON TABLES TO dev_todo_grocery;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA dev GRANT SELECT, USAGE, UPDATE ON SEQUENCES TO dev_todo_grocery;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA dev GRANT INSERT, DELETE, SELECT, UPDATE ON TABLES TO dev_todo_grocery;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA dev GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO dev_todo_grocery;

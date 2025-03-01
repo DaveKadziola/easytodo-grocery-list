@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime, timedelta
 from flasgger import swag_from
-from ..models import Category, TaskAssignment, Task
+from ..models import Category, TaskAssignment, Task, TemporaryData
 from ..extensions import db, BASE_DIR
 
 categories_bp = Blueprint("categories", __name__)
@@ -295,6 +295,15 @@ def move_category():
             swap_category.updated_at = base_time
             category.updated_at = base_time + timedelta(microseconds=1000)
             db.session.commit()
+
+            temp_data = TemporaryData(field01="category",
+                                      field02="MOVE_CATEGORY",
+                                      field03=category_id,
+                                      field04=direction)
+
+            db.session.add(temp_data)
+            db.session.commit()
+
             return (jsonify({
                 "status": "success",
                 "category_id": category_id,
