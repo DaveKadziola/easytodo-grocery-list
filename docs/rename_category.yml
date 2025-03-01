@@ -1,0 +1,102 @@
+tags:
+  - Categories
+summary: Rename an existing category
+consumes:
+  - application/json
+produces:
+  - application/json
+parameters:
+  - in: header
+    name: Accept
+    type: string
+    required: true
+    description: API version header
+    default: application/vnd.myapi.v1+json
+  - in: path
+    name: category_id
+    type: integer
+    required: true
+    description: ID of the category to rename
+  - in: body
+    name: body
+    required: true
+    schema:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          example: "Updated Category Name"
+responses:
+  200:
+    description: Category renamed successfully
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+          example: "Updated category Name"
+        category_id:
+          type: integer
+          example: 5
+        new_name:
+          type: string
+          example: "Updated Category Name"
+  400:
+    description: |
+      Invalid request. Possible errors:
+      - Request body is not JSON
+      - Missing required field 'name'
+      - Category name cannot be empty
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          oneOf:
+            - example: "Invalid request format"
+            - example: "Missing required field 'name'"
+            - example: "Category name cannot be empty"
+  404:
+    description: Category not found
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Category not found"
+  406:
+    description: Unsupported API version
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Unsupported API version. Required header: Accept: application/vnd.myapi.v1+json"
+  500:
+    description: Internal server error
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          oneOf:
+            - example: "Database error"
+            - example: "Internal server error occurred"

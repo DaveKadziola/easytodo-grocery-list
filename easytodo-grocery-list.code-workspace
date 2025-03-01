@@ -1,0 +1,16 @@
+{
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": {
+    "[python]": {
+      //"editor.defaultFormatter": "ms-python.black-formatter"
+      "editor.formatOnSaveMode": "file",
+      "editor.formatOnSave": true,
+      "editor.defaultFormatter": "eeyore.yapf",
+      "editor.formatOnType": false
+    }
+  }
+}

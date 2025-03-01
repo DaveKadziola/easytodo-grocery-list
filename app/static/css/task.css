@@ -1,0 +1,30 @@
+.task-done {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.task-item {
+  cursor: pointer;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  white-space: normal;
+}
+
+@keyframes task-highlight {
+  0% {
+    background: rgba(255, 165, 0, 0.3);
+    transform: scale(1);
+  }
+  50% {
+    background: rgba(255, 165, 0, 0.7);
+    transform: scale(1.02);
+  }
+  100% {
+    background: transparent;
+    transform: scale(1);
+  }
+}
+
+.task-highlight {
+  animation: task-highlight 1.5s ease-out;
+}

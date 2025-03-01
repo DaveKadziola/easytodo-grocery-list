@@ -1,0 +1,88 @@
+tags:
+  - Tasks
+summary: Move task to another category
+description: Moves a task to a different category
+consumes:
+  - application/json
+produces:
+  - application/json
+parameters:
+  - in: header
+    name: Accept
+    type: string
+    required: true
+    description: API version header
+    default: application/vnd.myapi.v1+json
+  - in: body
+    name: body
+    required: true
+    schema:
+      type: object
+      required:
+        - task_id
+        - new_category_id
+      properties:
+        task_id:
+          type: integer
+          example: 5
+        new_category_id:
+          type: integer
+          example: 2
+responses:
+  200:
+    description: Task moved successfully
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+          example: "Task 5 moved successfully to category 2"
+  400:
+    description: Invalid request format
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Task ID and new category ID are required"
+  404:
+    description: Task assignment not found
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Task assignment not found"
+  406:
+    description: Unsupported API version
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Unsupported API version. Required header: Accept: application/vnd.myapi.v1+json"
+  500:
+    description: Internal server error
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          oneOf:
+            - example: "Database error"
+            - example: "Internal server error occurred"

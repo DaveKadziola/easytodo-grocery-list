@@ -1,0 +1,68 @@
+tags:
+  - Categories
+summary: Get all categories
+description: Returns list of all categories
+consumes:
+  - application/json
+produces:
+  - application/json
+parameters:
+  - in: header
+    name: Accept
+    type: string
+    required: true
+    description: API version header
+    default: application/vnd.myapi.v1+json
+responses:
+  200:
+    description: Successfully retrieved categories list
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        count:
+          type: integer
+          example: 3
+        categories:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              name:
+                type: string
+          example:
+            - id: 1
+              name: "Personal Tasks"
+            - id: 2
+              name: "Work Tasks"
+            - id: 3
+              name: "Shopping List"
+  406:
+    description: Unsupported API version
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Unsupported API version. Required header: Accept: application/vnd.myapi.v1+json"
+
+  500:
+    description: Internal server error
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          oneOf:
+            - example: "Database error"
+            - example: "Internal server error occurred"

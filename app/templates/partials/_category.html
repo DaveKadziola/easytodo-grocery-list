@@ -1,0 +1,77 @@
+<div class="category-block" id="category{{ category.id }}">
+  <div class="card bg-secondary">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <a
+        data-bs-toggle="collapse"
+        href="#collapseCategory{{ category.id }}"
+        role="button"
+        aria-expanded="true"
+        aria-controls="collapseCategory{{ category.id }}"
+        class="text-white text-decoration-none col category-wrap-name"
+      >
+        {{ category.name }}
+      </a>
+      <div class="d-flex align-items-center">
+        <!-- Arrow buttons for category position change -->
+        <button
+          class="btn btn-outline-secondary move-btn"
+          id="moveCategory_{{ category.id }}"
+          onclick="moveCategory({{ category.id }}, 'up')"
+          {%
+          if
+          outer_loop.first
+          %}disabled{%
+          endif
+          %}
+        >
+          &nbsp;&nbsp;&#8593;&nbsp;&nbsp;
+        </button>
+        <button
+          class="btn btn-outline-secondary move-btn"
+          id="moveCategory_{{ category.id }}"
+          onclick="moveCategory({{ category.id }}, 'down')"
+          {%
+          if
+          outer_loop.last
+          %}disabled{%
+          endif
+          %}
+        >
+          &nbsp;&nbsp;&#8595;&nbsp;&nbsp;
+        </button>
+        <div class="dropdown">
+          <button class="btn btn-sm btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
+            &nbsp;&#x22EE;&nbsp;
+          </button>
+          <ul class="dropdown-menu dropdown-menu-dark">
+            <li>
+              <a class="dropdown-item" href="#" onclick="renameCategory({{ category.id }})">Rename</a>
+            </li>
+            <li>
+              <a class="dropdown-item text-danger" href="#" onclick="deleteCategory({{ category.id }})">Delete</a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="collapse show" id="collapseCategory{{ category.id }}">
+      <div class="card-body" ondragover="allowDrop(event)" ondrop="dropTask(event, {{ category.id }})">
+        {% include "partials/_tasks.html" %}
+        <!--Task form -->
+        <div class="form" id="addTaskForm{{ category.id }}">
+          <form
+            method="POST"
+            action="{{ url_for('tasks.add_task') }}"
+            onsubmit="event.preventDefault(); addTask({{ category.id }})"
+          >
+            <div class="input-group mt-3">
+              <input type="hidden" id="category_id_{{ category.id }}" value="{{ category.id }}" />
+              <input type="text" id="newTask_{{ category.id }}" class="form-control" placeholder="Add new task" required />
+              <button class="btn btn-outline-light" type="submit">Add</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

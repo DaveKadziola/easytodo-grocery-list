@@ -1,0 +1,104 @@
+tags:
+  - Categories
+summary: Change category position
+description: Moves a category up or down in the list by swapping positions with adjacent categories
+consumes:
+  - application/json
+produces:
+  - application/json
+parameters:
+  - in: header
+    name: Accept
+    type: string
+    required: true
+    description: API version header
+    default: application/vnd.myapi.v1+json
+  - in: body
+    name: body
+    required: true
+    schema:
+      type: object
+      required:
+        - category_id
+        - direction
+      properties:
+        category_id:
+          type: integer
+          description: ID of the category to move
+          example: 5
+        direction:
+          type: string
+          enum: [up, down]
+          description: Direction to move the category
+          example: up
+responses:
+  200:
+    description: Category moved successfully
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        category_id:
+          type: integer
+          example: 5
+        new_position:
+          type: integer
+          example: 2
+        swap_category_id:
+          type: integer
+          example: 3
+  400:
+    description: Invalid request parameters
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          oneOf:
+            - example: "Invalid request format"
+            - example: "Invalid direction parameter"
+            - example: "Required fields are missing: category_id and direction"
+  404:
+    description: Category not found
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Category not found"
+        category_id:
+          type: integer
+          example: 5
+  406:
+    description: Unsupported API version
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Unsupported API version. Required header: Accept: application/vnd.myapi.v1+json"
+
+  500:
+    description: Internal server error
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          oneOf:
+            - example: "Database error"
+            - example: "Internal server error occurred"

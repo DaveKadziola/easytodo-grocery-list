@@ -1,0 +1,101 @@
+tags:
+  - Tasks
+summary: Update task details
+description: Updates the name and description of a task
+consumes:
+  - application/json
+produces:
+  - application/json
+parameters:
+  - in: header
+    name: Accept
+    type: string
+    required: true
+    description: API version header
+    default: application/vnd.myapi.v1+json
+  - in: path
+    name: task_id
+    type: integer
+    required: true
+    description: ID of the task to update
+  - in: body
+    name: body
+    required: true
+    schema:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: "Updated task name"
+        description:
+          type: string
+          example: "Updated task description"
+responses:
+  200:
+    description: Task details updated successfully
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+          example: "Task details updated successfully"
+        task_id:
+          type: integer
+          example: 5
+        task_name:
+          type: string
+          example: "Updated task name"
+        description:
+          type: string
+          example: "Updated task description"
+  400:
+    description: Invalid request format
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Task name is required"
+  404:
+    description: Task not found
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Task not found"
+  406:
+    description: Unsupported API version
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: "Unsupported API version. Required header: Accept: application/vnd.myapi.v1+json"
+  500:
+    description: Internal server error
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          oneOf:
+            - example: "Database error"
+            - example: "Internal server error occurred"
