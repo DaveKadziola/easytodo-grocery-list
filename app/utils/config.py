@@ -2,11 +2,15 @@ import configparser
 
 CURRENT_SCHEMA = None
 DB_CONFIG = None
+APP_HOST_NAME = None
+APP_PORT = None
 
 
 class Config:
     global CURRENT_SCHEMA
     global DB_CONFIG
+    global APP_HOST_NAME
+    global APP_PORT
 
     # Load configuration from file
     config = configparser.ConfigParser()
@@ -22,3 +26,7 @@ class Config:
 
     # Get schema name
     CURRENT_SCHEMA = config["schema"]["name"]
+
+    # Get host and port
+    APP_HOST_NAME = config["host"]["name"]
+    APP_PORT = config["host"]["port"]

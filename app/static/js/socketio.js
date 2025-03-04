@@ -1,7 +1,22 @@
-const socket = io("http://192.168.100.18:8100", {
+let hostName;
+let port;
+
+fetch("/static/js/socketio.json")
+  .then((response) => response.json())
+  .then((config) => {
+    hostName = config.host.name;
+    port = config.host.port;
+  })
+  .catch((error) => {
+    console.error("Error loading configuration:", error);
+  });
+
+const socket = io("ws://", hostName, ":", port, {
   reconnection: true,
   transports: ["websocket"],
   upgrade: false,
+  pingTimeout: 7000,
+  pingInterval: 3000,
 });
 
 socket.on("connect", () => {

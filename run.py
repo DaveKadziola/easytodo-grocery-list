@@ -3,7 +3,7 @@ import eventlet
 eventlet.monkey_patch()
 
 from app import create_app, socketio
-from app.utils.config import DB_CONFIG, CURRENT_SCHEMA
+from app.utils.config import DB_CONFIG, CURRENT_SCHEMA, APP_HOST_NAME, APP_PORT
 
 import psycopg2
 import json
@@ -46,4 +46,4 @@ def listen_to_db():
 
 if __name__ == "__main__":
     eventlet.spawn(listen_to_db)
-    socketio.run(app, debug=True, host="0.0.0.0", port=8100)
+    socketio.run(app, debug=True, host=APP_HOST_NAME, port=APP_PORT)
