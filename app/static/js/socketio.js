@@ -15,8 +15,8 @@ const socket = io("ws://", hostName, ":", port, {
   reconnection: true,
   transports: ["websocket"],
   upgrade: false,
-  pingTimeout: 7000,
-  pingInterval: 3000,
+  pingTimeout: 15000,
+  pingInterval: 7000,
 });
 
 socket.on("connect", () => {
