@@ -87,17 +87,6 @@ COMMENT ON TABLE prod.categories IS 'Stores categories of tasks';
 COMMENT ON COLUMN prod.categories.id IS 'Unique category ID';
 COMMENT ON COLUMN prod.categories."name" IS 'Category name (unique)';
 
--- Table Triggers
-
-create trigger category_trigger after
-insert
-    or
-delete
-    or
-update
-    on
-    prod.categories for each row execute function prod.handle_category();
-
 -- Permissions
 
 ALTER TABLE prod.categories OWNER TO postgres;
@@ -128,13 +117,6 @@ COMMENT ON COLUMN prod.tasks.id IS 'Unique task ID';
 COMMENT ON COLUMN prod.tasks."name" IS 'Task name';
 COMMENT ON COLUMN prod.tasks.description IS 'Task description';
 
--- Table Triggers
-
-create trigger task_trigger after
-update
-    on
-    prod.tasks for each row execute function prod.handle_task();
-
 -- Permissions
 
 ALTER TABLE prod.tasks OWNER TO postgres;
@@ -163,13 +145,6 @@ CREATE TABLE prod.temporary_data (
 	CONSTRAINT temporary_data_pkey PRIMARY KEY (id)
 );
 COMMENT ON TABLE prod.temporary_data IS 'Stores temporary data';
-
--- Table Triggers
-
-create trigger handle_temp_move_cat_data_trigger after
-insert
-    on
-    prod.temporary_data for each row execute function prod.handle_temp_move_cat_data();
 
 -- Permissions
 
@@ -201,21 +176,6 @@ COMMENT ON COLUMN prod.task_assignment.id IS 'Unique task assignment ID';
 COMMENT ON COLUMN prod.task_assignment.task_id IS 'Reference to a task';
 COMMENT ON COLUMN prod.task_assignment.category_id IS 'Reference to a category';
 COMMENT ON COLUMN prod.task_assignment.assigned_at IS 'Timestamp of assignment';
-
--- Table Triggers
-
-create trigger task_assignment_insert_trigger after
-insert
-    on
-    prod.task_assignment for each row execute function prod.handle_task_assignment();
-create trigger task_assignment_delete_trigger after
-delete
-    on
-    prod.task_assignment for each row execute function prod.handle_task_assignment();
-create trigger task_position_trigger after
-update
-    of category_id on
-    prod.task_assignment for each row execute function prod.handle_task_position();
 
 -- Permissions
 
@@ -427,3 +387,44 @@ GRANT ALL ON SCHEMA prod TO postgres;
 GRANT USAGE ON SCHEMA prod TO prod_todo_grocery;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA prod GRANT SELECT, DELETE, INSERT, UPDATE ON TABLES TO prod_todo_grocery;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA prod GRANT SELECT, USAGE, UPDATE ON SEQUENCES TO prod_todo_grocery;
+
+
+--  Table Triggers [categories]
+
+create trigger category_trigger after
+insert
+    or
+delete
+    or
+update
+    on
+    prod.categories for each row execute function prod.handle_category();
+
+-- Table Triggers [tasks]
+
+create trigger task_trigger after
+update
+    on
+    prod.tasks for each row execute function prod.handle_task();
+
+-- Table Triggers [temporary_data]
+
+create trigger handle_temp_move_cat_data_trigger after
+insert
+    on
+    prod.temporary_data for each row execute function prod.handle_temp_move_cat_data();
+
+-- Table Triggers [task_assignment]
+
+create trigger task_assignment_insert_trigger after
+insert
+    on
+    prod.task_assignment for each row execute function prod.handle_task_assignment();
+create trigger task_assignment_delete_trigger after
+delete
+    on
+    prod.task_assignment for each row execute function prod.handle_task_assignment();
+create trigger task_position_trigger after
+update
+    of category_id on
+    prod.task_assignment for each row execute function prod.handle_task_position();

@@ -87,17 +87,6 @@ COMMENT ON TABLE dev.categories IS 'Stores categories of tasks';
 COMMENT ON COLUMN dev.categories.id IS 'Unique category ID';
 COMMENT ON COLUMN dev.categories."name" IS 'Category name (unique)';
 
--- Table Triggers
-
-create trigger category_trigger after
-insert
-    or
-delete
-    or
-update
-    on
-    dev.categories for each row execute function dev.handle_category();
-
 -- Permissions
 
 ALTER TABLE dev.categories OWNER TO postgres;
@@ -128,13 +117,6 @@ COMMENT ON COLUMN dev.tasks.id IS 'Unique task ID';
 COMMENT ON COLUMN dev.tasks."name" IS 'Task name';
 COMMENT ON COLUMN dev.tasks.description IS 'Task description';
 
--- Table Triggers
-
-create trigger task_trigger after
-update
-    on
-    dev.tasks for each row execute function dev.handle_task();
-
 -- Permissions
 
 ALTER TABLE dev.tasks OWNER TO postgres;
@@ -163,13 +145,6 @@ CREATE TABLE dev.temporary_data (
 	CONSTRAINT temporary_data_pkey PRIMARY KEY (id)
 );
 COMMENT ON TABLE dev.temporary_data IS 'Stores temporary data';
-
--- Table Triggers
-
-create trigger handle_temp_move_cat_data_trigger after
-insert
-    on
-    dev.temporary_data for each row execute function dev.handle_temp_move_cat_data();
 
 -- Permissions
 
@@ -201,21 +176,6 @@ COMMENT ON COLUMN dev.task_assignment.id IS 'Unique task assignment ID';
 COMMENT ON COLUMN dev.task_assignment.task_id IS 'Reference to a task';
 COMMENT ON COLUMN dev.task_assignment.category_id IS 'Reference to a category';
 COMMENT ON COLUMN dev.task_assignment.assigned_at IS 'Timestamp of assignment';
-
--- Table Triggers
-
-create trigger task_assignment_insert_trigger after
-insert
-    on
-    dev.task_assignment for each row execute function dev.handle_task_assignment();
-create trigger task_assignment_delete_trigger after
-delete
-    on
-    dev.task_assignment for each row execute function dev.handle_task_assignment();
-create trigger task_position_trigger after
-update
-    of category_id on
-    dev.task_assignment for each row execute function dev.handle_task_position();
 
 -- Permissions
 
@@ -427,3 +387,44 @@ GRANT ALL ON SCHEMA dev TO postgres;
 GRANT USAGE ON SCHEMA dev TO dev_todo_grocery;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA dev GRANT SELECT, DELETE, INSERT, UPDATE ON TABLES TO dev_todo_grocery;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA dev GRANT SELECT, USAGE, UPDATE ON SEQUENCES TO dev_todo_grocery;
+
+
+--  Table Triggers [categories]
+
+create trigger category_trigger after
+insert
+    or
+delete
+    or
+update
+    on
+    dev.categories for each row execute function dev.handle_category();
+
+-- Table Triggers [tasks]
+
+create trigger task_trigger after
+update
+    on
+    dev.tasks for each row execute function dev.handle_task();
+
+-- Table Triggers [temporary_data]
+
+create trigger handle_temp_move_cat_data_trigger after
+insert
+    on
+    dev.temporary_data for each row execute function dev.handle_temp_move_cat_data();
+
+-- Table Triggers [task_assignment]
+
+create trigger task_assignment_insert_trigger after
+insert
+    on
+    dev.task_assignment for each row execute function dev.handle_task_assignment();
+create trigger task_assignment_delete_trigger after
+delete
+    on
+    dev.task_assignment for each row execute function dev.handle_task_assignment();
+create trigger task_position_trigger after
+update
+    of category_id on
+    dev.task_assignment for each row execute function dev.handle_task_position();
