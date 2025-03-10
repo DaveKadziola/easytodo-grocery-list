@@ -1,170 +1,119 @@
-# Easy ToDo &amp; Grocery List
+# EasyTodo Grocery List
 
-This is a simple web-based application for managing tasks and categories. The application uses Flask with SQLAlchemy as the backend framework, PostgreSQL as the database, and Bootstrap for styling.
+EasyTodo Grocery List is a simple application designed to manage your grocery list and tasks. The application features an intuitive user interface with seamless operations—updates and actions occur without reloading the page thanks to real-time data synchronization (including automatic state updates after reconnecting). It is optimized for both mobile and desktop platforms and is intended for self-hosted use only.
 
----
+## Key Features
 
-## Prerequisites
+- **Task and Category Management:** Easily add, edit, delete, and reorganize tasks and categories.
+- **Real-Time Synchronization:** Keeps the application state current even after temporary disconnections.
+- **Seamless User Experience:** All updates occur dynamically without reloading the page.
+- **Responsive Design:** Optimized for mobile devices and desktops.
 
-Before starting, ensure you have the following installed on your system:
+## Technologies Used
 
-1. **Python 3.8 or Higher**
+- **Python** – Primary programming language.
+- **Flask** – Web framework powering the backend services.
+- **Flask-SocketIO** – Enables real-time data synchronization and notifications.
+- **SQLAlchemy** – ORM for database management.
+- **psycopg2** – Listens to the PostgreSQL database and triggers real-time synchronization via database triggers and functions.
+- **PostgreSQL** – Relational database used for data storage.
+- **HTML/CSS/JavaScript** – Front-end technologies for building the user interface.
 
-   - To check your Python version:
-     ```
-     python --version
-     ```
-   - If Python is not installed, download it from [python.org](https://www.python.org/downloads/).
+## API Endpoints and Functionalities
 
-2. **PostgreSQL Database**
+The application exposes several API endpoints for managing categories, tasks, and task assignments:
 
-   - Ensure PostgreSQL is installed and running.
-   - To verify:
-     ```
-     psql --version
-     ```
-   - If not installed, download PostgreSQL from [postgresql.org](https://www.postgresql.org/download/).
+### Categories
 
-3. **Virtual Environment Tool**
+- **POST `/v1/add_category`**  
+  Adds a new category.
 
-   - Use Python's built-in `venv` module or install `virtualenv`:
-     ```
-     pip install virtualenv
-     ```
+- **PUT `/v1/rename_category/<category_id>`**  
+  Renames an existing category.
 
-4. **Git (Optional)**
+- **DELETE `/v1/delete_category/<category_id>`**  
+  Deletes a category along with its associated tasks.
 
-   - If cloning from a repository, ensure Git is installed:
-     ```
-     git --version
-     ```
-   - Download Git from [git-scm.com](https://git-scm.com/) if necessary.
+- **PUT `/v1/move_category`**  
+  Moves a category up or down in the list.
 
-5. **Text Editor or IDE**
-   - Use an editor like Visual Studio Code, PyCharm, or any text editor of your choice.
+- **GET `/v1/get_all_categories/`**  
+  Retrieves a list of all categories.
 
----
+### Index
 
-## Setting Up the Python Environment
+- **GET `/`**  
+  Renders the main page displaying categories and their assigned tasks.
 
-### Step 1: Clone the Repository
+### Task Assignments
 
-Clone the repository to your local machine:
+- **GET `/v1/get_tasks_by_category/<category_id>`**  
+  Retrieves tasks assigned to a specific category.
 
-```
-git clone git@github.com:DaveKadziola/easytodo-grocery-list.git
-```
+### Tasks
 
-### Step 2: Create a Virtual Environment
+- **POST `/v1/add_task/`**  
+  Adds a new task and assigns it to a category.
 
-Create and activate a virtual environment:
+- **PUT `/v1/update_task/<task_id>`**  
+  Updates the details of an existing task.
 
-For Linux/MacOS:
+- **DELETE `/v1/delete_task/<task_id>`**  
+  Deletes a task.
 
-```
-python3 -m venv easytodo
-source easytodo/bin/activate
-```
+- **PUT `/v1/move_task`**  
+  Moves a task from one category to another.
 
-For Windows:
+- **PUT `/v1/toggle_task/<task_id>`**  
+  Toggles a task's status between completed and incomplete.
 
-```
-python -m venv easytodo
-easytodo\Scripts\activate
-```
+For more details on the API endpoints, refer to the Flasgger documentation at `http://hostname:port/apidocs`.
 
-### Step 3: Install Dependencies
+## Database Structure
 
-Install required Python packages using `pip`:
+- **Schema:**  
+  The DDL scripts provide database for schema `dev`, `test`, `prod` and is owned by PostgreSQL.
 
-```
-pip install -r requirements.txt
-```
+- **Tables and Sequences:**
 
----
+  - **categories:** Stores unique task categories with an auto-incrementing ID, name, timestamps, and position.
+  - **tasks:** Contains task records with an auto-incrementing ID, name, description, timestamps, and a completion status.
+  - **temporary_data:** Temporarily holds data for operations like deletion or movement of categories/tasks.
+  - **updates_log:** Logs update events with a JSONB payload for real-time synchronization and notification.
+  - **task_assignment:** Links tasks to categories with an auto-incrementing ID, and records the assignment timestamp.
+  - Sequences are defined for each table to auto-increment the primary keys.
 
-## Configuring the Application
+- **Triggers & Functions:**  
+  Database triggers call functions (e.g., `handle_category`, `handle_task`, etc.) to log events and notify the application of changes via PostgreSQL's notification system.
 
-### Step 1: Create `config.ini`
+## Configuration & Launch
 
-Create a `config.ini` file in the root directory of the project. This file stores sensitive information like database credentials and schema names.
+- **Configuration:**  
+  The application is configured using the `setup.py` script, which performs the following tasks:
 
-#### Example `config.ini` File:
+  - **OS Detection & Permissions:** Determines the operating system and requests elevated permissions if necessary.
+  - **Database Setup:** Executes SQL scripts to create the database, roles, and schemas.
+  - **Virtual Environment:** Creates a Python virtual environment for the application.
+  - **Dependency Installation:** Installs required Python packages from `requirements.txt`.
+  - **Firewall Configuration:** Configures firewall rules for the specified application port.
+  - **Configuration File Generation:** Generates configuration files (e.g., `config.ini` and `socketio.json`) with user-specified parameters.
+  - **Interactive Menu:** Provides a menu-driven interface to perform the initial setup and configuration tasks.
 
-```
-[database]
-host = localhost
-port = 5432
-user = your_database_user
-password = your_database_password
-dbname = todo_grocery
+- **Launch:**  
+  Start the main application by executing the `run.py` script:
+  ```bash
+  python run.py
+  ```
 
-[schema]
-name = prod
-```
+## Further Improvements & Development Ideas
 
-#### Explanation of Fields:
-
-- **host**: The address of your PostgreSQL server (e.g., `localhost` for local development).
-- **port**: The port used by PostgreSQL (default is `5432`).
-- **user**: Your PostgreSQL username.
-- **password**: Your PostgreSQL password.
-- **dbname**: The name of the database to use.
-- **name**: The schema name for your database (`prod` and `dev` in repo's ddl scripts).
-
-### Step 2: Add `config.ini` to `.gitignore`
-
-Ensure that sensitive information in `config.ini` is not committed to version control. Add the following line to `.gitignore`:
-
-```
-config.ini
-easytodo\
-```
-
----
-
-## Initializing the Database
-
-### Step 1: Create the Database and Schema
-
-Log in to PostgreSQL and create the database, roles, tables, grants and etc by running scripts from ddl catalog in the following order:
-
-```
-1-create_database.sql
-2-create_roles.sql
-3-ddl_dev.sql
-4-ddl_prod.sql
-```
-
----
-
-## Running the Application
-
-Start the application:
-
-```
-python3 run.py
-```
-
-The application should now be accessible at `http://127.0.0.1:8100`.
-
----
-
-## Additional settings
-
-If you want to have access from other devices in local network, allow port in firewall as follows:
-
-```
-# for UFW
-sudo ufw allow 8100/tcp
-
-# for iptables
-sudo iptables -A INPUT -p tcp --dport 8100 -j ACCEPT
-```
-
-If you want to restart the application but port is in use, check for PID of process listening at port 8100 and kill process by its PID
-
-```
-sudo lsof -i :8100
-sudo kill -9 PID
-```
+- Optimize psycopg2 connections (create connection pools) and consider replacing SQLAlchemy with psycopg2 to unify database operations and reduce library imports.
+- Add a pg-cron job to delete old records and define criteria for what constitutes an "old" record.
+- Consider whether synchronization with a NoSQL database using Redis makes sense if workspaces are introduced and the application is adapted for simultaneous use by multiple users.
+- Add a highlight effect to the category where a task is dropped.
+- Disable task highlighting during state updates (when processing data from `request_update`).
+- Implement drag-and-drop functionality for both mouse and touch devices using [interactjs.io](https://interactjs.io) (currently, only basic mouse dragging is supported).
+- Introduce a login panel—potentially a simple login by email with a code.
+- Enable the creation of workspaces with features to assign, invite, and share with other users, allowing multiple users to collaborate within a workspace.
+- For workspaces, add sections such as "Your Workspaces" and "Assigned to Workspace".
+- Add multilanguage support.
