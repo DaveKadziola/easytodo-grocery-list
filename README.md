@@ -99,10 +99,17 @@ For more details on the API endpoints, refer to the Flasgger documentation at `h
   - **Configuration File Generation:** Generates configuration files (e.g., `config.ini` and `socketio.json`) with user-specified parameters.
   - **Interactive Menu:** Provides a menu-driven interface to perform the initial setup and configuration tasks.
 
+  Run the script as follows:
+
+  ```bash
+  python3 setup.py
+  ```
+
 - **Launch:**  
   Start the main application by executing the `run.py` script:
   ```bash
-  python run.py
+  source easytodo/bin/activate
+  python3 run.py
   ```
 
 ## Further Improvements & Development Ideas
