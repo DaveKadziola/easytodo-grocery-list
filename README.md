@@ -96,7 +96,7 @@ For more details on the API endpoints, refer to the Flasgger documentation at `h
   - **Virtual Environment:** Creates a Python virtual environment for the application.
   - **Dependency Installation:** Installs required Python packages from `requirements.txt`.
   - **Firewall Configuration:** Configures firewall rules for the specified application port.
-  - **Configuration File Generation:** Generates configuration files (e.g., `config.ini` and `socketio.json`) with user-specified parameters.
+  - **Configuration File Generation:** Generates configuration files (`config.ini` and `app/static/js/socketio.json`) with user-specified parameters.
   - **Interactive Menu:** Provides a menu-driven interface to perform the initial setup and configuration tasks.
 
   Run the script as follows:
