@@ -107,13 +107,13 @@ For more details on the API endpoints, refer to the Flasgger documentation at `h
 
 ## Further Improvements & Development Ideas
 
-- Optimize psycopg2 connections (create connection pools) and consider replacing SQLAlchemy with psycopg2 to unify database operations and reduce library imports.
-- Add a pg-cron job to delete old records and define criteria for what constitutes an "old" record.
-- Consider whether synchronization with a NoSQL database using Redis makes sense if workspaces are introduced and the application is adapted for simultaneous use by multiple users.
-- Add a highlight effect to the category where a task is dropped.
-- Disable task highlighting during state updates (when processing data from `request_update`).
-- Implement drag-and-drop functionality for both mouse and touch devices using [interactjs.io](https://interactjs.io) (currently, only basic mouse dragging is supported).
-- Introduce a login panel—potentially a simple login by email with a code.
-- Enable the creation of workspaces with features to assign, invite, and share with other users, allowing multiple users to collaborate within a workspace.
-- For workspaces, add sections such as "Your Workspaces" and "Assigned to Workspace".
-- Add multilanguage support.
+- [ ] Optimize psycopg2 connections (create connection pools) and consider replacing SQLAlchemy with psycopg2 to unify database operations and reduce library imports.
+- [ ] Add a pg-cron job to delete old records and define criteria for what constitutes an "old" record.
+- [ ] Consider whether synchronization with a NoSQL database using Redis makes sense if workspaces are introduced and the application is adapted for simultaneous use by multiple users.
+- [ ] Add a highlight effect to the category where a task is dropped.
+- [ ] Disable task highlighting during state updates (when processing data from `request_update`).
+- [ ] Implement drag-and-drop functionality for both mouse and touch devices using [interactjs.io](https://interactjs.io) (currently, only basic mouse dragging is supported).
+- [ ] Introduce a login panel—potentially a simple login by email with a code.
+- [ ] Enable the creation of workspaces with features to assign, invite, and share with other users, allowing multiple users to collaborate within a workspace.
+- [ ] For workspaces, add sections such as "Your Workspaces" and "Assigned to Workspace".
+- [ ] Add multilanguage support.
