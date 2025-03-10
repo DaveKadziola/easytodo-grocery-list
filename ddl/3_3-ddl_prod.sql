@@ -65,6 +65,22 @@ CREATE SEQUENCE prod.temporary_data_id_seq
 ALTER SEQUENCE prod.temporary_data_id_seq OWNER TO postgres;
 GRANT ALL ON SEQUENCE prod.temporary_data_id_seq TO postgres;
 GRANT ALL ON SEQUENCE prod.temporary_data_id_seq TO prod_todo_grocery;
+
+-- DROP SEQUENCE prod.updates_log_id_seq;
+
+CREATE SEQUENCE prod.updates_log_id_seq
+	INCREMENT BY 1
+	MINVALUE 1
+	MAXVALUE 2147483647
+	START 1
+	CACHE 1
+	NO CYCLE;
+
+-- Permissions
+
+ALTER SEQUENCE prod.updates_log_id_seq OWNER TO postgres;
+GRANT ALL ON SEQUENCE prod.updates_log_id_seq TO postgres;
+GRANT ALL ON SEQUENCE prod.updates_log_id_seq TO prod_todo_grocery;
 -- prod.categories definition
 
 -- Drop table
@@ -91,7 +107,7 @@ COMMENT ON COLUMN prod.categories."name" IS 'Category name (unique)';
 
 ALTER TABLE prod.categories OWNER TO postgres;
 GRANT ALL ON TABLE prod.categories TO postgres;
-GRANT SELECT, DELETE, INSERT, UPDATE ON TABLE prod.categories TO prod_todo_grocery;
+GRANT INSERT, DELETE, UPDATE, SELECT ON TABLE prod.categories TO prod_todo_grocery;
 
 
 -- prod.tasks definition
@@ -121,7 +137,7 @@ COMMENT ON COLUMN prod.tasks.description IS 'Task description';
 
 ALTER TABLE prod.tasks OWNER TO postgres;
 GRANT ALL ON TABLE prod.tasks TO postgres;
-GRANT SELECT, DELETE, INSERT, UPDATE ON TABLE prod.tasks TO prod_todo_grocery;
+GRANT INSERT, DELETE, UPDATE, SELECT ON TABLE prod.tasks TO prod_todo_grocery;
 
 
 -- prod.temporary_data definition
@@ -150,7 +166,29 @@ COMMENT ON TABLE prod.temporary_data IS 'Stores temporary data';
 
 ALTER TABLE prod.temporary_data OWNER TO postgres;
 GRANT ALL ON TABLE prod.temporary_data TO postgres;
-GRANT SELECT, DELETE, INSERT, UPDATE ON TABLE prod.temporary_data TO prod_todo_grocery;
+GRANT INSERT, DELETE, UPDATE, SELECT ON TABLE prod.temporary_data TO prod_todo_grocery;
+
+
+-- prod.updates_log definition
+
+-- Drop table
+
+-- DROP TABLE prod.updates_log;
+
+CREATE TABLE prod.updates_log (
+	id serial4 NOT NULL,
+	"action" varchar(255) NOT NULL,
+	event_data jsonb NOT NULL,
+	created_at timestamp DEFAULT CURRENT_TIMESTAMP NULL,
+	CONSTRAINT updates_log_pkey PRIMARY KEY (id)
+);
+CREATE INDEX idx_updates_log_time ON prod.updates_log USING brin (created_at, id);
+
+-- Permissions
+
+ALTER TABLE prod.updates_log OWNER TO postgres;
+GRANT ALL ON TABLE prod.updates_log TO postgres;
+GRANT INSERT, DELETE, UPDATE, SELECT ON TABLE prod.updates_log TO prod_todo_grocery;
 
 
 -- prod.task_assignment definition
@@ -181,7 +219,7 @@ COMMENT ON COLUMN prod.task_assignment.assigned_at IS 'Timestamp of assignment';
 
 ALTER TABLE prod.task_assignment OWNER TO postgres;
 GRANT ALL ON TABLE prod.task_assignment TO postgres;
-GRANT SELECT, DELETE, INSERT, UPDATE ON TABLE prod.task_assignment TO prod_todo_grocery;
+GRANT INSERT, DELETE, UPDATE, SELECT ON TABLE prod.task_assignment TO prod_todo_grocery;
 
 
 
@@ -195,6 +233,13 @@ DECLARE
     temp_row prod.temporary_data%ROWTYPE;
 BEGIN
     IF TG_OP = 'INSERT' THEN
+		INSERT INTO prod.updates_log (action, event_data)
+    	VALUES ('ADD_CATEGORY', json_build_object(
+	        'table', 'categories',
+	        'action', 'ADD_CATEGORY',
+	        'category_id', NEW.id,
+	        'name', NEW.name
+    	));
         PERFORM pg_notify('data_changes', json_build_object(
             'table', 'categories',
             'action', 'ADD_CATEGORY',
@@ -203,6 +248,13 @@ BEGIN
         )::text);
     ELSIF TG_OP = 'UPDATE' THEN
         IF NEW.name <> OLD.name THEN
+			INSERT INTO prod.updates_log (action, event_data)
+	    	VALUES ('RENAME_CATEGORY', json_build_object(
+                'table', 'categories',
+                'action', 'RENAME_CATEGORY',
+                'category_id', NEW.id,
+                'new_name', NEW.name
+	    	));
             PERFORM pg_notify('data_changes', json_build_object(
                 'table', 'categories',
                 'action', 'RENAME_CATEGORY',
@@ -216,6 +268,13 @@ BEGIN
         ORDER BY id DESC LIMIT 1;
 
 		IF FOUND THEN
+			INSERT INTO prod.updates_log (action, event_data)
+	    	VALUES ('DELETE_CATEGORY', json_build_object(
+	            'table', 'categories',
+	            'action', 'DELETE_CATEGORY',
+	            'category_id', OLD.id
+	    	));
+
 	        PERFORM pg_notify('data_changes', json_build_object(
 	            'table', 'categories',
 	            'action', 'DELETE_CATEGORY',
@@ -225,6 +284,7 @@ BEGIN
 
 		DELETE FROM prod.temporary_data WHERE id = temp_row.id;
     END IF;
+
     RETURN NEW;
 END;
 $function$
@@ -244,6 +304,13 @@ AS $function$
 BEGIN
     IF TG_OP = 'UPDATE' THEN
         IF NEW.is_done <> OLD.is_done THEN
+			INSERT INTO prod.updates_log (action, event_data)
+	    	VALUES ('TOGGLE_TASK', json_build_object(
+                'table', 'tasks',
+                'action', 'TOGGLE_TASK',
+                'task_id', NEW.id,
+                'category_id', (SELECT category_id FROM prod.task_assignment WHERE task_id = NEW.id)
+	    	));
             PERFORM pg_notify('data_changes', json_build_object(
                 'table', 'tasks',
                 'action', 'TOGGLE_TASK',
@@ -251,6 +318,15 @@ BEGIN
                 'category_id', (SELECT category_id FROM prod.task_assignment WHERE task_id = NEW.id)
             )::text);
         ELSIF NEW.name <> OLD.name OR NEW.description <> OLD.description THEN
+			INSERT INTO prod.updates_log (action, event_data)
+	    	VALUES ('UPDATE_TASK', json_build_object(
+                'table', 'tasks',
+                'action', 'UPDATE_TASK',
+                'task_id', NEW.id,
+                'category_id', (SELECT category_id FROM prod.task_assignment WHERE task_id = NEW.id),
+                'new_name', NEW.name,
+                'new_description', NEW.description
+	    	));
             PERFORM pg_notify('data_changes', json_build_object(
                 'table', 'tasks',
                 'action', 'UPDATE_TASK',
@@ -283,6 +359,14 @@ DECLARE
 BEGIN
     IF TG_OP = 'INSERT' THEN
         SELECT name INTO task_name FROM prod.tasks WHERE id = NEW.task_id;
+		INSERT INTO prod.updates_log (action, event_data)
+	    	VALUES ('ADD_TASK', json_build_object(
+            'table', 'task_assignment',
+            'action', 'ADD_TASK',
+            'task_id', NEW.task_id,
+            'category_id', NEW.category_id,
+            'task_name', task_name
+	    ));
         PERFORM pg_notify('data_changes', json_build_object(
             'table', 'task_assignment',
             'action', 'ADD_TASK',
@@ -298,6 +382,15 @@ BEGIN
         
         IF FOUND THEN
             SELECT name INTO task_name FROM prod.tasks WHERE id = OLD.task_id;
+
+			INSERT INTO prod.updates_log (action, event_data)
+	    	VALUES ('DELETE_TASK', json_build_object(
+                'table', 'task_assignment',
+                'action', 'DELETE_TASK',
+                'task_id', OLD.task_id,
+                'category_id', OLD.category_id,
+                'task_name', task_name
+	    	));
             PERFORM pg_notify('data_changes', json_build_object(
                 'table', 'task_assignment',
                 'action', 'DELETE_TASK',
@@ -327,6 +420,16 @@ CREATE OR REPLACE FUNCTION prod.handle_task_position()
 AS $function$
 BEGIN
     IF TG_OP = 'UPDATE' AND NEW.category_id <> OLD.category_id THEN
+		INSERT INTO prod.updates_log (action, event_data)
+	    VALUES ('MOVE_TASK', json_build_object(
+            'table', 'task_assignment',
+            'action', 'MOVE_TASK',
+            'task_id', NEW.task_id,
+            'old_category_id', OLD.category_id,
+            'new_category_id', NEW.category_id,
+            'task_name', (SELECT name FROM prod.tasks WHERE id = NEW.task_id)
+	    ));
+
         PERFORM pg_notify('data_changes', json_build_object(
             'table', 'task_assignment',
             'action', 'MOVE_TASK',
@@ -361,6 +464,13 @@ BEGIN
         ORDER BY id DESC LIMIT 1;
 
         IF FOUND THEN
+			INSERT INTO prod.updates_log (action, event_data)
+		    	VALUES ('MOVE_CATEGORY', json_build_object(
+                'table', temp_row.field01,
+                'action', temp_row.field02,
+                'category_id', temp_row.field03,
+                'direction', temp_row.field04
+		    ));
             PERFORM pg_notify('data_changes', json_build_object(
                 'table', temp_row.field01,
                 'action', temp_row.field02,
@@ -385,8 +495,8 @@ GRANT ALL ON FUNCTION prod.handle_temp_move_cat_data() TO postgres;
 
 GRANT ALL ON SCHEMA prod TO postgres;
 GRANT USAGE ON SCHEMA prod TO prod_todo_grocery;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA prod GRANT SELECT, DELETE, INSERT, UPDATE ON TABLES TO prod_todo_grocery;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA prod GRANT SELECT, USAGE, UPDATE ON SEQUENCES TO prod_todo_grocery;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA prod GRANT INSERT, DELETE, UPDATE, SELECT ON TABLES TO prod_todo_grocery;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA prod GRANT USAGE, UPDATE, SELECT ON SEQUENCES TO prod_todo_grocery;
 
 
 --  Table Triggers [categories]

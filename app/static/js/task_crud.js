@@ -68,7 +68,6 @@ function getTasksByCategory(categoryId, taskId, highlightFlag) {
     })
     .catch((error) => {
       console.error("Error at getTasksByCategory:", error);
-      alert(error.status + ": " + error.message);
     });
 }
 

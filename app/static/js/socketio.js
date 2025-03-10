@@ -1,5 +1,6 @@
 let hostName;
 let port;
+let lastTimestamp;
 
 fetch("/static/js/socketio.json")
   .then((response) => response.json())
@@ -20,7 +21,9 @@ const socket = io("ws://", hostName, ":", port, {
 });
 
 socket.on("connect", () => {
+  lastTimestamp = localStorage.getItem("lastTimestamp") || new Date(0).toISOString();
   console.log("Connected to WebSocket");
+  socket.emit("request_updates", lastTimestamp);
 });
 
 const handleEvent = (data) => {
@@ -58,6 +61,13 @@ const handleEvent = (data) => {
 
 socket.onAny((eventName, data) => {
   if (eventName === "connect") return;
-  console.log(`Received event: ${eventName}`, data);
-  handleEvent(data);
+  if (!data.request_updates) {
+    console.log(`Received event: ${eventName}`, data);
+    handleEvent(data);
+    localStorage.setItem("lastTimestamp", toLocalISOString());
+  } else {
+    console.log(`Received update: ${eventName}`, data);
+    handleEvent(data);
+    localStorage.setItem("lastTimestamp", toLocalISOString());
+  }
 });
