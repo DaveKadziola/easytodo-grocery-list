@@ -1,5 +1,5 @@
 config.ini
 app/static/js/socketio.json
 easytodo/
-*.cpython-312.pyc
+**/__pycache__/
 formatted_commit_message.txt
