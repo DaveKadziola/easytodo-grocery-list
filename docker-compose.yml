@@ -1,0 +1,16 @@
+services:
+  easytodo:
+    build: .
+    environment:
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_SCHEMA=${DB_SCHEMA}
+      - APP_HOST=${APP_HOST_NAME}
+      - APP_PORT=${APP_HOST_PORT}
+      - SOCKETIO_HOST=${SOCKETIO_HOST}
+      - SOCKETIO_PORT=${SOCKETIO_PORT}
+    ports:
+      - "8100:8100"

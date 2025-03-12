@@ -3,3 +3,4 @@ app/static/js/socketio.json
 easytodo/
 **/__pycache__/
 formatted_commit_message.txt
+.env
