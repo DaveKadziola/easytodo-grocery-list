@@ -1,6 +1,11 @@
+version: "1.0.0"
 services:
   easytodo:
-    build: .
+    build:
+      context: ../../..
+      dockerfile: docker/v1.0.0/no-db/Dockerfile
+    env_file:
+      - ../.env
     environment:
       - DB_HOST=${DB_HOST}
       - DB_PORT=${DB_PORT}
@@ -8,8 +13,8 @@ services:
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_SCHEMA=${DB_SCHEMA}
-      - APP_HOST=${APP_HOST_NAME}
-      - APP_PORT=${APP_HOST_PORT}
+      - APP_HOST_NAME=${APP_HOST_NAME}
+      - APP_HOST_PORT=${APP_HOST_PORT}
       - SOCKETIO_HOST=${SOCKETIO_HOST}
       - SOCKETIO_PORT=${SOCKETIO_PORT}
     ports:

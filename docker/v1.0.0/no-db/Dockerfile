@@ -6,15 +6,14 @@ RUN apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-COPY config.ini .
-COPY run.py .
-COPY app/ ./app/
-COPY docs/ ./docs/
+COPY ./requirements.txt .
+COPY ./run.py .
+COPY ./app/ ./app/
+COPY ./docs/ ./docs/
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY entrypoint.sh /entrypoint.sh
+COPY /docker/v1.0.0/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]

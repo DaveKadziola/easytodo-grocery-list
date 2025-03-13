@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # config.ini
-cat > /main/app/config.ini <<EOF
+cat > /main/config.ini <<EOF
 [database]
 host = ${DB_HOST}
 port = ${DB_PORT}
