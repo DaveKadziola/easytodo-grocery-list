@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 
 # DB setup at first container run
-FROM postgres:17
+FROM postgres:17-alpine
 COPY ./pg_hba.conf /tmp/pg_hba.conf
 COPY ./copy-config.sh /docker-entrypoint-initdb.d/10-copy-config.sh
 

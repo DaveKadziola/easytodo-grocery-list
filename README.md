@@ -130,6 +130,49 @@ Then select desired cointainer variant you wish to setup.
 
 If you forgot replace placeholders in `.env` files, don't worry. Script takes care of that and will you remind about it.
 
+If you will face any issues with containerized application you can execute the docker compose command directly instead of the `setup_docker.py` script.
+For the version with no integrated database:
+
+```bash
+docker compose -f docker/v1.0.0/no-db/docker-compose.yml up --build
+```
+
+For the version with integrated database:
+
+```bash
+docker compose -f docker/v1.0.0/with-db/docker-compose.yml up --build
+```
+
+Alternatively, you can add the `--force-recreate` parameter in the end.
+
+In case of using the no-db version, make sure your PostgreSQL config allows connections outside localhost.
+In the `postgresql.conf` check if `listen_addresses` is uncommented and doesn't limit to localhost. You can set this line up like follows:
+
+```bash
+listen_addresses = '*'
+```
+
+In the `pg_hba.conf` in the section `# IPv4 local connections` allow connections from whole local network (or instead of `0.0.0.0/0` limit to specific subnet like `172.10.0.0/24` to be more secure):
+
+```bash
+# IPv4 local connections:
+host    all             all             127.0.0.1/32            scram-sha-256
+host    all             all             0.0.0.0/0               scram-sha-256
+```
+
+... and restart the PostgreSQL service:
+
+```bash
+sudo systemctl restart postgresql
+```
+
+On Windows execute the following commands (replace `<version>` with number of your installed version):
+
+```bash
+net stop postgresql-x64-<version>
+net start postgresql-x64-<version>
+```
+
 Enjoy! :)
 
 ## Further Improvements & Development Ideas
