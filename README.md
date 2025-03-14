@@ -1,6 +1,6 @@
 # EasyTodo Grocery List
 
-EasyTodo Grocery List is a simple application designed to manage your grocery list and tasks. The application features an intuitive user interface with seamless operations—updates and actions occur without reloading the page thanks to real-time data synchronization (including automatic state updates after reconnecting). It is optimized for both mobile and desktop platforms and is intended for self-hosted use only.
+EasyTodo Grocery List is a simple application designed to manage your grocery list and tasks. The application features an intuitive user interface with seamless operations—updates and actions occur without reloading the page thanks to real-time data synchronization (including automatic state updates after reconnecting). It is optimized for both mobile and desktop platforms and is intended for self-hosted use only, using configuration script or Docker containers.
 
 ## Key Features
 
@@ -88,8 +88,10 @@ For more details on the API endpoints, refer to the Flasgger documentation at `h
 
 ## Configuration & Launch
 
+### No container setup
+
 - **Configuration:**  
-  The application is configured using the `setup.py` script, which performs the following tasks:
+  The application requires PostgreSQL database instance. If you don't have it installed yet, you must setup it first. The application is configured using the `setup.py` script, which performs the following tasks:
 
   - **OS Detection & Permissions:** Determines the operating system and requests elevated permissions if necessary.
   - **Database Setup:** Executes SQL scripts to create the database, roles, and schemas.
@@ -112,6 +114,24 @@ For more details on the API endpoints, refer to the Flasgger documentation at `h
   python3 run.py
   ```
 
+### Container setup
+
+In the `docker` directory you can find two variants like `no-db` which only builds the Docker container for application and similarly like in no container configuration, it requires to have installed PostgreSQL instance. The `with-db` version does have integrated PostgreSQL service and Adminer - a PHP client for managing content in databases.
+
+To build the Docker containers you must replace all placeholders for environment variables between <> characters in the `docker/v1.0.0/no-db/.env` and `docker/v1.0.0/with-db/.env`. In the in `docker/v1.0.0/no-db/.env` if it's needed you may need to adjust rest parameters.
+
+Build and start of Docker containers is very easy. Just run the following script:
+
+```bash
+python3 setup_docker.py
+```
+
+Then select desired cointainer variant you wish to setup.
+
+If you forgot replace placeholders in `.env` files, don't worry. Script takes care of that and will you remind about it.
+
+Enjoy! :)
+
 ## Further Improvements & Development Ideas
 
 - [ ] Optimize psycopg2 connections (create connection pools) and consider replacing SQLAlchemy with psycopg2 to unify database operations and reduce library imports.
@@ -124,3 +144,5 @@ For more details on the API endpoints, refer to the Flasgger documentation at `h
 - [ ] Enable the creation of workspaces with features to assign, invite, and share with other users, allowing multiple users to collaborate within a workspace.
 - [ ] For workspaces, add sections such as "Your Workspaces" and "Assigned to Workspace".
 - [ ] Add multilanguage support.
+- [ ] Analyze of Dockerfiles if output images can be smaller (especially postgres and adminer one)
+- [ ] Improvements of network configuration in Dockerfiles - to be verified after deployment on homelab and composing with other services running in the same self-hosted ecosystem
