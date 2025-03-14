@@ -1,11 +1,12 @@
+name: easy-todo-grocery-withdb
 services:
   easytodo:
-    image: easy-todo-grocery-withdb:${TAG:-latest}
+    image: easy-todo-grocery-withdb
     build:
       context: ../../..
       dockerfile: docker/v1.0.0/with-db/Dockerfile
     env_file:
-      - ../.env
+      - ../with-db/.env
     environment:
       - DB_HOST=${DB_HOST}
       - DB_PORT=${DB_PORT}
