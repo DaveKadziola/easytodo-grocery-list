@@ -1,6 +1,10 @@
+\connect todo_grocery;
 -- DROP SCHEMA dev;
 
 CREATE SCHEMA dev AUTHORIZATION postgres;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA dev 
+GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO dev_todo_grocery;
 
 -- DROP SEQUENCE dev.categories_id_seq;
 

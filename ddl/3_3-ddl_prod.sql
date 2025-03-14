@@ -1,6 +1,10 @@
+\connect todo_grocery;
 -- DROP SCHEMA prod;
 
 CREATE SCHEMA prod AUTHORIZATION postgres;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA prod 
+GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO prod_todo_grocery;
 
 -- DROP SEQUENCE prod.categories_id_seq;
 

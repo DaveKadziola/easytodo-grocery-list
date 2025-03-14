@@ -1,6 +1,10 @@
+\connect todo_grocery;
 -- DROP SCHEMA test;
 
 CREATE SCHEMA test AUTHORIZATION postgres;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA test 
+GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO test_todo_grocery;
 
 -- DROP SEQUENCE test.categories_id_seq;
 

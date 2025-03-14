@@ -1,3 +1,4 @@
+\connect todo_grocery;
 -- DROP ROLE dev_todo_grocery;
 
 CREATE ROLE dev_todo_grocery WITH 
