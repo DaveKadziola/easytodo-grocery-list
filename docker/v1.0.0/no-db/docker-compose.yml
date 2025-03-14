@@ -1,6 +1,6 @@
-version: "1.0.0"
 services:
   easytodo:
+    image: easy-todo-grocery-nodb:${TAG:-latest}
     build:
       context: ../../..
       dockerfile: docker/v1.0.0/no-db/Dockerfile
