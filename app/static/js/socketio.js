@@ -21,7 +21,7 @@ const socket = io("ws://", hostName, ":", port, {
 });
 
 socket.on("connect", () => {
-  lastTimestamp = localStorage.getItem("lastTimestamp") || new Date(0).toISOString();
+  lastTimestamp = localStorage.getItem("lastTimestamp") || toLocalISOString();
   console.log("Connected to WebSocket");
   socket.emit("request_updates", lastTimestamp);
 });
