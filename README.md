@@ -191,5 +191,5 @@ Enjoy! :)
 - [ ] Enable the creation of workspaces with features to assign, invite, and share with other users, allowing multiple users to collaborate within a workspace.
 - [ ] For workspaces, add sections such as "Your Workspaces" and "Assigned to Workspace".
 - [ ] Add multilanguage support.
-- [ ] Analyze of Dockerfiles if output images can be smaller (especially postgres one)
-- [ ] Improvements of network configuration in Dockerfiles - to be verified after deployment on homelab and composing with other services running in the same self-hosted ecosystem
+- [ ] Analyze of Dockerfiles if output images can be smaller (especially postgres one).
+- [ ] Improvements of network configuration in Dockerfiles - to be verified after deployment on homelab and composing with other services running in the same self-hosted ecosystem.
