@@ -7,6 +7,7 @@ services:
       dockerfile: docker/v1.0.0/with-db/Dockerfile
     env_file:
       - ../with-db/.env
+    network_mode: host
     environment:
       - DB_HOST=${DB_HOST}
       - DB_PORT=${DB_PORT}
@@ -18,22 +19,17 @@ services:
       - APP_HOST_PORT=${APP_HOST_PORT}
       - SOCKETIO_HOST=${SOCKETIO_HOST}
       - SOCKETIO_PORT=${SOCKETIO_PORT}
-    networks:
-      todo_grocery_net:
-        ipv4_address: 172.20.0.4
-    ports:
-      - "8100:8100"
     depends_on:
       db:
         condition: service_healthy
   db:
     image: postgres
-    user: "postgres"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_ROOT_USER} -d ${DB_NAME}"]
       interval: 5s
       timeout: 5s
       retries: 10
+    network_mode: host
     environment:
       - POSTGRES_USER=${DB_ROOT_USER}
       - POSTGRES_PASSWORD=${DB_ROOT_PASSWORD}
@@ -41,34 +37,13 @@ services:
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - POSTGRES_HOST_AUTH_METHOD=md5
-    networks:
-      todo_grocery_net:
-        ipv4_address: 172.20.0.2
-    ports:
-      - "5433:5433"
+      - PGPORT=${DB_PORT}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ../../../ddl/2_3-create_role_prod.sql:/docker-entrypoint-initdb.d/2_3-create_role_prod.sql
       - ../../../ddl/3_3-ddl_prod.sql:/docker-entrypoint-initdb.d/3_3-ddl_prod.sql
       - ./post-install/config-db-post-install.sh:/docker-entrypoint-initdb.d/4-config-db-post-install.sh
       - ./post-install/pg_hba.conf:/tmp/pg_hba.conf
-
-  adminer:
-    image: adminer
-    restart: always
-    networks:
-      todo_grocery_net:
-        ipv4_address: 172.20.0.3
-    ports:
-      - 8080:8080
-
-networks:
-  todo_grocery_net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/24
-          gateway: 172.20.0.1
 
 volumes:
   postgres_data:

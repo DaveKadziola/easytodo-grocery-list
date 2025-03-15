@@ -7,6 +7,7 @@ services:
       dockerfile: docker/v1.0.0/no-db/Dockerfile
     env_file:
       - ../no-db/.env
+    network_mode: host
     environment:
       - DB_HOST=${DB_HOST}
       - DB_PORT=${DB_PORT}
@@ -18,16 +19,3 @@ services:
       - APP_HOST_PORT=${APP_HOST_PORT}
       - SOCKETIO_HOST=${SOCKETIO_HOST}
       - SOCKETIO_PORT=${SOCKETIO_PORT}
-    networks:
-      todo_grocery_net:
-        ipv4_address: 172.10.0.4
-    ports:
-      - "8101:8101"
-
-networks:
-  todo_grocery_net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.10.0.0/24
-          gateway: 172.10.0.1
