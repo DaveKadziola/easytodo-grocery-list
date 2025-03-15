@@ -16,6 +16,7 @@ EasyTodo Grocery List is a simple application designed to manage your grocery li
 - **Flask-SocketIO** – Enables real-time data synchronization and notifications.
 - **SQLAlchemy** – ORM for database management.
 - **psycopg2** – Listens to the PostgreSQL database and triggers real-time synchronization via database triggers and functions.
+- **Flasgger** – API documentation.
 - **PostgreSQL** – Relational database used for data storage.
 - **HTML/CSS/JavaScript** – Front-end technologies for building the user interface.
 
