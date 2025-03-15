@@ -116,9 +116,11 @@ For more details on the API endpoints, refer to the Flasgger documentation at `h
 
 ### Container setup
 
-In the `docker` directory you can find two variants like `no-db` which only builds the Docker container for application and similarly like in no container configuration, it requires to have installed PostgreSQL instance. The `with-db` version does have integrated PostgreSQL service and Adminer - a PHP client for managing content in databases.
+In the `docker` directory you can find two variants like `no-db` which only builds the Docker container for application and similarly like in no container configuration, it requires to have installed PostgreSQL instance. The `with-db` version does have integrated PostgreSQL service.
 
-To build the Docker containers you must replace all placeholders for environment variables between <> characters in the `docker/v1.0.0/no-db/.env` and `docker/v1.0.0/with-db/.env`. In the in `docker/v1.0.0/no-db/.env` if it's needed you may need to adjust rest parameters.
+To build the Docker containers you must replace all placeholders for environment variables between <> characters in the `docker/v1.0.0/no-db/.env` and `docker/v1.0.0/with-db/.env`. In the in `docker/v1.0.0/no-db/.env` if it's needed you may need to adjust rest parameters like database name, schema, user and etc.
+
+By default, both containers work in the host mode so on both the application can be accessed in whole local network from any device. Both containers can work simultaneously withouts any conflicts.
 
 Build and start of Docker containers is very easy. Just run the following script:
 
@@ -152,7 +154,7 @@ In the `postgresql.conf` check if `listen_addresses` is uncommented and doesn't 
 listen_addresses = '*'
 ```
 
-In the `pg_hba.conf` in the section `# IPv4 local connections` allow connections from whole local network (or instead of `0.0.0.0/0` limit to specific subnet like `172.10.0.0/24` to be more secure):
+In the `pg_hba.conf` in the section `# IPv4 local connections` allow connections from whole local network (or instead of `0.0.0.0/0` limit to specific subnets like `172.10.0.0/24` - up to you and your requirements):
 
 ```bash
 # IPv4 local connections:
@@ -172,6 +174,8 @@ On Windows execute the following commands (replace `<version>` with number of yo
 net stop postgresql-x64-<version>
 net start postgresql-x64-<version>
 ```
+
+If you still will have issues, check you firewall and port rules (use `setup.py` to manage rules or do it manually by yourself).
 
 Enjoy! :)
 
