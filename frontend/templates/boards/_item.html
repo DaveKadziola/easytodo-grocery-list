@@ -1,0 +1,5 @@
+{# One item. Context: item (Item). -#}
+<li id="item-{{ item.id }}" data-item-id="{{ item.id }}" class="break-words{% if item.is_done %} text-slate-400 line-through{% endif %}">
+  {{ item.name }}
+  {% if item.description %}<p class="whitespace-pre-line text-sm text-slate-600">{{ item.description }}</p>{% endif %}
+</li>

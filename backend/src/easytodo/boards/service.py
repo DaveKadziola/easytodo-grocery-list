@@ -13,6 +13,10 @@ from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
 
 _NAME_MAX_LENGTH = 80  # boards.name is String(80)
 
+# How items are listed in a category, on the board page and in every fragment alike: open ones
+# first, then by name ignoring case.
+ITEM_ORDER = (Item.is_done, func.lower(Item.name), Item.id)
+
 
 @dataclass(frozen=True)
 class BoardSummary:
@@ -98,11 +102,7 @@ async def get_board_view(db: AsyncSession, board_id: int, user: User) -> BoardVi
             .order_by(Category.position, Category.id)
         )
     )
-    items = await db.scalars(
-        select(Item)
-        .where(Item.board_id == board.id)
-        .order_by(Item.is_done, func.lower(Item.name), Item.id)
-    )
+    items = await db.scalars(select(Item).where(Item.board_id == board.id).order_by(*ITEM_ORDER))
     by_category: dict[int, list[Item]] = {}
     for item in items:
         by_category.setdefault(item.category_id, []).append(item)

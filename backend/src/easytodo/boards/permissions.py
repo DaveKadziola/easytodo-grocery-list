@@ -29,6 +29,16 @@ def can(role: BoardRole, action: Action) -> bool:
     return action in _ALLOWED[role]
 
 
+def check_permission(role: BoardRole, action: Action) -> None:
+    if not can(role, action):
+        raise Forbidden("You don't have permission to do that.")
+
+
+def is_possible_id(value: int) -> bool:
+    """Whether ``value`` can be a row id at all; look up only those that can."""
+    return 0 < value <= _MAX_ID
+
+
 async def require_board(
     db: AsyncSession, board_id: int, user: User, action: Action
 ) -> tuple[Board, BoardRole]:
@@ -38,7 +48,7 @@ async def require_board(
     for admins too; a member whose role lacks ``action`` gets ``Forbidden``.
     """
     row = None
-    if 0 < board_id <= _MAX_ID:
+    if is_possible_id(board_id):
         row = (
             await db.execute(
                 select(Board, BoardMember.role)
@@ -49,6 +59,5 @@ async def require_board(
     if row is None:
         raise NotFound("Board not found.")
     board, role = row
-    if not can(role, action):
-        raise Forbidden("You don't have permission to do that.")
+    check_permission(role, action)
     return board, role

@@ -1,0 +1,9 @@
+{# The board's categories, in position order; swapped as a whole by GET /boards/{id}/content.
+   Context: view (BoardView). -#}
+<div id="board-content" data-board-id="{{ view.board.id }}" class="space-y-6">
+  {% for category_view in view.categories %}
+  {% include "boards/_category.html" %}
+  {% else %}
+  <p class="text-slate-600">This board has no categories yet.</p>
+  {% endfor %}
+</div>

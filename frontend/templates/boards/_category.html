@@ -1,0 +1,10 @@
+{# One category with its items (open first); swapped as a whole by GET /categories/{id}.
+   Context: category_view (CategoryView). -#}
+<section id="category-{{ category_view.category.id }}" data-category-id="{{ category_view.category.id }}" class="card">
+  <h2 class="break-words text-lg font-semibold">{{ category_view.category.name }}</h2>
+  <ul class="mt-2 space-y-1">
+    {% for item in category_view.items %}
+    {% include "boards/_item.html" %}
+    {% endfor %}
+  </ul>
+</section>

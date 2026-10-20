@@ -13,6 +13,7 @@ from easytodo.auth.account_routes import router as account_router
 from easytodo.auth.routes import router as auth_router
 from easytodo.boards.routes import router as boards_router
 from easytodo.config import Settings, get_settings
+from easytodo.content.routes import router as content_router
 from easytodo.db import create_engine
 from easytodo.errors import install_error_handlers
 from easytodo.middleware import (
@@ -68,5 +69,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(account_router)
     app.include_router(boards_router)
+    app.include_router(content_router)
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
     return app

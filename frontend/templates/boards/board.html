@@ -20,17 +20,6 @@
     {% endif %}
   </div>
 
-  {% for c in view.categories %}
-  <section class="card">
-    <h2 class="break-words text-lg font-semibold">{{ c.category.name }}</h2>
-    <ul class="mt-2 space-y-1">
-      {% for item in c.items %}
-      <li class="break-words{% if item.is_done %} text-slate-400 line-through{% endif %}">{{ item.name }}</li>
-      {% endfor %}
-    </ul>
-  </section>
-  {% else %}
-  <p class="text-slate-600">This board has no categories yet.</p>
-  {% endfor %}
+  {% include "boards/_board_content.html" %}
 </div>
 {% endblock %}

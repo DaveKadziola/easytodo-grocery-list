@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Form, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.auth.sessions import SESSION_COOKIE, load_session
@@ -11,6 +11,7 @@ from easytodo.errors import Forbidden, NotAuthenticated, PasswordChangeRequired
 from easytodo.models import User, UserSession, UserStatus
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+FormField = Annotated[str, Form()]
 
 PASSWORD_CHANGE_PATH = "/account/password"
 # The only paths a user who must change their password can still use.
@@ -42,3 +43,6 @@ async def require_user(request: Request, db: DbSession) -> User:
             raise PasswordChangeRequired(PASSWORD_CHANGE_PATH)
         raise Forbidden("You must change your password first.")
     return user
+
+
+CurrentUser = Annotated[User, Depends(require_user)]

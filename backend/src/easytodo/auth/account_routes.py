@@ -7,11 +7,10 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 
-from easytodo.auth.deps import DbSession, require_user
-from easytodo.auth.routes import FormField
+from easytodo.auth.deps import CurrentUser, DbSession, FormField, require_user
 from easytodo.auth.sessions import revoke_all_sessions, revoke_session
 from easytodo.errors import AppError, NotFound, ValidationFailed
-from easytodo.models import User, UserSession
+from easytodo.models import UserSession
 from easytodo.security.passwords import (
     MAX_PASSWORD_LENGTH,
     hash_password,
@@ -22,8 +21,6 @@ from easytodo.security.ratelimit import rate_limit
 from easytodo.web import flash, render
 
 router = APIRouter(prefix="/account")
-
-CurrentUser = Annotated[User, Depends(require_user)]
 
 _MAX_SESSION_ID = 2**63 - 1  # user_sessions.id is a BigInteger; a larger id cannot exist
 

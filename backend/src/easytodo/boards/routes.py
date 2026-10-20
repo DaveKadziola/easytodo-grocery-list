@@ -1,12 +1,9 @@
 """The board list and board pages, and creating, renaming and deleting boards."""
 
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse, Response
 
-from easytodo.auth.deps import DbSession, require_user
-from easytodo.auth.routes import FormField
+from easytodo.auth.deps import CurrentUser, DbSession, FormField
 from easytodo.boards.permissions import Action, can
 from easytodo.boards.service import (
     create_board,
@@ -16,12 +13,9 @@ from easytodo.boards.service import (
     rename_board,
 )
 from easytodo.errors import ValidationFailed
-from easytodo.models import User
 from easytodo.web import is_htmx, render
 
 router = APIRouter(prefix="/boards")
-
-CurrentUser = Annotated[User, Depends(require_user)]
 
 
 @router.get("")

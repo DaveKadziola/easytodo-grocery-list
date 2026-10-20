@@ -3,11 +3,11 @@
 import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from easytodo.auth.deps import DbSession, current_session, require_user
+from easytodo.auth.deps import DbSession, FormField, current_session, require_user
 from easytodo.auth.service import authenticate, register_user
 from easytodo.auth.sessions import (
     clear_session_cookie,
@@ -21,8 +21,6 @@ from easytodo.security.ratelimit import rate_limit
 from easytodo.web import render
 
 router = APIRouter()
-
-FormField = Annotated[str, Form()]
 
 # A backslash or an ASCII control character anywhere: browsers read "\" as "/" and drop tabs
 # and newlines, so "/\evil.example" and "/\t/evil.example" would leave the site.
