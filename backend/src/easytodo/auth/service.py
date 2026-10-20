@@ -7,6 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from easytodo.boards.service import create_board
 from easytodo.errors import AppError, Conflict, ValidationFailed
 from easytodo.models import User, UserStatus
 from easytodo.security.passwords import (
@@ -17,6 +18,7 @@ from easytodo.security.passwords import (
     verify_password,
 )
 
+DEFAULT_BOARD_NAME = "My list"
 MAX_FAILED_LOGINS = 10
 LOCKOUT_DURATION = timedelta(minutes=15)
 
@@ -50,15 +52,17 @@ def normalize_email(email: str) -> str:
 
 
 async def register_user(db: AsyncSession, email: str, password: str) -> User:
+    """A new account with its first board, "My list" (one transaction)."""
     email = normalize_email(email)
     validate_password(password)
     user = User(email=email, password_hash=hash_password(password))
     db.add(user)
     try:
-        await db.commit()
+        await db.flush()
     except IntegrityError:  # users.email is unique; also covers two concurrent submits
         await db.rollback()
         raise Conflict("An account with this email already exists.") from None
+    await create_board(db, user, DEFAULT_BOARD_NAME)  # commits the user too
     return user
 
 

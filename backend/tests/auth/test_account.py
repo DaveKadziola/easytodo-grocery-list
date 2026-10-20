@@ -180,6 +180,8 @@ async def test_must_change_password_redirects_everything(client, db):
     assert r.status_code == 303 and r.headers["location"] == "/account/password"
     r = await client.get("/account")
     assert r.status_code == 303 and r.headers["location"] == "/account/password"
+    r = await client.get("/boards")
+    assert r.status_code == 303 and r.headers["location"] == "/account/password"
 
     page = await client.get("/account/password")  # the one page that stays reachable
     assert page.status_code == 200
@@ -263,13 +265,14 @@ async def test_must_change_password_still_allows_sign_out(client, db):
 async def test_must_change_password_flag_cleared_after_change(client, db):
     await create_user(db, EMAIL, must_change_password=True)
     await sign_in(client)
-    assert (await client.get("/")).status_code == 303
+    assert (await client.get("/")).headers["location"] == "/account/password"
 
     r = await client.post("/account/password", data=change_form())
 
     assert r.status_code == 303 and r.headers["location"] == "/account"
     assert await db.scalar(select(User.must_change_password)) is False
-    assert (await client.get("/")).status_code == 200
+    r = await client.get("/")
+    assert r.status_code == 303 and r.headers["location"] == "/boards"
     assert (await client.get("/account")).status_code == 200
 
 
@@ -355,7 +358,7 @@ async def test_account_pages_require_sign_in(client):
 async def test_header_links_to_the_account_page(client, db):
     await create_user(db, EMAIL)
     await sign_in(client)
-    assert 'href="/account"' in (await client.get("/")).text
+    assert 'href="/account"' in (await client.get("/boards")).text
 
 
 async def test_cannot_revoke_someone_elses_session(client_factory, db):

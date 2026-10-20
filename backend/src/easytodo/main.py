@@ -11,10 +11,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from easytodo.auth.account_routes import router as account_router
 from easytodo.auth.routes import router as auth_router
+from easytodo.boards.routes import router as boards_router
 from easytodo.config import Settings, get_settings
 from easytodo.db import create_engine
 from easytodo.errors import install_error_handlers
-from easytodo.middleware import CsrfCookieMiddleware, SecurityHeadersMiddleware
+from easytodo.middleware import (
+    ClientIdMiddleware,
+    CsrfCookieMiddleware,
+    SecurityHeadersMiddleware,
+)
 from easytodo.security.csrf import verify_csrf
 from easytodo.security.ratelimit import RateLimiter
 from easytodo.web import FRONTEND_DIR
@@ -46,6 +51,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.rate_limiter = RateLimiter()
     install_error_handlers(app)
+    app.add_middleware(ClientIdMiddleware)
     app.add_middleware(GZipMiddleware, minimum_size=1000)
     app.add_middleware(CsrfCookieMiddleware, settings=settings)
     app.add_middleware(SecurityHeadersMiddleware, settings=settings)  # outermost
@@ -61,5 +67,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(account_router)
+    app.include_router(boards_router)
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
     return app

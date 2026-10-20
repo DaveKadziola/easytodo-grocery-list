@@ -2,13 +2,17 @@
 
 from http.cookies import SimpleCookie
 
-from starlette.datastructures import MutableHeaders
+from starlette.datastructures import Headers, MutableHeaders
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from easytodo.config import Settings
+from easytodo.realtime.events import current_origin
 from easytodo.security.csrf import CSRF_COOKIE
 from easytodo.security.tokens import new_token
+
+CLIENT_ID_HEADER = "X-Client-Id"  # sent by static/js/app.js on every htmx request
+CLIENT_ID_MAX_LENGTH = 64
 
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -52,6 +56,28 @@ class CsrfCookieMiddleware:
         if self.secure:
             cookie[CSRF_COOKIE]["secure"] = True
         return cookie.output(header="").strip()
+
+
+class ClientIdMiddleware:
+    """Sets ``current_origin`` to the request's ``X-Client-Id`` (the browser tab's id) while the
+    request is handled, so the events it causes can skip that tab. A value longer than 64
+    characters is ignored."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        client_id = Headers(scope=scope).get(CLIENT_ID_HEADER)
+        if client_id is not None and not 0 < len(client_id) <= CLIENT_ID_MAX_LENGTH:
+            client_id = None
+        token = current_origin.set(client_id)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            current_origin.reset(token)
 
 
 class SecurityHeadersMiddleware:

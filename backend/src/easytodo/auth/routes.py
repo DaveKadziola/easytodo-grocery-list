@@ -1,4 +1,4 @@
-"""Registration, login and logout pages, and the signed-in home page."""
+"""Registration, login and logout pages, and the landing page (``/``)."""
 
 import re
 from typing import Annotated
@@ -116,6 +116,8 @@ async def logout(
     return response
 
 
+# require_user first: anonymous users go to the login page, and users who must change their
+# password to the password form, before anything else.
 @router.get("/", dependencies=[Depends(require_user)])
-async def home(request: Request) -> Response:
-    return render(request, "home.html", {})
+async def home() -> Response:
+    return RedirectResponse("/boards", status_code=303)

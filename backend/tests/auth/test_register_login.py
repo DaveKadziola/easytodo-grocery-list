@@ -43,15 +43,15 @@ async def test_register_logs_in_and_normalizes_email(client, db):
     assert (await db.scalar(select(User.email))) == "dave@example.com"
     cookie = r.headers["set-cookie"]
     assert "easytodo_session=" in cookie and "HttpOnly" in cookie and "SameSite=lax" in cookie
-    r = await client.get("/")
+    r = await client.get("/boards")
     assert r.status_code == 200
-    assert "Signed in as dave@example.com" in r.text
+    assert "dave@example.com" in r.text  # the header shows who is signed in
 
 
 async def test_email_is_normalized_everywhere(client, db):  # Review Focus 5
     await create_user(db, "dave@example.com")
     await login(client, "  DAVE@example.com")
-    assert "Signed in as dave@example.com" in (await client.get("/")).text
+    assert "dave@example.com" in (await client.get("/boards")).text
 
     r = await post_form(client, "/register", email=" Dave@Example.com ", password=DEFAULT_PASSWORD)
     assert r.status_code == 400
