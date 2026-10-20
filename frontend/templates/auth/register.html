@@ -3,7 +3,8 @@
 {% block content %}
 <div class="mx-auto w-full max-w-sm">
   <h1 class="text-2xl font-semibold">Create account</h1>
-  <form method="post" action="/register" class="card mt-6 space-y-4">
+  {# No action: the form posts back to this URL, so a ?next= target survives. -#}
+  <form method="post" class="card mt-6 space-y-4">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     {% if error %}<p role="alert" class="form-error">{{ error }}</p>{% endif %}
     <div>
@@ -17,6 +18,6 @@
     </div>
     <button type="submit" class="btn-primary w-full">Create account</button>
   </form>
-  <p class="mt-6 text-center text-sm text-slate-600">Already have an account? <a href="/login" class="link">Sign in</a></p>
+  <p class="mt-6 text-center text-sm text-slate-600">Already have an account? <a href="/login{% if next_path %}?next={{ next_path|urlencode }}{% endif %}" class="link">Sign in</a></p>
 </div>
 {% endblock %}

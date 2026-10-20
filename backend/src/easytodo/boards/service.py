@@ -1,17 +1,21 @@
-"""Creating, listing, renaming and deleting boards, and loading a whole board for display."""
+"""Creating, listing, renaming and deleting boards, loading a whole board for display, and the
+board's members: listing them, changing their roles, removing them and leaving."""
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from easytodo.boards.permissions import Action, require_board
-from easytodo.errors import ValidationFailed
+from easytodo.boards.permissions import Action, is_possible_id, require_board
+from easytodo.errors import Conflict, Forbidden, NotFound, ValidationFailed
 from easytodo.models import Board, BoardMember, BoardRole, Category, Item, User
 from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
 
 _NAME_MAX_LENGTH = 80  # boards.name is String(80)
+OWNER_ROLE_FIXED = "The owner's role can't be changed."
+OWNER_CANNOT_LEAVE = "The owner can't leave. Delete the board instead."
 
 # How items are listed in a category, on the board page and in every fragment alike: open ones
 # first, then by name ignoring case.
@@ -37,6 +41,14 @@ class BoardView:
     board: Board
     role: BoardRole
     categories: list[CategoryView]
+
+
+@dataclass(frozen=True)
+class MemberView:
+    user_id: int
+    email: str
+    role: BoardRole
+    joined_at: datetime
 
 
 def _clean_name(name: str) -> str:
@@ -108,3 +120,63 @@ async def get_board_view(db: AsyncSession, board_id: int, user: User) -> BoardVi
         by_category.setdefault(item.category_id, []).append(item)
     views = [CategoryView(c, by_category.get(c.id, [])) for c in categories]
     return BoardView(board, role, views)
+
+
+async def list_members(db: AsyncSession, board_id: int, user: User) -> list[MemberView]:
+    """The board's members: the owner first, then by e-mail."""
+    board, _ = await require_board(db, board_id, user, Action.VIEW)
+    rows = await db.execute(
+        select(User.id, User.email, BoardMember.role, BoardMember.joined_at)
+        .join(BoardMember, BoardMember.user_id == User.id)
+        .where(BoardMember.board_id == board.id)
+        .order_by((BoardMember.role == BoardRole.OWNER).desc(), User.email)
+    )
+    return [MemberView(*row) for row in rows]
+
+
+async def _member(db: AsyncSession, board_id: int, member_user_id: int) -> BoardMember:
+    member = None
+    if is_possible_id(member_user_id):
+        member = await db.get(BoardMember, (board_id, member_user_id))
+    if member is None:
+        raise NotFound("Member not found.")
+    return member
+
+
+async def change_role(
+    db: AsyncSession, board_id: int, user: User, member_user_id: int, role: BoardRole
+) -> None:
+    """Make the member an editor or a viewer; the owner stays the owner, and nobody becomes one."""
+    await require_board(db, board_id, user, Action.MANAGE_MEMBERS)
+    member = await _member(db, board_id, member_user_id)
+    if role == BoardRole.OWNER or member.role == BoardRole.OWNER:
+        raise Forbidden(OWNER_ROLE_FIXED)
+    member.role = role
+    # Names the member: their own open board pages need a full reload, as their controls change.
+    await commit_and_publish(
+        db, BoardEvent(EventType.BOARD_UPDATED, board_id=board_id, user_id=member_user_id)
+    )
+
+
+async def remove_member(db: AsyncSession, board_id: int, user: User, member_user_id: int) -> None:
+    await require_board(db, board_id, user, Action.MANAGE_MEMBERS)
+    member = await _member(db, board_id, member_user_id)
+    if member.role == BoardRole.OWNER:  # only owners manage members, so: the owner leaving
+        raise Conflict(OWNER_CANNOT_LEAVE)
+    await _delete_member(db, member)
+
+
+async def leave_board(db: AsyncSession, board_id: int, user: User) -> None:
+    _, role = await require_board(db, board_id, user, Action.VIEW)
+    if role == BoardRole.OWNER:
+        raise Conflict(OWNER_CANNOT_LEAVE)
+    await _delete_member(db, await _member(db, board_id, user.id))
+
+
+async def _delete_member(db: AsyncSession, member: BoardMember) -> None:
+    """Delete the membership; ``MEMBER_REMOVED`` names the user, whose open pages are closed."""
+    await db.delete(member)
+    await commit_and_publish(
+        db,
+        BoardEvent(EventType.MEMBER_REMOVED, board_id=member.board_id, user_id=member.user_id),
+    )

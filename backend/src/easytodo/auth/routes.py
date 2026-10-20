@@ -22,6 +22,9 @@ from easytodo.web import render
 
 router = APIRouter()
 
+# Where to go after signing in or up (a path on this site; see safe_next).
+NextParam = Annotated[str | None, Query(alias="next")]
+
 # A backslash or an ASCII control character anywhere: browsers read "\" as "/" and drop tabs
 # and newlines, so "/\evil.example" and "/\t/evil.example" would leave the site.
 _UNSAFE_IN_NEXT = re.compile(r"[\\\x00-\x1f\x7f]")
@@ -62,9 +65,15 @@ async def _signed_in_redirect(
     return response
 
 
+def _kept_next(next_: str | None) -> str | None:
+    """The ``next`` target that the links between the sign-in and sign-up pages pass on."""
+    target = safe_next(next_)
+    return None if target == "/" else target
+
+
 @router.get("/register", dependencies=[Depends(require_registration_open)])
-async def register_page(request: Request) -> Response:
-    return render(request, "auth/register.html", {"email": ""})
+async def register_page(request: Request, next_: NextParam = None) -> Response:
+    return render(request, "auth/register.html", {"email": "", "next_path": _kept_next(next_)})
 
 
 @router.post(
@@ -72,19 +81,23 @@ async def register_page(request: Request) -> Response:
     dependencies=[Depends(require_registration_open), Depends(rate_limit("register", 10, 3600))],
 )
 async def register(
-    request: Request, db: DbSession, email: FormField = "", password: FormField = ""
+    request: Request,
+    db: DbSession,
+    email: FormField = "",
+    password: FormField = "",
+    next_: NextParam = None,
 ) -> Response:
     try:
         user = await register_user(db, email, password)
     except AppError as exc:
-        context = {"email": email, "error": exc.message}
+        context = {"email": email, "error": exc.message, "next_path": _kept_next(next_)}
         return render(request, "auth/register.html", context, status_code=400)
-    return await _signed_in_redirect(request, db, user, "/")
+    return await _signed_in_redirect(request, db, user, safe_next(next_))
 
 
 @router.get("/login")
-async def login_page(request: Request) -> Response:
-    return render(request, "auth/login.html", {"email": ""})
+async def login_page(request: Request, next_: NextParam = None) -> Response:
+    return render(request, "auth/login.html", {"email": "", "next_path": _kept_next(next_)})
 
 
 @router.post("/login", dependencies=[Depends(rate_limit("login", 20, 300))])
@@ -93,12 +106,12 @@ async def login(
     db: DbSession,
     email: FormField = "",
     password: FormField = "",
-    next_: Annotated[str | None, Query(alias="next")] = None,
+    next_: NextParam = None,
 ) -> Response:
     try:
         user = await authenticate(db, email, password)
     except AppError as exc:
-        context = {"email": email, "error": exc.message}
+        context = {"email": email, "error": exc.message, "next_path": _kept_next(next_)}
         return render(request, "auth/login.html", context, status_code=400)
     return await _signed_in_redirect(request, db, user, safe_next(next_))
 

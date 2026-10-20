@@ -18,6 +18,7 @@ from starlette.types import ASGIApp
 import easytodo.models  # noqa: F401  (registers every table on Base.metadata)
 from easytodo.config import Settings
 from easytodo.db import Base
+from easytodo.mail.mailer import SentMail
 from easytodo.main import create_app
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -103,6 +104,13 @@ def _new_client(asgi_app: ASGIApp, origin: str = BASE_URL) -> httpx.AsyncClient:
         base_url=origin,
         headers={"Origin": origin},
     )
+
+
+@pytest.fixture
+def mail_outbox(app: FastAPI, _running_app: ASGIApp) -> list[SentMail]:
+    """The mails ``app`` has sent so far, oldest first (the test settings use the console
+    backend, which keeps them)."""
+    return app.state.mailer.outbox
 
 
 @pytest.fixture

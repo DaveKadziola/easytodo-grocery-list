@@ -10,16 +10,17 @@
       <a href="/boards" class="link inline-flex min-h-11 items-center text-sm">All boards</a>
       <h1 class="break-words text-2xl font-semibold">{{ view.board.name }}</h1>
     </div>
-    {% if can(role, Action.MANAGE_BOARD) %}
     <div class="flex flex-wrap items-center gap-2">
+      <a href="/boards/{{ view.board.id }}/members" class="btn-secondary">Members</a>
+      {% if can(role, Action.MANAGE_BOARD) %}
       <form hx-patch="/boards/{{ view.board.id }}" class="flex gap-2">
         <label for="board-name" class="sr-only">Board name</label>
         <input id="board-name" name="name" value="{{ view.board.name }}" required maxlength="80" autocomplete="off" class="input">
         <button type="submit" class="btn-secondary shrink-0">Rename</button>
       </form>
       <button type="button" class="btn-secondary" hx-delete="/boards/{{ view.board.id }}" hx-confirm="Delete this board with all its categories and items?">Delete board</button>
+      {% endif %}
     </div>
-    {% endif %}
   </div>
 
   {% if can_edit %}

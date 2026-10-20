@@ -1,0 +1,10 @@
+Subject: {{ inviter }} invited you to a board on EasyToDo
+
+{{ inviter }} invited you to the board "{{ board_name }}" on EasyToDo as {{ "an editor" if role == "editor" else "a viewer" }}.
+
+Open this link to join:
+{{ link }}
+
+The link works once, for the account with this email address ({{ email }}), and expires in {{ valid_days }} days. If you don't have an account yet, you can create one after opening the link.
+
+If you weren't expecting this invite, you can ignore this email.

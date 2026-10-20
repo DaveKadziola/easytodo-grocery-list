@@ -1,4 +1,5 @@
-// Page shell: headers for every HTMX request, and toasts from HX-Trigger or the flash cookie.
+// Page shell: headers for every HTMX request, toasts from HX-Trigger or the flash cookie, and
+// copy buttons.
 (() => {
   "use strict";
 
@@ -70,4 +71,21 @@
     }
   }
   showFlash();
+
+  // <button data-copy="field-id">: copies that field's value (an invite link). The Clipboard API
+  // exists only in secure contexts, so a plain-http LAN install falls back to execCommand.
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-copy]");
+    const field = button && document.getElementById(button.dataset.copy);
+    if (!field) return;
+    field.select();
+    let copied;
+    try {
+      await navigator.clipboard.writeText(field.value);
+      copied = true;
+    } catch {
+      copied = document.execCommand("copy");
+    }
+    if (copied) showToast("info", "Copied.");
+  });
 })();

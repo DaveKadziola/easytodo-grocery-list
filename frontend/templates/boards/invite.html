@@ -1,0 +1,19 @@
+{# The page an invite link leads to. Context: token, preview (InvitePreview). -#}
+{% extends "base.html" %}
+{% block title %}Invite · EasyToDo{% endblock %}
+{% block content %}
+<div class="mx-auto w-full max-w-sm">
+  <h1 class="text-2xl font-semibold">You're invited</h1>
+  <div class="card mt-6 space-y-4">
+    <p class="break-words">
+      {{ preview.invited_by }} invited you to the board
+      <strong class="font-semibold">{{ preview.board_name }}</strong>
+      as {{ "an editor" if preview.role == "editor" else "a viewer" }}.
+    </p>
+    <form method="post" action="/invite/{{ token }}/accept">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="btn-primary w-full">Join board</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

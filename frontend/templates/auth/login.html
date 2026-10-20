@@ -18,7 +18,8 @@
     <button type="submit" class="btn-primary w-full">Sign in</button>
   </form>
   {% if settings.registration_open %}
-  <p class="mt-6 text-center text-sm text-slate-600">No account yet? <a href="/register" class="link">Create one</a></p>
+  {#- next_path: where signing up should lead too (an invite link, say). -#}
+  <p class="mt-6 text-center text-sm text-slate-600">No account yet? <a href="/register{% if next_path %}?next={{ next_path|urlencode }}{% endif %}" class="link">Create an account</a></p>
   {% endif %}
 </div>
 {% endblock %}
