@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from easytodo.auth.account_routes import router as account_router
 from easytodo.auth.routes import router as auth_router
 from easytodo.config import Settings, get_settings
 from easytodo.db import create_engine
@@ -59,5 +60,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"status": "ok", "db": "ok"})
 
     app.include_router(auth_router)
+    app.include_router(account_router)
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
     return app

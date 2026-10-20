@@ -5,7 +5,7 @@ import re
 import pytest
 
 from easytodo.security.csrf import CSRF_COOKIE
-from easytodo.web import FRONTEND_DIR
+from easytodo.web import FLASH_COOKIE, FRONTEND_DIR
 
 VENDOR_SCRIPTS = {
     "htmx-2.0.4.min.js": "2.0.4",
@@ -58,3 +58,8 @@ def test_js_never_parses_strings_as_html():
         source = path.read_text()
         for sink in ("innerHTML", "insertAdjacentHTML"):
             assert sink not in source, f"{path.name} uses {sink}"
+
+
+def test_app_js_reads_the_cookie_the_server_sets_for_flash_toasts():
+    source = (FRONTEND_DIR / "static" / "js" / "app.js").read_text()
+    assert f'"{FLASH_COOKIE}"' in source

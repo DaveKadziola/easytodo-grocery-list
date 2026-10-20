@@ -2,7 +2,8 @@
 
 HTMX requests get an empty body with ``HX-Reswap: none`` and an ``HX-Trigger`` toast (plus
 ``resync`` for ``NotFound``, so the client reloads a board that changed elsewhere); other
-requests get the error page, or a redirect to the login page for ``NotAuthenticated``.
+requests get the error page, or a redirect to the login page for ``NotAuthenticated`` (and to
+the password form for ``PasswordChangeRequired``).
 """
 
 import json
@@ -49,12 +50,26 @@ class NotAuthenticated(AppError):
         super().__init__(message)
 
 
+class PasswordChangeRequired(AppError):
+    """A signed-in user who must pick a new password asked for a page; they go to ``location``."""
+
+    status_code = 303
+
+    def __init__(self, location: str) -> None:
+        super().__init__("You must change your password first.")
+        self.location = location
+
+
 async def app_error_handler(request: Request, exc: AppError) -> Response:
     if isinstance(exc, NotAuthenticated):
         if is_htmx(request):
             return Response(status_code=401, headers={"HX-Redirect": "/login"})
         target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
         return RedirectResponse(f"/login?next={quote(target, safe='')}", status_code=303)
+    if isinstance(exc, PasswordChangeRequired):
+        if is_htmx(request):
+            return Response(headers={"HX-Redirect": exc.location})
+        return RedirectResponse(exc.location, status_code=303)
     if is_htmx(request):
         trigger: dict[str, object] = {"toast": {"level": "error", "message": exc.message}}
         if isinstance(exc, NotFound):

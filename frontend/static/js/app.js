@@ -1,8 +1,9 @@
-// Page shell: headers for every HTMX request, and toasts from HX-Trigger.
+// Page shell: headers for every HTMX request, and toasts from HX-Trigger or the flash cookie.
 (() => {
   "use strict";
 
   const CLIENT_ID_KEY = "easytodo.clientId";
+  const FLASH_COOKIE = "easytodo_flash";
   let pageClientId = null;
 
   function randomId() {
@@ -38,15 +39,35 @@
     event.detail.headers["X-Client-Id"] = clientId();
   });
 
-  // HX-Trigger: {"toast": {"level": "error", "message": "..."}}. The message may quote names
-  // that other board members chose, so it is only ever set as text.
-  document.addEventListener("toast", (event) => {
+  // The message may quote names that other board members chose, so it is only ever set as text.
+  function showToast(level, message) {
     const container = document.getElementById("toasts");
-    const { level, message } = event.detail || {};
     if (!container || !message) return;
     const toast = document.createElement("div");
     toast.className = level === "error" ? "toast toast-error" : "toast";
     toast.textContent = message;
     container.appendChild(toast);
+  }
+
+  // HX-Trigger: {"toast": {"level": "error", "message": "..."}}
+  document.addEventListener("toast", (event) => {
+    const { level, message } = event.detail || {};
+    showToast(level, message);
   });
+
+  // A redirect after a plain form post cannot carry HX-Trigger, so the server leaves the toast in
+  // this cookie (percent-encoded JSON, see easytodo.web.flash). Show it once and delete it.
+  function showFlash() {
+    const prefix = FLASH_COOKIE + "=";
+    const entry = document.cookie.split("; ").find((part) => part.startsWith(prefix));
+    if (!entry) return;
+    document.cookie = FLASH_COOKIE + "=; Max-Age=0; Path=/; SameSite=Lax";
+    try {
+      const { level, message } = JSON.parse(decodeURIComponent(entry.slice(prefix.length)));
+      showToast(level, message);
+    } catch {
+      // A malformed cookie is ignored.
+    }
+  }
+  showFlash();
 })();
