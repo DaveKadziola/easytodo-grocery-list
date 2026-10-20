@@ -36,7 +36,7 @@ async def test_base_layout(client):
 @pytest.mark.parametrize(
     "path",
     [f"/static/vendor/{name}" for name in VENDOR_SCRIPTS]
-    + ["/static/js/app.js", "/static/images/favicon.webp"],
+    + ["/static/js/app.js", "/static/js/board.js", "/static/images/favicon.webp"],
 )
 async def test_static_files_are_served(client, path):
     r = await client.get(path)

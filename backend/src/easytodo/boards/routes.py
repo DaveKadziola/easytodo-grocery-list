@@ -4,7 +4,6 @@ from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse, Response
 
 from easytodo.auth.deps import CurrentUser, DbSession, FormField
-from easytodo.boards.permissions import Action, can
 from easytodo.boards.service import (
     create_board,
     delete_board,
@@ -38,9 +37,7 @@ async def new_board(
 
 @router.get("/{board_id}")
 async def board_page(request: Request, db: DbSession, user: CurrentUser, board_id: int) -> Response:
-    view = await get_board_view(db, board_id, user)
-    context = {"view": view, "can_manage_board": can(view.role, Action.MANAGE_BOARD)}
-    return render(request, "boards/board.html", context)
+    return render(request, "boards/board.html", {"view": await get_board_view(db, board_id, user)})
 
 
 @router.patch("/{board_id}")

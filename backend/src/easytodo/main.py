@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from easytodo.auth.account_routes import router as account_router
 from easytodo.auth.routes import router as auth_router
+from easytodo.boards.permissions import Action, can
 from easytodo.boards.routes import router as boards_router
 from easytodo.config import Settings, get_settings
 from easytodo.content.routes import router as content_router
@@ -23,7 +24,7 @@ from easytodo.middleware import (
 )
 from easytodo.security.csrf import verify_csrf
 from easytodo.security.ratelimit import RateLimiter
-from easytodo.web import FRONTEND_DIR
+from easytodo.web import FRONTEND_DIR, templates
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -52,6 +53,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.rate_limiter = RateLimiter()
     install_error_handlers(app)
+    # Templates show controls by the member's role: {% if can(role, Action.EDIT_CONTENT) %}.
+    templates.env.globals.update(can=can, Action=Action)
     app.add_middleware(ClientIdMiddleware)
     app.add_middleware(GZipMiddleware, minimum_size=1000)
     app.add_middleware(CsrfCookieMiddleware, settings=settings)

@@ -54,16 +54,20 @@ async def _db_engine(_migrated_db: None) -> AsyncIterator[AsyncEngine]:
     await engine.dispose()
 
 
+async def truncate_all_tables(engine: AsyncEngine) -> None:
+    tables = Base.metadata.sorted_tables
+    if not tables:
+        return
+    async with engine.begin() as conn:
+        names = ", ".join(conn.dialect.identifier_preparer.format_table(t) for t in tables)
+        await conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+
+
 @pytest.fixture
 async def _clean_db(_db_engine: AsyncEngine) -> AsyncIterator[None]:
     """Empties every table after the test (set up before, torn down after app and db)."""
     yield
-    tables = Base.metadata.sorted_tables
-    if not tables:
-        return
-    async with _db_engine.begin() as conn:
-        names = ", ".join(conn.dialect.identifier_preparer.format_table(t) for t in tables)
-        await conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+    await truncate_all_tables(_db_engine)
 
 
 def _test_settings(**overrides: object) -> Settings:

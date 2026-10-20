@@ -1,5 +1,18 @@
-{# One item. Context: item (Item). -#}
-<li id="item-{{ item.id }}" data-item-id="{{ item.id }}" class="break-words{% if item.is_done %} text-slate-400 line-through{% endif %}">
-  {{ item.name }}
-  {% if item.description %}<p class="whitespace-pre-line text-sm text-slate-600">{{ item.description }}</p>{% endif %}
+{# One item; done items are struck through. The name opens the item modal, which reads the item
+   from the data-* attributes only (autoescaped like any other value).
+   Context: item (Item), can_edit. -#}
+<li id="item-{{ item.id }}" data-item-id="{{ item.id }}" class="flex items-start{% if item.is_done %} text-slate-400 line-through{% endif %}">
+  {% if can_edit %}
+  <label class="tap-target -ml-2.5">
+    <input type="checkbox" class="size-5 accent-emerald-600" aria-labelledby="item-{{ item.id }}-name" hx-post="/items/{{ item.id }}/toggle" hx-target="#category-{{ item.category_id }}"{% if item.is_done %} checked{% endif %}>
+  </label>
+  {% endif %}
+  <div class="min-w-0 flex-1">
+    {% if can_edit %}
+    <button type="button" id="item-{{ item.id }}-name" class="item-name" data-name="{{ item.name }}" data-description="{{ item.description or '' }}" @click="openItem">{{ item.name }}</button>
+    {% else %}
+    <p class="break-words py-2.5">{{ item.name }}</p>
+    {% endif %}
+    {% if item.description %}<p class="-mt-1.5 whitespace-pre-line break-words pb-2 text-sm text-slate-600">{{ item.description }}</p>{% endif %}
+  </div>
 </li>

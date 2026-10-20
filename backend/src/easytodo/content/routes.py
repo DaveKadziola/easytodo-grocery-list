@@ -8,7 +8,7 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.auth.deps import CurrentUser, DbSession, FormField
-from easytodo.boards.service import BoardView, CategoryView, get_board_view
+from easytodo.boards.service import BoardView, get_board_view
 from easytodo.content.service import (
     clear_done,
     create_category,
@@ -34,15 +34,13 @@ def _board_content(request: Request, view: BoardView) -> Response:
     return render(request, "boards/_board_content.html", {"view": view})
 
 
-def _category(request: Request, view: CategoryView, status_code: int = 200) -> Response:
-    return render(request, "boards/_category.html", {"category_view": view}, status_code)
-
-
 async def _current_category(
-    request: Request, db: AsyncSession, user: User, category_id: int
+    request: Request, db: AsyncSession, user: User, category_id: int, status_code: int = 200
 ) -> Response:
-    view, _ = await get_category_view(db, category_id, user)
-    return _category(request, view)
+    """The category's fragment, with the controls ``user``'s role allows."""
+    view, role = await get_category_view(db, category_id, user)
+    context = {"category_view": view, "role": role}
+    return render(request, "boards/_category.html", context, status_code)
 
 
 @router.get("/boards/{board_id}/content")
@@ -57,7 +55,7 @@ async def new_category(
     request: Request, db: DbSession, user: CurrentUser, board_id: int, name: FormField = ""
 ) -> Response:
     category = await create_category(db, board_id, user, name)
-    return _category(request, CategoryView(category, []), status_code=201)
+    return await _current_category(request, db, user, category.id, status_code=201)
 
 
 @router.put("/boards/{board_id}/categories/order")

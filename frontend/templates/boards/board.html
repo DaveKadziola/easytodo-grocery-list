@@ -1,25 +1,16 @@
-{# Context: view (BoardView), can_manage_board. -#}
+{# Context: view (BoardView). The board is rendered inline, so the first view is ready HTML. -#}
 {% extends "base.html" %}
 {% block title %}{{ view.board.name }} · EasyToDo{% endblock %}
+{% block scripts %}
+  <script src="/static/js/board.js" defer></script>
+{% endblock %}
 {% block content %}
-<div class="space-y-6">
-  <div class="flex flex-wrap items-end justify-between gap-4">
-    <div class="min-w-0">
-      <a href="/boards" class="link text-sm">All boards</a>
-      <h1 class="mt-1 break-words text-2xl font-semibold">{{ view.board.name }}</h1>
-    </div>
-    {% if can_manage_board %}
-    <div class="flex flex-wrap items-center gap-2">
-      <form hx-patch="/boards/{{ view.board.id }}" class="flex gap-2">
-        <label for="board-name" class="sr-only">Board name</label>
-        <input id="board-name" name="name" value="{{ view.board.name }}" required maxlength="80" autocomplete="off" class="input">
-        <button type="submit" class="btn-secondary shrink-0">Rename</button>
-      </form>
-      <button type="button" class="btn-secondary" hx-delete="/boards/{{ view.board.id }}" hx-confirm="Delete this board with all its categories and items?">Delete board</button>
-    </div>
-    {% endif %}
-  </div>
-
+{% if can(view.role, Action.EDIT_CONTENT) %}
+<div x-data="itemModal">
   {% include "boards/_board_content.html" %}
+  {% include "boards/_item_modal.html" %}
 </div>
+{% else %}
+{% include "boards/_board_content.html" %}
+{% endif %}
 {% endblock %}

@@ -28,6 +28,42 @@
     @apply hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600;
   }
 
+  .btn-danger {
+    @apply inline-flex min-h-11 items-center justify-center rounded-lg px-3 text-sm font-medium text-red-700 ring-1 ring-red-200;
+    @apply hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600;
+  }
+
+  /* A 44×44 px icon button (category handle, menu). */
+  .btn-icon {
+    @apply inline-flex size-11 items-center justify-center rounded-lg text-xl leading-none;
+    @apply hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600;
+  }
+
+  /* The 44×44 px area around an item's checkbox; tapping anywhere in it ticks the item. */
+  .tap-target {
+    @apply flex size-11 shrink-0 cursor-pointer items-center justify-center;
+  }
+
+  .item-name {
+    @apply block min-h-11 w-full break-words py-2.5 text-left;
+    @apply rounded focus-visible:outline-2 focus-visible:outline-emerald-600;
+  }
+
+  /* The category menu, opened from its <details> summary. */
+  .menu {
+    @apply absolute right-0 z-10 mt-1 w-64 rounded-lg bg-white p-1 shadow-lg ring-1 ring-slate-200;
+  }
+
+  .menu-item {
+    @apply flex min-h-11 w-full items-center rounded-md px-3 text-left text-sm font-medium;
+    @apply hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-emerald-600;
+  }
+
+  /* Where a dragged item or category will land. */
+  .sortable-ghost {
+    @apply opacity-40;
+  }
+
   .link {
     @apply font-medium text-emerald-700 underline-offset-2 hover:underline;
   }
@@ -43,4 +79,9 @@
   .toast-error {
     @apply bg-red-700;
   }
+}
+
+/* Hidden until Alpine has started (it removes the attribute), so the modal never flashes. */
+[x-cloak] {
+  display: none !important;
 }

@@ -1,0 +1,30 @@
+{# The item modal: Alpine component "itemModal" (static/js/board.js), on an element around the board
+   content. board.js fills the fields (as text) from the data-* attributes of the item name that
+   was clicked, never from values written into a script, and the category list from the
+   categories on the page. The CSP build of Alpine cannot assign, so there is no x-model. -#}
+<div x-show="open" x-cloak class="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/50 sm:items-center sm:p-4" @click.self="close" @keydown.escape="close">
+  <div role="dialog" aria-modal="true" aria-labelledby="item-modal-title" class="max-h-dvh w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl sm:rounded-2xl">
+    <h2 id="item-modal-title" class="text-lg font-semibold">Edit item</h2>
+    <form x-ref="form" @submit.prevent="save" class="mt-4 space-y-4">
+      <div>
+        <label for="item-modal-name" class="label">Name</label>
+        <input id="item-modal-name" name="name" x-ref="name" required maxlength="200" autocomplete="off" class="input">
+      </div>
+      <div>
+        <label for="item-modal-description" class="label">Description</label>
+        <textarea id="item-modal-description" name="description" x-ref="description" maxlength="2000" rows="3" class="input py-2"></textarea>
+      </div>
+      <div>
+        <label for="item-modal-category" class="label">Category</label>
+        <select id="item-modal-category" x-ref="category" class="input"></select>
+      </div>
+      <div class="flex flex-wrap items-center justify-between gap-2 pt-2">
+        <button type="button" class="btn-danger" @click="remove">Delete item</button>
+        <div class="flex gap-2">
+          <button type="button" class="btn-secondary" @click="close">Cancel</button>
+          <button type="submit" class="btn-primary">Save</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
