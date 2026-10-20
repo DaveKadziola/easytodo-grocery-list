@@ -1,9 +1,12 @@
 from collections.abc import AsyncIterator
+from datetime import datetime
+from typing import Any, ClassVar
 
 from fastapi import Request
-from sqlalchemy import MetaData
+from sqlalchemy import DateTime, MetaData
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.types import TypeEngine
 
 from easytodo.config import Settings
 
@@ -18,6 +21,8 @@ class Base(DeclarativeBase):
             "pk": "pk_%(table_name)s",
         }
     )
+    # Every timestamp is timestamptz.
+    type_annotation_map: ClassVar[dict[type, TypeEngine[Any]]] = {datetime: DateTime(timezone=True)}
 
 
 def create_engine(settings: Settings) -> AsyncEngine:
