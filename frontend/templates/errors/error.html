@@ -1,0 +1,17 @@
+{# Error page rendered by easytodo.errors for non-HTMX requests. Context: status_code, message.
+   Standalone until base.html exists (Task 5). -#}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ status_code }} · EasyToDo</title>
+</head>
+<body>
+  <main>
+    <h1>{{ status_code }}</h1>
+    <p>{{ message }}</p>
+    <p><a href="/">Back to EasyToDo</a></p>
+  </main>
+</body>
+</html>

@@ -2,14 +2,12 @@
 
 from datetime import UTC, datetime
 
-from argon2 import PasswordHasher
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.models import Board, BoardMember, BoardRole, Category, Item, User, UserStatus
+from easytodo.security.passwords import hash_password
 
 DEFAULT_PASSWORD = "correct-horse-battery-staple"
-
-_hasher = PasswordHasher()  # until Task 4's hash_password
 
 
 async def create_user(
@@ -23,7 +21,7 @@ async def create_user(
 ) -> User:
     user = User(
         email=email,
-        password_hash=_hasher.hash(password),
+        password_hash=hash_password(password),
         is_admin=is_admin,
         must_change_password=must_change_password,
         status=status,
