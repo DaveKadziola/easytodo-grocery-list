@@ -1,6 +1,9 @@
 config.ini
-app/static/js/socketio.json
-easytodo/
+legacy/v1/app/static/js/socketio.json
+/easytodo/
 **/__pycache__/
 formatted_commit_message.txt
 .env
+.venv/
+frontend/static/css/app.css
+bin/

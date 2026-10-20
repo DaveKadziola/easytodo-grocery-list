@@ -1,3 +1,5 @@
+> v2 w trakcie przebudowy — stara wersja w `legacy/v1/` i tagu `legacy-v1`
+
 # EasyTodo Grocery List
 
 EasyTodo Grocery List is a simple application designed to manage your grocery list and tasks. The application features an intuitive user interface with seamless operations—updates and actions occur without reloading the page thanks to real-time data synchronization (including automatic state updates after reconnecting). It is optimized for both mobile and desktop platforms and is intended for self-hosted use only, using configuration script or Docker containers.
