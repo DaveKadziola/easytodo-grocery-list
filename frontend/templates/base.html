@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "defaultSwapStyle": "outerHTML"}'>
+  <title>{% block title %}EasyToDo{% endblock %}</title>
+  <link rel="icon" type="image/webp" href="/static/images/favicon.webp">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/vendor/htmx-2.0.4.min.js" defer></script>
+  <script src="/static/vendor/alpine-csp-3.14.8.min.js" defer></script>
+  <script src="/static/vendor/sortable-1.15.6.min.js" defer></script>
+  <script src="/static/js/app.js" defer></script>
+</head>
+<body class="min-h-dvh bg-slate-50 text-slate-900 antialiased">
+  <header class="border-b border-slate-200 bg-white">
+    <div class="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-2">
+      <a href="/" class="flex min-h-11 shrink-0 items-center gap-2 text-lg font-semibold">
+        <img src="/static/images/favicon.webp" alt="" class="size-7">
+        EasyToDo
+      </a>
+      {% if current_user %}
+      <div class="flex min-w-0 items-center gap-3">
+        <span class="hidden truncate text-sm text-slate-600 sm:inline">{{ current_user.email }}</span>
+        <form method="post" action="/logout">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="btn-secondary">Sign out</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </header>
+  <main class="mx-auto max-w-5xl px-4 py-8">
+    {% block content %}{% endblock %}
+  </main>
+  {% include "partials/_toast.html" %}
+</body>
+</html>

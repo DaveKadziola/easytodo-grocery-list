@@ -4,16 +4,19 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from easytodo.auth.routes import router as auth_router
 from easytodo.config import Settings, get_settings
 from easytodo.db import create_engine
 from easytodo.errors import install_error_handlers
 from easytodo.middleware import CsrfCookieMiddleware, SecurityHeadersMiddleware
 from easytodo.security.csrf import verify_csrf
 from easytodo.security.ratelimit import RateLimiter
+from easytodo.web import FRONTEND_DIR
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -55,4 +58,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"status": "degraded", "db": "error"}, status_code=503)
         return JSONResponse({"status": "ok", "db": "ok"})
 
+    app.include_router(auth_router)
+    app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
     return app

@@ -1,0 +1,46 @@
+/* Tailwind source: `make css` writes frontend/static/css/app.css (git-ignored). */
+@import "tailwindcss" source(none);
+@source "../templates";
+@source "../static/js";
+
+@layer components {
+  .card {
+    @apply rounded-xl bg-white p-6 shadow-sm ring-1 ring-slate-200;
+  }
+
+  .label {
+    @apply mb-1 block text-sm font-medium text-slate-700;
+  }
+
+  /* min-h-11 = 44 px touch targets; text-base keeps iOS from zooming in on focus. */
+  .input {
+    @apply block min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base;
+    @apply focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/30 focus:outline-none;
+  }
+
+  .btn-primary {
+    @apply inline-flex min-h-11 items-center justify-center rounded-lg bg-emerald-600 px-4 font-semibold text-white;
+    @apply hover:bg-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600;
+  }
+
+  .btn-secondary {
+    @apply inline-flex min-h-11 items-center justify-center rounded-lg px-3 text-sm font-medium text-slate-700 ring-1 ring-slate-300;
+    @apply hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600;
+  }
+
+  .link {
+    @apply font-medium text-emerald-700 underline-offset-2 hover:underline;
+  }
+
+  .form-error {
+    @apply rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-200;
+  }
+
+  .toast {
+    @apply pointer-events-auto max-w-sm rounded-lg bg-slate-900 px-4 py-3 text-sm text-white shadow-lg;
+  }
+
+  .toast-error {
+    @apply bg-red-700;
+  }
+}
