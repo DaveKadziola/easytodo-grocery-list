@@ -33,7 +33,9 @@ async def test_console_mailer_logs_and_keeps_the_mail(caplog):
     console = ConsoleMailer()
 
     with caplog.at_level(logging.INFO, logger="easytodo.mail"):
-        await console.send("friend@example.com", "Hello", "Line one\nLine two\n")
+        delivered = await console.send("friend@example.com", "Hello", "Line one\nLine two\n")
+
+    assert delivered is False  # only logged: nobody receives it
 
     assert console.outbox == [SentMail("friend@example.com", "Hello", "Line one\nLine two\n")]
     [record] = caplog.records
@@ -133,7 +135,10 @@ async def test_smtp_mailer_delivers_the_mail(settings, smtp_server):
         )
     )
 
-    await smtp.send("friend@example.com", "You're invited", "Open this link:\nhttp://x/invite/a\n")
+    delivered = await smtp.send(
+        "friend@example.com", "You're invited", "Open this link:\nhttp://x/invite/a\n"
+    )
+    assert delivered is True
 
     assert "MAIL FROM:<noreply@lists.example.com>" in fake.commands
     assert "RCPT TO:<friend@example.com>" in fake.commands
@@ -186,8 +191,9 @@ async def test_smtp_failure_is_logged_not_raised(settings, caplog):
     )
 
     with caplog.at_level(logging.ERROR, logger="easytodo.mail"):
-        await smtp.send("friend@example.com", "Hi", "Body\n")
+        delivered = await smtp.send("friend@example.com", "Hi", "Body\n")
 
+    assert delivered is False  # the caller can say so
     [record] = caplog.records
     assert record.levelno == logging.ERROR
     assert "friend@example.com" in record.getMessage()

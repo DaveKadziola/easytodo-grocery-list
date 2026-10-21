@@ -33,7 +33,10 @@ _templates = Environment(
 
 
 class Mailer(Protocol):
-    async def send(self, to: str, subject: str, body: str) -> None: ...
+    async def send(self, to: str, subject: str, body: str) -> bool:
+        """Send the mail; True once a mail server took it, False when it went nowhere (the
+        console backend, or a failure, which is logged and never raised)."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -50,13 +53,14 @@ class ConsoleMailer:
     def __init__(self) -> None:
         self.outbox: list[SentMail] = []
 
-    async def send(self, to: str, subject: str, body: str) -> None:
+    async def send(self, to: str, subject: str, body: str) -> bool:
         # A warning, so it shows without any logging setup: this mail was not delivered.
         logger.warning(
             "Mail not sent (console backend)\nTo: %s\nSubject: %s\n\n%s", to, subject, body
         )
         self.outbox.append(SentMail(to, subject, body))
         del self.outbox[:-OUTBOX_SIZE]  # drop the oldest beyond the limit
+        return False
 
 
 class SmtpMailer:
@@ -66,7 +70,7 @@ class SmtpMailer:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    async def send(self, to: str, subject: str, body: str) -> None:
+    async def send(self, to: str, subject: str, body: str) -> bool:
         settings = self.settings
         message = EmailMessage()
         message["From"] = settings.smtp_from
@@ -89,6 +93,8 @@ class SmtpMailer:
             )
         except (aiosmtplib.SMTPException, OSError):  # OSError covers refused and timed out
             logger.exception("Could not send mail to %s (subject %r)", to, subject)
+            return False
+        return True
 
 
 def get_mailer(settings: Settings) -> Mailer:

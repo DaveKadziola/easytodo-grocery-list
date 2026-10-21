@@ -22,11 +22,17 @@ from easytodo.boards.invites import (
     revoke_invite,
 )
 from easytodo.boards.permissions import Action, can, require_board
-from easytodo.boards.service import change_role, leave_board, list_members, remove_member
+from easytodo.boards.service import (
+    change_role,
+    is_member,
+    leave_board,
+    list_members,
+    remove_member,
+)
 from easytodo.errors import ValidationFailed
 from easytodo.models import BoardRole, User
 from easytodo.security.ratelimit import limit_user
-from easytodo.web import is_htmx, render
+from easytodo.web import flash, is_htmx, render
 
 router = APIRouter()
 
@@ -51,8 +57,10 @@ async def _members_page(
     status_code: int = 200,
     new_link: str | None = None,
     notice: str | None = None,
+    link_email: str | None = None,
 ) -> Response:
-    """The members page; ``new_link`` is a link invite just created (shown only this once)."""
+    """The members page; ``new_link`` is a link invite just created (shown only this once), or
+    the link of an e-mail invite to ``link_email`` whose mail was not delivered."""
     board, role = await require_board(db, board_id, user, Action.VIEW)
     manage = can(role, Action.MANAGE_MEMBERS)
     context = {
@@ -61,6 +69,7 @@ async def _members_page(
         "members": await list_members(db, board_id, user),
         "invites": await list_pending_invites(db, board_id, user) if manage else [],
         "new_link": new_link,
+        "link_email": link_email,
         "valid_days": INVITE_TTL.days,
         "notice": notice,
     }
@@ -88,8 +97,14 @@ async def invite(
         sent = await create_email_invite(
             db, board_id, user, email, _role(role), state.mailer, state.settings
         )
-        notice = f"Invite sent to {sent.email}."
-        return await _members_page(request, db, user, board_id, 201, notice=notice)
+        if sent.delivered:
+            notice = f"Invite sent to {sent.invite.email}."
+            return await _members_page(request, db, user, board_id, 201, notice=notice)
+        # The console backend (the default) only logs mail, and SMTP may have failed: say so,
+        # and show the link as for a link invite (only that address's account can use it).
+        return await _members_page(
+            request, db, user, board_id, 201, new_link=sent.link, link_email=sent.invite.email
+        )
     raw_token, _ = await create_link_invite(db, board_id, user, _role(role))
     link = invite_url(request.app.state.settings, raw_token)
     return await _members_page(request, db, user, board_id, 201, new_link=link)
@@ -99,7 +114,7 @@ async def invite(
 async def revoke(
     request: Request, db: DbSession, user: CurrentUser, board_id: int, invite_id: int
 ) -> Response:
-    await revoke_invite(db, invite_id, user)
+    await revoke_invite(db, board_id, invite_id, user)
     return await _members_page(request, db, user, board_id)
 
 
@@ -134,8 +149,12 @@ async def leave(request: Request, db: DbSession, user: CurrentUser, board_id: in
 
 @router.get("/invite/{token}")
 async def invite_page(request: Request, db: DbSession, user: CurrentUser, token: str) -> Response:
-    context = {"token": token, "preview": await preview_invite(db, token)}
-    return render(request, "boards/invite.html", context)
+    preview = await preview_invite(db, token)
+    if await is_member(db, preview.board_id, user):  # nothing to join: straight to the board
+        response = RedirectResponse(f"/boards/{preview.board_id}", status_code=303)
+        flash(response, "You're already a member of this board.", request.app.state.settings)
+        return response
+    return render(request, "boards/invite.html", {"token": token, "preview": preview})
 
 
 @router.post("/invite/{token}/accept")

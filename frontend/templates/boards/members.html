@@ -1,5 +1,6 @@
 {# The members page. Context: board, role (the viewer's own), members (list of MemberView),
-   invites (the pending ones; owner only), new_link (a link invite just created: shown this once),
+   invites (the pending ones; owner only), new_link (a link invite just created, or the link of
+   an e-mail invite to link_email whose mail was not delivered: shown this once),
    valid_days (how long an invite works) and notice. Every change here answers with this whole page, and its htmx controls swap in
    #sharing (they inherit hx-target and hx-select from it). -#}
 {% extends "base.html" %}
@@ -17,7 +18,11 @@
     <h2 id="invite-heading" class="text-lg font-semibold">Invite someone</h2>
     {% if new_link %}
     <div role="status" class="space-y-2 rounded-lg bg-emerald-50 dark:bg-emerald-950 p-4 ring-1 ring-emerald-200 dark:ring-emerald-800">
+      {% if link_email %}
+      <p class="text-sm text-emerald-900 dark:text-emerald-100">No email was sent (mail is not set up, or sending failed). Give {{ link_email }} this link yourself: only their account can use it, until it expires in {{ valid_days }} days or you revoke it. Copy it now: it is shown only once.</p>
+      {% else %}
       <p class="text-sm text-emerald-900 dark:text-emerald-100">Anyone with this link can join until it expires in {{ valid_days }} days or you revoke it. Copy it now: it is shown only once.</p>
+      {% endif %}
       <div class="flex gap-2">
         <label for="invite-link" class="sr-only">Invite link</label>
         <input id="invite-link" value="{{ new_link }}" readonly class="input font-mono text-sm">

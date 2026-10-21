@@ -5,7 +5,7 @@ import logging
 import re
 import socket
 from datetime import UTC, datetime, timedelta
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 from factories import DEFAULT_PASSWORD, create_board, create_user
@@ -172,13 +172,29 @@ async def test_others_cannot_revoke_an_invite(client_factory, db, editor_client,
     assert await db.scalar(select(BoardInvite.revoked_at)) is None
 
 
+async def test_revoking_through_another_boards_url_is_404_and_changes_nothing(
+    client_factory, db, board, owner
+):  # Review Focus 4: 404, and nothing changes
+    _, invite = await create_link_invite(db, board.id, owner, BoardRole.VIEWER)
+    other = await create_board(db, owner, "Weekend")  # the owner's too
+    owner_client = await signed_in(client_factory, "owner@example.com")
+
+    r = await owner_client.delete(f"/boards/{other.id}/invites/{invite.id}")
+
+    assert r.status_code == 404
+    assert await db.scalar(select(BoardInvite.revoked_at)) is None
+
+
 async def test_email_invite_sends_mail_with_link(client, board, mail_outbox, db):
     await login(client, "owner@example.com")
 
     r = await invite_by_email(client, board.id, "friend@example.com", role="viewer")
 
-    assert "Invite sent to friend@example.com." in r.text
-    assert "http://testserver/invite/" not in r.text  # the link goes to the mailbox only
+    # The test settings use the console backend, which only logs the mail: the owner must not
+    # be told it was sent, and gets the link to pass on instead (only friend@'s account can use it).
+    assert "Invite sent to" not in r.text
+    assert "No email was sent" in r.text
+    assert "http://testserver/invite/" in r.text
     assert len(mail_outbox) == 1
     mail = mail_outbox[0]
     assert mail.to == "friend@example.com"
@@ -294,7 +310,8 @@ async def test_email_invite_survives_a_mail_server_failure(client_factory, db, c
     with caplog.at_level(logging.ERROR, logger="easytodo.mail"):
         r = await invite_by_email(smtp_client, board.id, "friend@example.com")
 
-    assert "Invite sent to friend@example.com." in r.text
+    assert "Invite sent to" not in r.text  # it was not
+    assert "No email was sent" in r.text and "http://testserver/invite/" in r.text
     assert await db.scalar(select(BoardInvite.email)) == "friend@example.com"
     assert [rec.levelno for rec in caplog.records if "friend@example.com" in rec.getMessage()] == [
         logging.ERROR
@@ -339,6 +356,61 @@ async def test_email_invite_to_a_member_is_used_up_and_keeps_the_role(
     assert await db.scalar(select(BoardInvite.accepted_at)) is not None
     assert (await eve_client.get(f"/invite/{token}")).status_code == 404
     assert sharing_events == []
+
+
+async def test_board_deleted_while_an_invite_is_accepted_is_a_404_not_a_500(
+    client_factory, db, board, invite_token, monkeypatch, _db_engine
+):
+    from sqlalchemy import delete
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from easytodo.boards import invites
+    from easytodo.models import Board
+
+    get_valid_invite = invites.get_valid_invite
+
+    async def find_then_delete_the_board(session, raw_token):
+        invite = await get_valid_invite(session, raw_token)
+        async with AsyncSession(_db_engine) as other:
+            await other.execute(delete(Board).where(Board.id == invite.board_id))
+            await other.commit()
+        return invite
+
+    monkeypatch.setattr(invites, "get_valid_invite", find_then_delete_the_board)
+    await create_user(db, "bob@example.com")
+    bob = await signed_in(client_factory, "bob@example.com")
+
+    r = await bob.post(f"/invite/{invite_token}/accept")
+
+    assert r.status_code == 404
+    assert "Board not found." in r.text
+
+
+async def test_member_reopening_a_link_invite_goes_to_the_board(
+    client_factory, db, board, owner, invite_token
+):
+    """Not "You're invited ... Join board" again for someone who is in already."""
+    for email in ("owner@example.com", "editor@example.com"):
+        if email == "editor@example.com":
+            editor = await create_user(db, email)
+            db.add(BoardMember(board_id=board.id, user_id=editor.id, role=BoardRole.EDITOR))
+            await db.commit()
+        member = await signed_in(client_factory, email)
+        r = await member.get(f"/invite/{invite_token}")
+        assert r.status_code == 303
+        assert r.headers["location"] == f"/boards/{board.id}"
+        assert "already a member" in unquote(r.cookies.get("easytodo_flash", ""))
+
+    await create_user(db, "new@example.com")
+    r = await (await signed_in(client_factory, "new@example.com")).get(f"/invite/{invite_token}")
+    assert r.status_code == 200 and "Join board" in r.text
+
+
+async def test_login_page_from_an_invite_says_what_it_is_for(client, invite_token):
+    r = await client.get(f"/invite/{invite_token}", follow_redirects=True)
+    assert "Sign in or create an account to join the board" in r.text
+    assert "Create an account" in r.text
+    assert "join the board" not in (await client.get("/login")).text
 
 
 async def test_anonymous_invite_visit_redirects_to_login_with_next(client, invite_token):
@@ -401,9 +473,11 @@ async def test_invite_token_stored_hashed(db, settings, board, owner):
     mailer = ConsoleMailer()
 
     link_token, link_invite = await create_link_invite(db, board.id, owner, BoardRole.EDITOR)
-    email_invite = await create_email_invite(
-        db, board.id, owner, "friend@example.com", BoardRole.VIEWER, mailer, settings
-    )
+    email_invite = (
+        await create_email_invite(
+            db, board.id, owner, "friend@example.com", BoardRole.VIEWER, mailer, settings
+        )
+    ).invite
 
     email_token = LINK.search(mailer.outbox[0].body)[1]
     stored = (await db.execute(select(BoardInvite.id, BoardInvite.token_hash))).all()
