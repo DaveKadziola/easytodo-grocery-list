@@ -22,11 +22,12 @@ async def test_base_layout(client):
     token = client.cookies[CSRF_COOKIE]
     assert f'<meta name="csrf-token" content="{token}">' in r.text
     # No "style" in attributesToSettle: htmx would copy a style="" (SortableJS leaves one on a
-    # dragged item) onto the new element, which style-src 'self' refuses.
+    # dragged item) onto the new element, which style-src 'self' refuses. No settle delay: htmx
+    # sets swapped-in controls up when it settles, and one with the focus must work at once.
     assert (
         '<meta name="htmx-config" '
         """content='{"includeIndicatorStyles": false, "defaultSwapStyle": "outerHTML", """
-        """"attributesToSettle": ["class", "width", "height"]}'>"""
+        """"defaultSettleDelay": 0, "attributesToSettle": ["class", "width", "height"]}'>"""
     ) in r.text
     scripts = re.findall(r"<script([^>]*)>(.*?)</script>", r.text, re.DOTALL)
     assert [attrs for attrs, _ in scripts] == [

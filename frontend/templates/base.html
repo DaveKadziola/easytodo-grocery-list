@@ -10,8 +10,11 @@
   <meta name="theme-color" content="#0f172b" media="(prefers-color-scheme: dark)">
   <meta name="csrf-token" content="{{ csrf_token }}">
   {#- No "style" in attributesToSettle: htmx would copy the empty style attribute that SortableJS
-      leaves on a dragged item onto the new element, which the CSP (style-src 'self') refuses. #}
-  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "defaultSwapStyle": "outerHTML", "attributesToSettle": ["class", "width", "height"]}'>
+      leaves on a dragged item onto the new element, which the CSP (style-src 'self') refuses.
+      defaultSettleDelay 0: htmx wires up swapped-in content (its hx-* attributes) in the settle
+      step, so with the default 20 ms delay a control that already has the focus back (a tick's
+      checkbox, "Add item" after an add) would for that long toggle or submit without htmx. #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "defaultSwapStyle": "outerHTML", "defaultSettleDelay": 0, "attributesToSettle": ["class", "width", "height"]}'>
   <title>{% block title %}EasyToDo{% endblock %}</title>
   <link rel="icon" type="image/webp" href="/static/images/favicon.webp">
   <link rel="apple-touch-icon" href="/static/images/apple-touch-icon.png">
