@@ -215,9 +215,16 @@
       });
     }
 
-    // Back on the tab, or back online: no waiting for the next retry.
+    // Back on the tab, or back online: no waiting for the next retry. A socket that still looks
+    // open may be dead (the server's close was lost while the phone slept or had no signal), so
+    // the whole board is reloaded over HTTP then, in case its events never arrived.
     function reconnectNow() {
-      if (socket === null) connect();
+      if (socket === null) {
+        connect();
+        return;
+      }
+      pending.board = true;
+      scheduleFlush();
     }
 
     document.addEventListener("visibilitychange", () => {

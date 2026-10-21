@@ -107,6 +107,42 @@ def test_offline_device_resyncs_after_reconnect(two_logged_in_pages, open_board,
     assert len(attempts) == 2  # and that retry was called off
 
 
+@pytest.mark.parametrize("comeback", ["online", "visibilitychange"])
+def test_wake_with_open_but_dead_socket_resyncs(two_logged_in_pages, open_board, comeback):
+    """Review Focus 3, half-open: the phone slept or lost its signal, and the server's close never
+    reached it, so its socket still looks open but nothing comes through it. Back online or on the
+    screen, it reloads the board over HTTP and shows what it missed, without a new socket."""
+    a, b = two_logged_in_pages
+    sockets: list[WebSocketRoute] = []  # the board sockets b opened
+    missed: list[str] = []
+
+    def connect(ws: WebSocketRoute) -> None:
+        sockets.append(ws)
+        server = ws.connect_to_server()
+        server.on_message(missed.append)  # open, but nothing the server sends reaches b
+
+    b.route_web_socket(BOARD_SOCKET, connect)
+    open_board(b, int(b.locator("#board-content").get_attribute("data-board-id")))
+    root = b.locator("html")
+    reloads = int(root.get_attribute("data-board-reloads"))
+
+    add_item(a, "Dairy", "Bread")
+    wait_until(b, lambda: missed, "the missed event")
+    b.wait_for_timeout(SETTLE_MS)
+    expect(items_of(b, "Dairy")).to_have_text([re.compile("Milk")])  # b really missed it
+
+    if comeback == "online":
+        b.evaluate("window.dispatchEvent(new Event('online'))")
+    else:
+        b.dispatch_event("body", "visibilitychange")  # back on the screen
+
+    expect(b.get_by_text("Bread")).to_be_visible(timeout=5000)
+    expect(items_of(b, "Dairy")).to_have_text([re.compile("Bread"), re.compile("Milk")])
+    expect(root).to_have_attribute("data-board-reloads", str(reloads + 1))  # over HTTP
+    expect(b.locator("#conn-status")).to_have_text("Live")
+    assert len(sockets) == 1  # no second socket: the resync was not a reconnect
+
+
 @pytest.mark.parametrize(
     ("name", "failure", "message"),
     [
