@@ -1,0 +1,111 @@
+{# The members page. Context: board, role (the viewer's own), members (list of MemberView),
+   invites (the pending ones; owner only), new_link (a link invite just created, or the link of
+   an e-mail invite to link_email whose mail was not delivered: shown this once),
+   valid_days (how long an invite works) and notice. Every change here answers with this whole page, and its htmx controls swap in
+   #sharing (they inherit hx-target and hx-select from it). -#}
+{% extends "base.html" %}
+{% block title %}Members · {{ board.name }} · EasyToDo{% endblock %}
+{% block content %}
+{% set manage = can(role, Action.MANAGE_MEMBERS) %}
+<div id="sharing" hx-target="#sharing" hx-select="#sharing" class="mx-auto w-full max-w-2xl space-y-6">
+  <div>
+    <a href="/boards/{{ board.id }}" class="link inline-flex min-h-11 items-center text-sm">Back to the board</a>
+    <h1 class="break-words text-2xl font-semibold">{{ board.name }}: members</h1>
+  </div>
+
+  {% if manage %}
+  <section class="card space-y-4" aria-labelledby="invite-heading">
+    <h2 id="invite-heading" class="text-lg font-semibold">Invite someone</h2>
+    {% if new_link %}
+    <div role="status" class="space-y-2 rounded-lg bg-emerald-50 dark:bg-emerald-950 p-4 ring-1 ring-emerald-200 dark:ring-emerald-800">
+      {% if link_email %}
+      <p class="text-sm text-emerald-900 dark:text-emerald-100">No email was sent (mail is not set up, or sending failed). Give {{ link_email }} this link yourself: only their account can use it, until it expires in {{ valid_days }} days or you revoke it. Copy it now: it is shown only once.</p>
+      {% else %}
+      <p class="text-sm text-emerald-900 dark:text-emerald-100">Anyone with this link can join until it expires in {{ valid_days }} days or you revoke it. Copy it now: it is shown only once.</p>
+      {% endif %}
+      <div class="flex gap-2">
+        <label for="invite-link" class="sr-only">Invite link</label>
+        <input id="invite-link" value="{{ new_link }}" readonly class="input font-mono text-sm">
+        <button type="button" class="btn-secondary shrink-0" data-copy="invite-link">Copy</button>
+      </div>
+    </div>
+    {% endif %}
+    {% if notice %}<p role="status" class="rounded-lg bg-emerald-50 dark:bg-emerald-950 px-3 py-2 text-sm text-emerald-900 dark:text-emerald-100 ring-1 ring-emerald-200 dark:ring-emerald-800">{{ notice }}</p>{% endif %}
+    <form method="post" action="/boards/{{ board.id }}/invites" hx-post="/boards/{{ board.id }}/invites" class="space-y-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div>
+        <label for="invite-email" class="label">Email (optional)</label>
+        <input id="invite-email" name="email" type="email" autocomplete="off" aria-describedby="invite-email-hint" class="input">
+        <p id="invite-email-hint" class="mt-1 text-sm text-slate-500 dark:text-slate-400">We email them a link that only their account can use. Leave it empty to get a link you share yourself.</p>
+      </div>
+      <div>
+        <label for="invite-role" class="label">Role</label>
+        <select id="invite-role" name="role" class="input">
+          <option value="editor">Editor: can change items</option>
+          <option value="viewer">Viewer: can only look</option>
+        </select>
+      </div>
+      <button type="submit" class="btn-primary">Invite</button>
+    </form>
+  </section>
+  {% endif %}
+
+  <section class="card" aria-labelledby="members-heading">
+    <h2 id="members-heading" class="text-lg font-semibold">Members</h2>
+    <ul class="mt-2 divide-y divide-slate-200 dark:divide-slate-700">
+      {% for m in members %}
+      <li class="flex flex-wrap items-center justify-between gap-3 py-3">
+        <p class="min-w-0 break-words font-medium">
+          {{ m.email }}
+          {% if current_user and m.user_id == current_user.id %}<span class="ml-1 rounded-full bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:text-emerald-200">You</span>{% endif %}
+        </p>
+        {% if manage and m.role != "owner" %}
+        <div class="flex items-center gap-2">
+          <label for="role-{{ m.user_id }}" class="sr-only">Role of {{ m.email }}</label>
+          <select id="role-{{ m.user_id }}" name="role" hx-patch="/boards/{{ board.id }}/members/{{ m.user_id }}" hx-trigger="change" class="input w-auto">
+            {% for value in ("editor", "viewer") %}
+            <option value="{{ value }}"{% if m.role == value %} selected{% endif %}>{{ value|capitalize }}</option>
+            {% endfor %}
+          </select>
+          <button type="button" class="btn-danger" hx-delete="/boards/{{ board.id }}/members/{{ m.user_id }}" hx-confirm="Remove {{ m.email }} from this board?">Remove</button>
+        </div>
+        {% else %}
+        <span class="rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-xs font-medium text-slate-700 dark:text-slate-300">{{ m.role|capitalize }}</span>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  {% if manage and invites %}
+  <section class="card" aria-labelledby="invites-heading">
+    <h2 id="invites-heading" class="text-lg font-semibold">Pending invites</h2>
+    <ul class="mt-2 divide-y divide-slate-200 dark:divide-slate-700">
+      {% for invite in invites %}
+      <li class="flex flex-wrap items-center justify-between gap-3 py-3">
+        <div class="min-w-0">
+          <p class="break-words font-medium">{{ invite.email or "Invite link" }}</p>
+          <p class="text-sm text-slate-600 dark:text-slate-400">
+            {{ invite.role|capitalize }} · Expires
+            <time datetime="{{ invite.expires_at.isoformat() }}" class="whitespace-nowrap">{{ invite.expires_at.strftime("%Y-%m-%d %H:%M") }} UTC</time>
+          </p>
+        </div>
+        <button type="button" class="btn-secondary shrink-0" hx-delete="/boards/{{ board.id }}/invites/{{ invite.id }}" hx-confirm="Revoke this invite?">Revoke</button>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if role != "owner" %}
+  <section class="card space-y-3" aria-labelledby="leave-heading">
+    <h2 id="leave-heading" class="text-lg font-semibold">Leave this board</h2>
+    <p class="text-sm text-slate-600 dark:text-slate-400">You'll need a new invite to come back.</p>
+    <form method="post" action="/boards/{{ board.id }}/leave" hx-post="/boards/{{ board.id }}/leave" hx-confirm="Leave this board?">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="btn-danger">Leave board</button>
+    </form>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

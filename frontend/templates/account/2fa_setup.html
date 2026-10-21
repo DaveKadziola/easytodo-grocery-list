@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Set up two-factor authentication · EasyToDo{% endblock %}
+{% block content %}
+<div class="mx-auto w-full max-w-sm">
+  <h1 class="text-2xl font-semibold">Set up two-factor authentication</h1>
+  <section class="card mt-6 space-y-4 text-sm">
+    <p>Scan this QR code with an authenticator app, such as Google Authenticator or Authy.</p>
+    <div role="img" aria-label="QR code for your authenticator app" class="flex justify-center">{{ qr_code }}</div>
+    <p>Can't scan it? Enter this key in the app instead:</p>
+    <code id="totp-secret" class="block select-all break-all rounded-lg bg-slate-100 dark:bg-slate-800 px-3 py-2 font-mono text-base">{{ secret }}</code>
+  </section>
+  <form method="post" action="/account/2fa/setup" class="card mt-6 space-y-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if error %}<p role="alert" class="form-error">{{ error }}</p>{% endif %}
+    {#- The password first: the code from the app is only good for about a minute. #}
+    <div>
+      <label for="password" class="label">Current password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required class="input">
+    </div>
+    <div>
+      <label for="code" class="label">Code from the app</label>
+      <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" required class="input">
+    </div>
+    <button type="submit" class="btn-primary w-full">Turn on two-factor authentication</button>
+  </form>
+  <p class="mt-6 text-center text-sm"><a href="/account" class="link">Back to account</a></p>
+</div>
+{% endblock %}

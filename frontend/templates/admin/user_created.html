@@ -1,0 +1,24 @@
+{# After the admin creates an account. Context: user (the new User) and password (its temporary
+   password, shown only on this page). -#}
+{% extends "base.html" %}
+{% block title %}Account created · Admin · EasyToDo{% endblock %}
+{% block content %}
+<div class="mx-auto w-full max-w-lg space-y-6">
+  <h1 class="text-2xl font-semibold">Account created</h1>
+  <section class="card space-y-4">
+    <p class="break-words">
+      <span class="font-medium">{{ user.email }}</span>{% if user.is_admin %} (admin){% endif %}
+      can now sign in with this temporary password, and will be asked to choose a new one right away.
+    </p>
+    <div role="status" class="space-y-2 rounded-lg bg-amber-50 dark:bg-amber-950 p-4 ring-1 ring-amber-200 dark:ring-amber-800">
+      <p class="text-sm text-amber-900 dark:text-amber-100">Copy it now and pass it on: this is the only time it is shown.</p>
+      <div class="flex gap-2">
+        <label for="temp-password" class="sr-only">Temporary password</label>
+        <input id="temp-password" value="{{ password }}" readonly autocomplete="off" class="input font-mono">
+        <button type="button" class="btn-secondary shrink-0" data-copy="temp-password">Copy</button>
+      </div>
+    </div>
+    <a href="/admin/users" class="btn-primary">Back to users</a>
+  </section>
+</div>
+{% endblock %}

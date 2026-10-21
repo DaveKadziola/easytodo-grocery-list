@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Sign in · EasyToDo{% endblock %}
+{% block content %}
+<div class="mx-auto w-full max-w-sm">
+  <h1 class="text-2xl font-semibold">Sign in</h1>
+  {% set for_invite = next_path and next_path.startswith("/invite/") %}
+  {% if for_invite %}
+  {#- Someone followed an invite link while signed out: say what this page is for, with the
+      sign-up link right here (not at the foot of the page). A valid invite opens sign-up even
+      while registration is closed. -#}
+  <p class="mt-2 text-slate-600 dark:text-slate-400">Sign in or create an account to join the board. <a href="/register?next={{ next_path|urlencode }}" class="link">Create an account</a></p>
+  {% endif %}
+  {# No action: the form posts back to this URL, so a ?next= target survives. -#}
+  <form method="post" class="card mt-6 space-y-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if error %}<p role="alert" class="form-error">{{ error }}</p>{% endif %}
+    <div>
+      <label for="email" class="label">Email</label>
+      <input id="email" name="email" type="email" value="{{ email }}" autocomplete="email" required autofocus class="input">
+    </div>
+    <div>
+      <label for="password" class="label">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required class="input">
+      <p class="mt-1 text-right text-sm"><a href="/password/forgot" class="link">Forgot password?</a></p>
+    </div>
+    <button type="submit" class="btn-primary w-full">Sign in</button>
+  </form>
+  {% if settings.registration_open and not for_invite %}
+  {#- next_path: where signing up should lead too (an invite link, say). -#}
+  <p class="mt-6 text-center text-sm text-slate-600 dark:text-slate-400">No account yet? <a href="/register{% if next_path %}?next={{ next_path|urlencode }}{% endif %}" class="link">Create an account</a></p>
+  {% endif %}
+</div>
+{% endblock %}

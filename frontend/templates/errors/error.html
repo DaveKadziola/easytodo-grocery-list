@@ -1,0 +1,10 @@
+{# Error page rendered by easytodo.errors for non-HTMX requests. Context: status_code, message. -#}
+{% extends "base.html" %}
+{% block title %}{{ status_code }} · EasyToDo{% endblock %}
+{% block content %}
+<div class="mx-auto w-full max-w-sm text-center">
+  <h1 class="text-5xl font-bold text-slate-300 dark:text-slate-600">{{ status_code }}</h1>
+  <p class="mt-4 text-lg">{{ message }}</p>
+  <p class="mt-6"><a href="/" class="link">Back to EasyToDo</a></p>
+</div>
+{% endblock %}

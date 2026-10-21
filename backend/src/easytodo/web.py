@@ -1,0 +1,81 @@
+"""Template rendering shared by every HTML route."""
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote
+
+from fastapi import Request, Response
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from jinja2 import Environment, FileSystemLoader
+
+from easytodo.config import Settings
+
+FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend"
+STATIC_DIR = FRONTEND_DIR / "static"
+FLASH_COOKIE = "easytodo_flash"  # read and cleared by static/js/app.js
+FLASH_MAX_AGE_S = 60
+
+# autoescape=True for every template, whatever its extension.
+templates = Jinja2Templates(
+    env=Environment(loader=FileSystemLoader(FRONTEND_DIR / "templates"), autoescape=True)
+)
+
+
+_asset_versions: dict[str, tuple[int, int, str]] = {}  # path -> (mtime_ns, size, version)
+
+
+def static_url(path: str) -> str:
+    """``/static/<path>?v=<version>``, the version taken from the file's content.
+
+    For the app's own scripts and stylesheet, whose names stay the same across releases: a new
+    version is a new URL, so browsers can keep each one for good (see ``CachedStaticFiles``) and
+    still never run an old realtime.js against new pages. Hashed again only when the file changes.
+    """
+    file = STATIC_DIR / path
+    stat = file.stat()
+    known = _asset_versions.get(path)
+    if known is None or known[:2] != (stat.st_mtime_ns, stat.st_size):
+        known = (stat.st_mtime_ns, stat.st_size, hashlib.sha256(file.read_bytes()).hexdigest()[:12])
+        _asset_versions[path] = known
+    return f"/static/{path}?v={known[2]}"
+
+
+templates.env.globals["static_url"] = static_url
+
+
+def is_htmx(request: Request) -> bool:
+    return request.headers.get("HX-Request") == "true"
+
+
+def render(
+    request: Request, name: str, context: dict[str, Any], status_code: int = 200
+) -> HTMLResponse:
+    """Render ``name`` with ``csrf_token``, ``current_user`` and ``settings`` added to
+    ``context`` (keys given in ``context`` win)."""
+    defaults = {
+        "csrf_token": getattr(request.state, "csrf_token", None),
+        "current_user": getattr(request.state, "user", None),
+        "settings": request.app.state.settings,
+    }
+    return templates.TemplateResponse(request, name, defaults | context, status_code=status_code)
+
+
+def flash(response: Response, message: str, settings: Settings, level: str = "info") -> None:
+    """Show ``message`` as a toast on the next page the browser loads.
+
+    For a redirect after a plain form post, which cannot carry ``HX-Trigger``. The cookie is
+    readable by script on purpose: app.js turns it into a toast and deletes it.
+    """
+    payload = quote(json.dumps({"level": level, "message": message}), safe="")
+    response.set_cookie(
+        FLASH_COOKIE,
+        payload,
+        max_age=FLASH_MAX_AGE_S,
+        path="/",
+        secure=settings.cookie_secure,
+        httponly=False,
+        samesite="lax",
+    )

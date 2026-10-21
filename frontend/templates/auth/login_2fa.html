@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Two-factor authentication · EasyToDo{% endblock %}
+{% block content %}
+<div class="mx-auto w-full max-w-sm">
+  <h1 class="text-2xl font-semibold">Two-factor authentication</h1>
+  {# No action: the form posts back to this URL, so a ?next= target survives. -#}
+  <form method="post" class="card mt-6 space-y-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if error %}<p role="alert" class="form-error">{{ error }}</p>{% endif %}
+    <div>
+      <label for="code" class="label">Code</label>
+      <input id="code" name="code" type="text" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" required autofocus aria-describedby="code-hint" class="input">
+      <p id="code-hint" class="mt-1 text-sm text-slate-500 dark:text-slate-400">The 6-digit code from your authenticator app, or one of your recovery codes.</p>
+    </div>
+    <button type="submit" class="btn-primary w-full">Verify</button>
+  </form>
+  <form method="post" action="/logout" class="mt-6 text-center text-sm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="link">Cancel and sign out</button>
+  </form>
+</div>
+{% endblock %}

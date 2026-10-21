@@ -1,6 +1,11 @@
 config.ini
-app/static/js/socketio.json
-easytodo/
+/easytodo/
 **/__pycache__/
 formatted_commit_message.txt
 .env
+.venv/
+frontend/static/css/app.css
+bin/
+# Database backups (README: Backups).
+backups/
+*.dump

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Account · EasyToDo{% endblock %}
+{% block content %}
+<div class="mx-auto w-full max-w-2xl space-y-6">
+  <h1 class="text-2xl font-semibold">Account</h1>
+
+  <section class="card">
+    <h2 class="text-lg font-semibold">Your account</h2>
+    <dl class="mt-3 text-sm">
+      <dt class="font-medium text-slate-700 dark:text-slate-300">Email</dt>
+      <dd class="break-words text-slate-900 dark:text-slate-100">{{ current_user.email }}</dd>
+    </dl>
+    <a href="/account/password" class="btn-secondary mt-4">Change password</a>
+  </section>
+
+  <section class="card">
+    <h2 class="text-lg font-semibold">Two-factor authentication</h2>
+    {% if twofa_error %}<p role="alert" class="form-error mt-3">{{ twofa_error }}</p>{% endif %}
+    {% if current_user.totp_enabled %}
+    <p class="mt-2 text-sm text-slate-600 dark:text-slate-400">On: signing in also asks for a code from your authenticator app, or a recovery code.</p>
+    <form method="post" action="/account/2fa/recovery-codes" class="mt-4 space-y-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div>
+        <label for="recovery_password" class="label">Current password</label>
+        <input id="recovery_password" name="password" type="password" autocomplete="current-password" required class="input">
+      </div>
+      <button type="submit" class="btn-secondary">Get new recovery codes</button>
+    </form>
+    <form method="post" action="/account/2fa/disable" class="mt-6 space-y-3 border-t border-slate-200 dark:border-slate-700 pt-6">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div>
+        <label for="disable_password" class="label">Current password</label>
+        <input id="disable_password" name="password" type="password" autocomplete="current-password" required class="input">
+      </div>
+      <div>
+        <label for="disable_code" class="label">Code from the app, or a recovery code</label>
+        <input id="disable_code" name="code" type="text" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" required class="input">
+      </div>
+      <button type="submit" class="btn-danger">Turn off two-factor authentication</button>
+    </form>
+    {% else %}
+    <p class="mt-2 text-sm text-slate-600 dark:text-slate-400">Off. Turn it on to also ask for a code from an authenticator app when you sign in.</p>
+    <a href="/account/2fa/setup" class="btn-primary mt-4">Set up two-factor authentication</a>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <h2 class="text-lg font-semibold">Where you are signed in</h2>
+      {% if sessions|length > 1 %}
+      <form method="post" action="/account/sessions/revoke-others">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn-secondary">Sign out other devices</button>
+      </form>
+      {% endif %}
+    </div>
+    <ul class="mt-2 divide-y divide-slate-200 dark:divide-slate-700">
+      {% for s in sessions %}
+      <li class="flex items-start justify-between gap-4 py-3">
+        <div class="min-w-0">
+          <p class="break-words font-medium">
+            {{ s.user_agent or "Unknown device" }}
+            {% if s.id == current_session_id %}<span class="ml-1 rounded-full bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:text-emerald-200">This device</span>{% endif %}
+            {#- Signed in with the password but not the code: someone may know the password. #}
+            {% if s.mfa_pending %}<span class="ml-1 rounded-full bg-amber-100 dark:bg-amber-900/60 px-2 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-200">Awaiting 2FA</span>{% endif %}
+          </p>
+          <p class="text-sm text-slate-600 dark:text-slate-400">
+            {{ s.ip or "Unknown IP" }} · Last active
+            <time datetime="{{ s.last_seen_at.isoformat() }}" class="whitespace-nowrap">{{ s.last_seen_at.strftime("%Y-%m-%d %H:%M") }} UTC</time>
+          </p>
+        </div>
+        {% if s.id != current_session_id %}
+        <form method="post" action="/account/sessions/{{ s.id }}/revoke" class="shrink-0">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="btn-secondary">Sign out</button>
+        </form>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
+{% endblock %}
