@@ -7,27 +7,27 @@
     <p class="break-all font-medium">{{ row.email }}</p>
     {% if own or row.is_admin %}
     <p class="mt-1 flex flex-wrap gap-1">
-      {% if own %}<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">You</span>{% endif %}
-      {% if row.is_admin %}<span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">Admin</span>{% endif %}
+      {% if own %}<span class="rounded-full bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:text-emerald-200">You</span>{% endif %}
+      {% if row.is_admin %}<span class="rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-xs font-medium text-slate-700 dark:text-slate-300">Admin</span>{% endif %}
     </p>
     {% endif %}
-    <p class="mt-1 text-xs text-slate-500">Joined <time datetime="{{ row.created_at.isoformat() }}">{{ row.created_at.strftime("%Y-%m-%d") }}</time></p>
+    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Joined <time datetime="{{ row.created_at.isoformat() }}">{{ row.created_at.strftime("%Y-%m-%d") }}</time></p>
   </td>
   <td class="block md:table-cell md:py-3 md:pr-4 md:align-top">
-    <span class="text-slate-500 md:hidden">Status:</span>
+    <span class="text-slate-500 dark:text-slate-400 md:hidden">Status:</span>
     {% if row.status == "disabled" %}
-    <span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">Disabled</span>
+    <span class="rounded-full bg-red-100 dark:bg-red-900/60 px-2 py-0.5 text-xs font-medium text-red-800 dark:text-red-200">Disabled</span>
     {% else %}
-    <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">Active</span>
+    <span class="rounded-full bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:text-emerald-200">Active</span>
     {% endif %}
-    {% if row.totp_enabled %}<span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">2FA on</span>{% endif %}
+    {% if row.totp_enabled %}<span class="rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-xs font-medium text-slate-700 dark:text-slate-300">2FA on</span>{% endif %}
   </td>
   <td class="block md:table-cell md:py-3 md:pr-4 md:align-top">
-    <span class="text-slate-500 md:hidden">Boards owned:</span>
+    <span class="text-slate-500 dark:text-slate-400 md:hidden">Boards owned:</span>
     {{ row.owned_boards }}
   </td>
   <td class="block md:table-cell md:py-3 md:pr-4 md:align-top">
-    <span class="text-slate-500 md:hidden">Last sign-in:</span>
+    <span class="text-slate-500 dark:text-slate-400 md:hidden">Last sign-in:</span>
     {% if row.last_login_at %}
     <time datetime="{{ row.last_login_at.isoformat() }}" class="whitespace-nowrap">{{ row.last_login_at.strftime("%Y-%m-%d %H:%M") }} UTC</time>
     {% else %}

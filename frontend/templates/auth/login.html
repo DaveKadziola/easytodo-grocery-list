@@ -20,7 +20,7 @@
   </form>
   {% if settings.registration_open %}
   {#- next_path: where signing up should lead too (an invite link, say). -#}
-  <p class="mt-6 text-center text-sm text-slate-600">No account yet? <a href="/register{% if next_path %}?next={{ next_path|urlencode }}{% endif %}" class="link">Create an account</a></p>
+  <p class="mt-6 text-center text-sm text-slate-600 dark:text-slate-400">No account yet? <a href="/register{% if next_path %}?next={{ next_path|urlencode }}{% endif %}" class="link">Create an account</a></p>
   {% endif %}
 </div>
 {% endblock %}

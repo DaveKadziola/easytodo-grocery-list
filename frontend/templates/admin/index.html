@@ -21,8 +21,8 @@
         ("Items", stats.items_total),
         ("Open items", stats.items_open),
       ] %}
-      <div class="flex flex-col-reverse justify-end gap-1 rounded-lg bg-slate-50 p-4 ring-1 ring-slate-200">
-        <dt class="text-sm text-slate-600">{{ label }}</dt>
+      <div class="flex flex-col-reverse justify-end gap-1 rounded-lg bg-slate-50 dark:bg-slate-800 p-4 ring-1 ring-slate-200 dark:ring-slate-700">
+        <dt class="text-sm text-slate-600 dark:text-slate-400">{{ label }}</dt>
         <dd class="text-2xl font-semibold">{{ value }}</dd>
       </div>
       {% endfor %}

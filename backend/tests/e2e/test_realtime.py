@@ -181,6 +181,8 @@ def test_refresh_during_a_held_touch_drag_does_not_end_it(
     page = logged_in_page_mobile
     messages = received_messages(page)
     open_board(page, board_id)
+    # Scrolled up out from under the phone's bottom bar, where a finger can reach it.
+    item(page, "Bread").evaluate("(el) => el.scrollIntoView({ block: 'center' })")
     start, end = item(page, "Milk").bounding_box(), item(page, "Bread").bounding_box()
     touch = page.context.new_cdp_session(page)
 

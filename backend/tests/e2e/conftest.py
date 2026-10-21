@@ -133,6 +133,36 @@ def open_board() -> Callable[[Page, int], None]:
 
 
 @pytest.fixture
+def seeded_board(seed: Seed, user: User) -> int:
+    """A board "Groceries" of ``user`` (its id) that fills a screen: categories with ticked and open
+    items, an empty one, and long names that do not break by themselves."""
+
+    async def make(db: AsyncSession) -> int:
+        board = await create_board(db, user, "Groceries")
+        categories = {
+            "Dairy": ["Milk", "Yogurt", "Butter"],
+            "Bakery": ["Bread", "Croissants"],
+            "Fruit and vegetables": ["Apples", "Supercalifragilisticexpialidocious-bananas"],
+            "Household": ["Washing-up liquid", "Bin bags"],
+            "Pharmacyandpersonalcarewithaveryveryverylongname": [],
+        }
+        for position, (name, items) in enumerate(categories.items()):
+            category = await create_category(db, board, name, position)
+            for item_name in items:
+                await create_item(db, category, item_name, is_done=item_name == "Milk")
+        return board.id
+
+    return seed(make)
+
+
+@pytest.fixture
+def logged_in_page_with_seed(logged_in_page: Page, seeded_board: int) -> Page:
+    """``logged_in_page`` on ``seeded_board``, live."""
+    _open_board(logged_in_page, seeded_board)
+    return logged_in_page
+
+
+@pytest.fixture
 def two_logged_in_pages(
     signed_in_page: Callable[..., Page], seed: Seed, user: User
 ) -> tuple[Page, Page]:

@@ -1,13 +1,14 @@
 """The board's HTML: edit controls only for members who may edit, fragments that match the full
-page, item data passed to the modal only through escaped data-* attributes, and templates that
-keep to the CSP (no inline scripts, handlers or styles)."""
+page, item data passed to the modal only through escaped data-* attributes, templates that keep
+to the CSP (no inline scripts, handlers or styles), empty states, the "Clear done (n)" count, the
+connection status in the header and the phone's bottom bar."""
 
 import re
 
-from factories import create_category, create_item
-from sqlalchemy import update
+from factories import create_board, create_category, create_item, create_user
+from sqlalchemy import select, update
 
-from easytodo.models import Item
+from easytodo.models import Item, User
 from easytodo.web import FRONTEND_DIR
 
 HX = {"HX-Request": "true"}
@@ -88,7 +89,6 @@ async def test_editor_category_fragment_has_edit_controls(editor_client, categor
         html,
     )
     assert f'hx-patch="/categories/{category.id}"' in html  # rename
-    assert f'hx-post="/categories/{category.id}/clear-done"' in html
     assert re.search(
         rf'hx-delete="/categories/{category.id}" hx-target="#category-{category.id}"'
         r' hx-confirm="[^"]+"',
@@ -183,3 +183,77 @@ async def test_done_items_are_struck_through_and_listed_last(editor_client, cate
     assert "line-through" not in items[0].split()
     assert "line-through" in items[1].split()
     assert re.search(r'<input type="checkbox"[^>]* checked>', html)
+
+
+async def test_empty_board_invites_the_first_category(editor_client, viewer_client, board):
+    for path in (f"/boards/{board.id}", f"/boards/{board.id}/content"):
+        editor_html = (await editor_client.get(path)).text
+        viewer_html = (await viewer_client.get(path)).text
+        assert "Add your first category" in editor_html, path
+        assert "Add your first category" not in viewer_html, path  # a viewer cannot
+        assert "This board has no categories yet." in viewer_html, path
+
+
+async def test_empty_category_says_so(editor_client, viewer_client, category, db):
+    for client in (editor_client, viewer_client):
+        html = section((await client.get(f"/categories/{category.id}")).text, category.id)
+        assert "No items yet." in html
+
+    await create_item(db, category, "Milk")
+    html = section((await editor_client.get(f"/categories/{category.id}")).text, category.id)
+    assert "No items yet." not in html
+
+
+async def test_clear_done_shows_the_count_only_when_something_is_done(
+    editor_client, category, item, db
+):
+    clear_done = (
+        rf'hx-post="/categories/{category.id}/clear-done"[^>]*>Clear done \((\d+)\)</button>'
+    )
+    html = (await editor_client.get(f"/categories/{category.id}")).text
+    assert "/clear-done" not in html  # nothing to clear
+
+    await create_item(db, category, "Apple", is_done=True)
+    await create_item(db, category, "Pear", is_done=True)
+    html = (await editor_client.get(f"/categories/{category.id}")).text
+    assert re.findall(clear_done, html) == ["2"]
+
+    html = (await editor_client.post(f"/items/{item.id}/toggle")).text  # its answer counts too
+    assert re.findall(clear_done, html) == ["3"]
+
+
+async def test_connection_status_is_in_the_header_of_the_board_page(editor_client, board):
+    html = (await editor_client.get(f"/boards/{board.id}")).text
+    header = re.search(r"<header.*?</header>", html, re.DOTALL)[0]
+    assert re.search(rf'<p id="conn-status" data-board-id="{board.id}" role="status"', header)
+
+    assert "conn-status" not in (await editor_client.get("/boards")).text  # board pages only
+
+
+async def test_bottom_bar_switches_between_the_users_own_boards(
+    editor_client, viewer_client, board, db
+):
+    editor = await db.scalar(select(User).where(User.email == "editor@example.com"))
+    home = await create_board(db, editor, NASTY)
+    stranger = await create_user(db, "stranger@example.com")
+    secret = await create_board(db, stranger, "Secret")
+
+    html = (await editor_client.get(f"/boards/{board.id}")).text
+
+    bar = re.search(r'<nav id="bottom-bar".*?</nav>', html, re.DOTALL)[0]
+    links = re.findall(r'<a href="([^"]*)"([^>]*)>([^<]*)</a>', bar)
+    assert [(href, text.strip()) for href, _, text in links] == [
+        (f"/boards/{home.id}", NASTY_ESCAPED),  # own boards first, as on the board list
+        (f"/boards/{board.id}", "Groceries"),
+        ("/boards", "All boards"),
+    ]
+    assert 'aria-current="page"' in links[1][1]
+    assert f"/boards/{secret.id}" not in html and "Secret" not in html
+    assert re.search(r'<button type="button"[^>]*data-focus="new-category-name"[^>]*>', bar)
+
+    viewer_bar = re.search(
+        r'<nav id="bottom-bar".*?</nav>',
+        (await viewer_client.get(f"/boards/{board.id}")).text,
+        re.DOTALL,
+    )[0]
+    assert "New category" not in viewer_bar and f"/boards/{board.id}" in viewer_bar

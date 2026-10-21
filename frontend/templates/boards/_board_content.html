@@ -32,7 +32,9 @@
   {% endif %}
 
   <div id="categories" class="gap-6 sm:columns-2 lg:columns-3"{% if can_edit %} data-sortable-categories{% endif %}>
-    <p class="mb-6 hidden text-slate-600 only:block">This board has no categories yet.</p>
+    {#- Shown only while it is the only child: until the first category arrives (the "New category"
+        form appends it here, the board is not reloaded) and again once the last one is deleted. #}
+    <p class="mb-6 hidden text-slate-600 dark:text-slate-400 only:block">{% if can_edit %}Add your first category{% else %}This board has no categories yet.{% endif %}</p>
     {% for category_view in view.categories %}
     {% include "boards/_category.html" %}
     {% endfor %}

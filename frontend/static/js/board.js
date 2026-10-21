@@ -1,5 +1,6 @@
-// Board page: drag and drop (SortableJS), the item modal (Alpine component "itemModal"), fields
-// that are ready for the next entry, and reloading the board when a change lost a race.
+// Board page: drag and drop (SortableJS), the item modal (Alpine component "itemModal"), ticks
+// that show at once, fields that are ready for the next entry, the bottom bar's "New category",
+// and reloading the board when a change lost a race.
 // Loaded before Alpine (see base.html), so the component is registered on alpine:init. The modal
 // reads items only from data-* attributes, which the templates escape; no page data is ever
 // written into a script.
@@ -9,6 +10,8 @@
   "use strict";
 
   const BOARD_CONTENT = "#board-content";
+  const TICK = 'input[type="checkbox"][hx-post$="/toggle"]';
+  const FOCUSABLE = "input, textarea, select, button";
   // A reload that the user did not ask for just now: htmx sets the new content up at once (no
   // settle delay), so a form in it never submits as a plain page request before htmx has it.
   const RELOAD_SWAP = "outerHTML settle:0ms";
@@ -123,6 +126,34 @@
     }
   });
 
+  // A tick (or untick) shows at once, struck through or not, before the server has answered;
+  // the answer then replaces the category. If the request fails, it is undone (app.js says so).
+  function strike(checkbox) {
+    checkbox.closest("[data-item-id]").classList.toggle("line-through", checkbox.checked);
+  }
+
+  document.addEventListener("htmx:beforeRequest", (event) => {
+    if (event.detail.elt.matches(TICK)) strike(event.detail.elt);
+  });
+
+  function undoTick(event) {
+    const checkbox = event.detail.elt;
+    if (!checkbox.matches(TICK) || !checkbox.isConnected) return;
+    checkbox.checked = !checkbox.checked;
+    strike(checkbox);
+  }
+  document.addEventListener("htmx:responseError", undoTick);
+  document.addEventListener("htmx:sendError", undoTick);
+
+  // <button data-focus="field-id"> (the bottom bar's "New category"): to that field, ready to type.
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-focus]");
+    const field = button && document.getElementById(button.dataset.focus);
+    if (!field) return;
+    field.scrollIntoView({ block: "center" });
+    field.focus();
+  });
+
   // Lists that htmx swaps out take their Sortable instance with them (Sortable keeps a registry).
   document.addEventListener("htmx:beforeCleanupElement", (event) => {
     const sortable = Sortable.get(event.target);
@@ -171,6 +202,20 @@
         this.open = true;
         editing = true;
         this.$nextTick(() => name.focus());
+      },
+
+      // Tab and Shift+Tab go round the modal's controls, never out to the page behind it.
+      trapFocus(event) {
+        const controls = Array.from(event.currentTarget.querySelectorAll(FOCUSABLE));
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
       },
 
       close() {

@@ -1,15 +1,19 @@
-{# Context: view (BoardView). The board is rendered inline, so the first view is ready HTML; then
-   realtime.js keeps it current over the board's WebSocket, and shows the connection in
-   #conn-status (a fixed height, so the text appearing moves nothing). -#}
+{# Context: view (BoardView), boards (the user's BoardSummary list, for the board switcher). The
+   board is rendered inline, so the first view is ready HTML; then realtime.js keeps it current over
+   the board's WebSocket, and shows the connection in the header (#conn-status). On a phone a bar
+   along the bottom holds the board switcher and "New category". -#}
 {% extends "base.html" %}
 {% block title %}{{ view.board.name }} · EasyToDo{% endblock %}
 {% block scripts %}
   <script src="/static/js/board.js" defer></script>
   <script src="/static/js/realtime.js" defer></script>
 {% endblock %}
+{% block header_status %}
+<p id="conn-status" data-board-id="{{ view.board.id }}" role="status" class="conn-status"><span class="sr-only sm:not-sr-only"></span></p>
+{% endblock %}
 {% block content %}
-<p id="conn-status" data-board-id="{{ view.board.id }}" role="status" class="-mt-6 mb-2 h-4 text-right text-xs font-medium text-slate-500"></p>
-{% if can(view.role, Action.EDIT_CONTENT) %}
+{% set can_edit = can(view.role, Action.EDIT_CONTENT) %}
+{% if can_edit %}
 <div x-data="itemModal">
   {% include "boards/_board_content.html" %}
   {% include "boards/_item_modal.html" %}
@@ -17,4 +21,18 @@
 {% else %}
 {% include "boards/_board_content.html" %}
 {% endif %}
+<nav id="bottom-bar" aria-label="Board" class="bottom-bar">
+  <details class="relative">
+    <summary class="btn-secondary cursor-pointer list-none [&::-webkit-details-marker]:hidden">Boards</summary>
+    <div class="menu bottom-full left-0 right-auto mt-0 mb-2 max-h-[60dvh] overflow-y-auto">
+      {% for s in boards %}
+      <a href="/boards/{{ s.board.id }}" class="menu-item break-all aria-[current=page]:text-emerald-700 dark:aria-[current=page]:text-emerald-400"{% if s.board.id == view.board.id %} aria-current="page"{% endif %}>{{ s.board.name }}</a>
+      {% endfor %}
+      <a href="/boards" class="menu-item">All boards</a>
+    </div>
+  </details>
+  {% if can_edit %}
+  <button type="button" class="btn-primary" data-focus="new-category-name">New category</button>
+  {% endif %}
+</nav>
 {% endblock %}

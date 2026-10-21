@@ -1,7 +1,7 @@
-// Live board updates (easytodo.realtime): a WebSocket per board page. The server sends thin events
-// ({"type", "board_id", "category_ids"}) and the page fetches what they name through the normal
-// routes, as HTML: one category, or the whole board. Every (re)connect reloads the whole board,
-// since events may have been missed while the socket was down.
+// Live board updates (easytodo.realtime): a WebSocket per board page, its state shown in the
+// header. The server sends thin events ({"type", "board_id", "category_ids"}) and the page fetches
+// what they name through the normal routes, as HTML: one category, or the whole board. Every
+// (re)connect reloads the whole board, since events may have been missed while the socket was down.
 // An update waits while the user is in the middle of something it would replace: a finger or
 // mouse button down, typing in one of its fields, a drag or the item modal (board.js), or one of
 // this tab's own requests (whose answer brings the change anyway). It runs once they are done.
@@ -27,9 +27,12 @@
   const board = () => window.easytodoBoard;
   const categoryElement = (id) => document.getElementById(`category-${id}`);
 
-  function setStatus(text) {
+  // The connection in the header: data-state colours its dot, the word goes in its <span>.
+  function setStatus(state, text) {
     const status = document.getElementById("conn-status");
-    if (status) status.textContent = text;
+    if (!status) return;
+    status.dataset.state = state;
+    status.querySelector("span").textContent = text;
   }
 
   // Whether replacing `element` now would get in the user's way.
@@ -191,7 +194,7 @@
       socket = ws;
       ws.addEventListener("open", () => {
         failures = 0;
-        setStatus("Live");
+        setStatus("live", "Live");
         pending.board = true; // whatever happened while not connected
         scheduleFlush();
       });
@@ -205,7 +208,7 @@
           // the socket was down, and the reconnect is refused.
           location.assign("/boards");
         } else {
-          setStatus("Reconnecting…");
+          setStatus("reconnecting", "Reconnecting…");
           retry = setTimeout(connect, retryDelay(failures));
           failures += 1;
         }

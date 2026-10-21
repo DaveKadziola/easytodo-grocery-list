@@ -19,6 +19,8 @@ NASTY = 'O\'Reilly <b>"x"</b> <script>alert(1)</script>'
 TAP_TARGETS = (
     "a, button, summary, select, input:not([type=checkbox]), label:has(> input[type=checkbox])"
 )
+# On a phone the bottom bar covers the foot of the screen: what a finger goes for is scrolled up.
+SCROLL_CLEAR_OF_THE_BOTTOM_BAR = "(el) => el.scrollIntoView({ block: 'center' })"
 
 
 def seed_board(seed, owner, categories: dict[str, list[str]], done: tuple[str, ...] = ()) -> int:
@@ -126,6 +128,7 @@ def test_drag_item_to_other_category(logged_in_page, seed, user, open_board):
 
 def touch_drag(page: Page, source: Locator, target: Locator, hold_ms: int) -> None:
     """A finger on ``source``, held for ``hold_ms``, then moved onto ``target`` and lifted."""
+    target.evaluate(SCROLL_CLEAR_OF_THE_BOTTOM_BAR)
     start, end = source.bounding_box(), target.bounding_box()
     touch = page.context.new_cdp_session(page)
 
@@ -175,7 +178,7 @@ def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, ope
         expect(page.get_by_role("heading", level=1)).to_be_visible()
     anonymous.close()
 
-    board_id = seed_board(seed, user, {"Dairy": ["Milk"], "Bakery": []})
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"], "Bakery": []}, done=("Milk",))
     page = logged_in_page
     problems += watch_console(page)
     page.goto("/boards")
@@ -187,7 +190,7 @@ def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, ope
     dialog.get_by_role("button", name="Cancel").click()
     expect(dialog).to_be_hidden()
     category(page, "Dairy").locator("summary").click()
-    expect(category(page, "Dairy").get_by_role("button", name="Clear done")).to_be_visible()
+    expect(category(page, "Dairy").get_by_role("button", name="Clear done (1)")).to_be_visible()
 
     assert [p for p in problems if "Content Security Policy" in p or "Refused to" in p] == []
     assert problems == []
@@ -285,7 +288,7 @@ def test_new_category_goes_last_and_the_field_is_ready_for_the_next(
     page = logged_in_page
     board_id = seed_board(seed, user, {})
     open_board(page, board_id)
-    expect(page.get_by_text("This board has no categories yet.")).to_be_visible()
+    expect(page.get_by_text("Add your first category")).to_be_visible()
     field = page.get_by_placeholder("New category")
 
     for name in ("Dairy", "Bakery"):
@@ -295,7 +298,7 @@ def test_new_category_goes_last_and_the_field_is_ready_for_the_next(
         expect(field).to_have_value("")
         expect(field).to_be_focused()
 
-    expect(page.get_by_text("This board has no categories yet.")).to_be_hidden()
+    expect(page.get_by_text("Add your first category")).to_be_hidden()
     page.reload()
     expect(page.locator("section[data-category-id] h2")).to_have_text(["Dairy", "Bakery"])
 

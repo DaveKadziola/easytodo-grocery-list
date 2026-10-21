@@ -1,10 +1,11 @@
 // Page shell: headers for every HTMX request (and the tab's id, window.easytodo.clientId), toasts
-// from HX-Trigger or the flash cookie, and copy buttons.
+// (from HX-Trigger, the flash cookie, or a request that failed without one), and copy buttons.
 (() => {
   "use strict";
 
   const CLIENT_ID_KEY = "easytodo.clientId";
   const FLASH_COOKIE = "easytodo_flash";
+  const TOAST_MS = 4000; // how long a toast stays
   let pageClientId = null;
 
   function randomId() {
@@ -51,12 +52,24 @@
     toast.className = level === "error" ? "toast toast-error" : "toast";
     toast.textContent = message;
     container.appendChild(toast);
+    setTimeout(() => toast.remove(), TOAST_MS);
   }
 
   // HX-Trigger: {"toast": {"level": "error", "message": "..."}}
   document.addEventListener("toast", (event) => {
     const { level, message } = event.detail || {};
     showToast(level, message);
+  });
+
+  // What the user just did did not happen (and board.js has undone a tick): no answer at all, or
+  // an error answer that brings no toast of its own (a proxy's 502, an unexpected 500).
+  document.addEventListener("htmx:sendError", () => {
+    showToast("error", "Could not reach the server. Try again.");
+  });
+  document.addEventListener("htmx:responseError", (event) => {
+    if (!event.detail.xhr.getResponseHeader("HX-Trigger")) {
+      showToast("error", "Something went wrong. Try again.");
+    }
   });
 
   // A redirect after a plain form post cannot carry HX-Trigger, so the server leaves the toast in

@@ -1,9 +1,10 @@
 {# The item modal: Alpine component "itemModal" (static/js/board.js), on an element around the board
    content. board.js fills the fields (as text) from the data-* attributes of the item name that
    was clicked, never from values written into a script, and the category list from the
-   categories on the page. The CSP build of Alpine cannot assign, so there is no x-model. -#}
-<div x-show="open" x-cloak class="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/50 sm:items-center sm:p-4" @click.self="close" @keydown.escape="close">
-  <div role="dialog" aria-modal="true" aria-labelledby="item-modal-title" class="max-h-dvh w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl sm:rounded-2xl">
+   categories on the page. The CSP build of Alpine cannot assign, so there is no x-model. Esc
+   closes it, and Tab keeps to its controls. -#}
+<div x-show="open" x-cloak class="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/50 dark:bg-black/60 sm:items-center sm:p-4" @click.self="close" @keydown.escape="close">
+  <div role="dialog" aria-modal="true" aria-labelledby="item-modal-title" class="max-h-dvh w-full max-w-md overflow-y-auto rounded-t-2xl bg-white dark:bg-slate-900 p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-xl sm:rounded-2xl" @keydown.tab="trapFocus">
     <h2 id="item-modal-title" class="text-lg font-semibold">Edit item</h2>
     <form x-ref="form" @submit.prevent="save" class="mt-4 space-y-4">
       <div>

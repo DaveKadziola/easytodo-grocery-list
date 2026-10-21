@@ -7,7 +7,7 @@
     <p>Scan this QR code with an authenticator app, such as Google Authenticator or Authy.</p>
     <div role="img" aria-label="QR code for your authenticator app" class="flex justify-center">{{ qr_code }}</div>
     <p>Can't scan it? Enter this key in the app instead:</p>
-    <code id="totp-secret" class="block select-all break-all rounded-lg bg-slate-100 px-3 py-2 font-mono text-base">{{ secret }}</code>
+    <code id="totp-secret" class="block select-all break-all rounded-lg bg-slate-100 dark:bg-slate-800 px-3 py-2 font-mono text-base">{{ secret }}</code>
   </section>
   <form method="post" action="/account/2fa/setup" class="card mt-6 space-y-4">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

@@ -14,10 +14,10 @@
     <div>
       <label for="password" class="label">Password</label>
       <input id="password" name="password" type="password" autocomplete="new-password" required minlength="10" maxlength="256" aria-describedby="password-hint" class="input">
-      <p id="password-hint" class="mt-1 text-sm text-slate-500">At least 10 characters.</p>
+      <p id="password-hint" class="mt-1 text-sm text-slate-500 dark:text-slate-400">At least 10 characters.</p>
     </div>
     <button type="submit" class="btn-primary w-full">Create account</button>
   </form>
-  <p class="mt-6 text-center text-sm text-slate-600">Already have an account? <a href="/login{% if next_path %}?next={{ next_path|urlencode }}{% endif %}" class="link">Sign in</a></p>
+  <p class="mt-6 text-center text-sm text-slate-600 dark:text-slate-400">Already have an account? <a href="/login{% if next_path %}?next={{ next_path|urlencode }}{% endif %}" class="link">Sign in</a></p>
 </div>
 {% endblock %}

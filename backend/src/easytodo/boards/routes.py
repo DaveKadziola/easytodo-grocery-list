@@ -37,7 +37,10 @@ async def new_board(
 
 @router.get("/{board_id}")
 async def board_page(request: Request, db: DbSession, user: CurrentUser, board_id: int) -> Response:
-    return render(request, "boards/board.html", {"view": await get_board_view(db, board_id, user)})
+    view = await get_board_view(db, board_id, user)  # first: a non-member gets the 404
+    # The user's boards, for the board switcher in the phone's bottom bar.
+    context = {"view": view, "boards": await list_boards(db, user)}
+    return render(request, "boards/board.html", context)
 
 
 @router.patch("/{board_id}")

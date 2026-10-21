@@ -3,19 +3,36 @@
 @source "../templates";
 @source "../static/js";
 
+/* Dark colours (the dark: variants) follow the system setting, prefers-color-scheme. */
+
+@layer base {
+  /* Native controls (checkboxes, selects, scrollbars) follow the theme too. */
+  :root {
+    color-scheme: light dark;
+  }
+
+  /* viewport-fit=cover lets the page run under a phone's notch: keep the content beside it. */
+  body {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
 @layer components {
   .card {
     @apply rounded-xl bg-white p-6 shadow-sm ring-1 ring-slate-200;
+    @apply dark:bg-slate-900 dark:ring-slate-800;
   }
 
   .label {
-    @apply mb-1 block text-sm font-medium text-slate-700;
+    @apply mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300;
   }
 
   /* min-h-11 = 44 px touch targets; text-base keeps iOS from zooming in on focus. */
   .input {
     @apply block min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base;
     @apply focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/30 focus:outline-none;
+    @apply dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100;
   }
 
   .btn-primary {
@@ -26,17 +43,20 @@
   .btn-secondary {
     @apply inline-flex min-h-11 items-center justify-center rounded-lg px-3 text-sm font-medium text-slate-700 ring-1 ring-slate-300;
     @apply hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600;
+    @apply dark:text-slate-200 dark:ring-slate-600 dark:hover:bg-slate-800;
   }
 
   .btn-danger {
     @apply inline-flex min-h-11 items-center justify-center rounded-lg px-3 text-sm font-medium text-red-700 ring-1 ring-red-200;
     @apply hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600;
+    @apply dark:text-red-400 dark:ring-red-900 dark:hover:bg-red-950;
   }
 
   /* A 44×44 px icon button (category handle, menu). */
   .btn-icon {
     @apply inline-flex size-11 items-center justify-center rounded-lg text-xl leading-none;
     @apply hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600;
+    @apply dark:hover:bg-slate-800;
   }
 
   /* The 44×44 px area around an item's checkbox; tapping anywhere in it ticks the item. */
@@ -49,14 +69,16 @@
     @apply rounded focus-visible:outline-2 focus-visible:outline-emerald-600;
   }
 
-  /* The category menu, opened from its <details> summary. */
+  /* A menu opened from a <details> summary: a category's actions, the board switcher. */
   .menu {
     @apply absolute right-0 z-10 mt-1 w-64 rounded-lg bg-white p-1 shadow-lg ring-1 ring-slate-200;
+    @apply dark:bg-slate-800 dark:ring-slate-700;
   }
 
   .menu-item {
     @apply flex min-h-11 w-full items-center rounded-md px-3 text-left text-sm font-medium;
     @apply hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-emerald-600;
+    @apply dark:hover:bg-slate-700;
   }
 
   /* Where a dragged item or category will land. */
@@ -65,19 +87,52 @@
   }
 
   .link {
-    @apply font-medium text-emerald-700 underline-offset-2 hover:underline;
+    @apply font-medium text-emerald-700 underline-offset-2 hover:underline dark:text-emerald-400;
   }
 
   .form-error {
     @apply rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-200;
+    @apply dark:bg-red-950 dark:text-red-200 dark:ring-red-900;
+  }
+
+  /* The board's connection in the header: a dot (green when live), and the word beside it from
+     a tablet up (on a phone the header has no room; screen readers still get it). */
+  .conn-status {
+    @apply flex min-w-0 items-center gap-1.5 text-xs font-medium text-slate-600 dark:text-slate-400;
+    @apply before:size-2.5 before:shrink-0 before:rounded-full before:bg-slate-300 before:content-[''];
+    @apply data-[state=live]:before:bg-emerald-500 data-[state=reconnecting]:before:bg-amber-500;
+    @apply dark:before:bg-slate-600;
+  }
+
+  /* The board page on a phone: a bar along the bottom, above the home indicator. */
+  .bottom-bar {
+    @apply fixed inset-x-0 bottom-0 z-30 flex items-center justify-between gap-2 px-4 pt-2 sm:hidden;
+    @apply border-t border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900;
+    padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+  }
+
+  .toasts {
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
   }
 
   .toast {
     @apply pointer-events-auto max-w-sm rounded-lg bg-slate-900 px-4 py-3 text-sm text-white shadow-lg;
+    @apply dark:bg-slate-700;
   }
 
   .toast-error {
     @apply bg-red-700;
+  }
+}
+
+/* With the bottom bar on a phone, the page ends above it and toasts show above it. */
+@media (width < 40rem) {
+  body:has(.bottom-bar) main {
+    padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+  }
+
+  body:has(.bottom-bar) .toasts {
+    bottom: 3.75rem;
   }
 }
 
