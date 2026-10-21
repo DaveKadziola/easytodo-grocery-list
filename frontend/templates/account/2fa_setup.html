@@ -12,6 +12,11 @@
   <form method="post" action="/account/2fa/setup" class="card mt-6 space-y-4">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     {% if error %}<p role="alert" class="form-error">{{ error }}</p>{% endif %}
+    {#- The password first: the code from the app is only good for about a minute. #}
+    <div>
+      <label for="password" class="label">Current password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required class="input">
+    </div>
     <div>
       <label for="code" class="label">Code from the app</label>
       <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" required class="input">

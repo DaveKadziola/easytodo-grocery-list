@@ -23,6 +23,7 @@ from easytodo.auth.twofa import verify_second_factor
 from easytodo.models import RecoveryCode, User, UserSession
 from easytodo.security.crypto import decrypt
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
+from easytodo.security.ratelimit import RateLimiter
 from easytodo.security.tokens import hash_token
 from easytodo.web import FLASH_COOKIE
 
@@ -33,6 +34,7 @@ WRONG_CURRENT_PASSWORD = "Current password is incorrect."
 RECOVERY_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 SECRET_ON_PAGE = re.compile(r'id="totp-secret"[^>]*>([A-Z2-7]+)<')
 RECOVERY_CODES_ON_PAGE = re.compile(r"<li data-recovery-code>([^<]+)</li>")
+TOO_MANY_REQUESTS = "Too many requests. Try again later."
 HX = {"HX-Request": "true"}
 
 
@@ -84,7 +86,8 @@ async def enable_2fa(client: httpx.AsyncClient) -> tuple[str, list[str]]:
     """Turn 2FA on through the account pages; returns the secret and the recovery codes."""
     page = await client.get("/account/2fa/setup")
     secret = SECRET_ON_PAGE.search(page.text)[1]
-    r = await client.post("/account/2fa/setup", data={"code": current_code(secret)})
+    form = {"password": DEFAULT_PASSWORD, "code": current_code(secret)}
+    r = await client.post("/account/2fa/setup", data=form)
     assert r.status_code == 200, r.text
     return secret, RECOVERY_CODES_ON_PAGE.findall(r.text)
 
@@ -119,8 +122,10 @@ async def test_enable_2fa_and_login_requires_code(client_factory, db):
     assert page.status_code == 200
     assert "<svg" in page.text  # the QR code, inline
     assert page.headers["cache-control"] == "no-store"
+    assert 'name="password" type="password"' in page.text
     secret = SECRET_ON_PAGE.search(page.text)[1]
-    r = await owner.post("/account/2fa/setup", data={"code": current_code(secret)})
+    form = {"password": DEFAULT_PASSWORD, "code": current_code(secret)}
+    r = await owner.post("/account/2fa/setup", data=form)
 
     assert r.status_code == 200
     assert r.headers["cache-control"] == "no-store"
@@ -274,6 +279,39 @@ async def test_second_step_is_rate_limited_per_ip(client, user_with_2fa):
     assert statuses == [400] * 4 + [303] * 6 + [429]
 
 
+async def test_second_step_codes_are_limited_per_account(app, client_from_ip, db, user_with_2fa):
+    """Signing in again with the password, from other IPs, brings no more guesses: the account has
+    20 codes per 15 minutes over all its pending sign-ins."""
+    now = [0.0]
+    app.state.rate_limiter = RateLimiter(clock=lambda: now[0])
+    wrong = wrong_code(user_with_2fa.secret)
+    for n in range(5):  # 5 fresh pending sign-ins x 4 wrong codes = 20, each from its own IP
+        device = await client_from_ip(f"10.0.0.{n + 1}")
+        await password_step(device)
+        for _ in range(4):
+            r = await code_step(device, wrong)
+            assert r.status_code == 400 and INVALID_CODE in r.text
+
+    device = await client_from_ip("10.0.0.99")
+    r = await password_step(device)
+    assert r.status_code == 303 and r.headers["location"] == "/login/2fa"
+    r = await code_step(device, current_code(user_with_2fa.secret))  # even the right code
+
+    assert r.status_code == 429
+    assert r.headers["content-type"].startswith("text/html")
+    assert TOO_MANY_REQUESTS in r.text and 'name="code"' in r.text  # the code form, for later
+    assert (await dave(db)).totp_last_step is None  # the code was not even checked
+    pending = await sessions(db)
+    assert len(pending) == 6 and all(s.mfa_pending for s in pending)
+    assert [s.mfa_failures for s in pending][-1] == 0  # a refused attempt is not a wrong code
+
+    now[0] = 899.0  # the window is 15 minutes, counted from the first code
+    assert (await code_step(device, current_code(user_with_2fa.secret))).status_code == 429
+    now[0] = 900.0
+    r = await code_step(device, current_code(user_with_2fa.secret))
+    assert r.status_code == 303 and r.headers["location"] == "/boards"
+
+
 async def test_pending_session_signed_out_meanwhile_ends_the_second_step(
     client, db, user_with_2fa, monkeypatch
 ):
@@ -329,26 +367,74 @@ async def test_wrong_setup_code_keeps_2fa_off(client, db):
     await login(client, EMAIL)
     secret = SECRET_ON_PAGE.search((await client.get("/account/2fa/setup")).text)[1]
 
-    r = await client.post("/account/2fa/setup", data={"code": wrong_code(secret)})
+    form = {"password": DEFAULT_PASSWORD, "code": wrong_code(secret)}
+    r = await client.post("/account/2fa/setup", data=form)
 
     assert r.status_code == 400 and INVALID_CODE in r.text
     assert SECRET_ON_PAGE.search(r.text)[1] == secret  # the same key: nothing to scan again
     assert (await dave(db)).totp_enabled is False
     assert await recovery_code_hashes(db) == set()
-    r = await client.post("/account/2fa/setup", data={"code": current_code(secret)})
+    form = {"password": DEFAULT_PASSWORD, "code": current_code(secret)}
+    r = await client.post("/account/2fa/setup", data=form)
     assert r.status_code == 200
+
+
+async def test_setup_needs_the_password(client, db):
+    """A stolen session alone cannot turn 2FA on, which would lock the owner out."""
+    await create_user(db, EMAIL)
+    await login(client, EMAIL)
+    secret = SECRET_ON_PAGE.search((await client.get("/account/2fa/setup")).text)[1]
+
+    for form in (
+        {"password": WRONG_PASSWORD, "code": current_code(secret)},
+        {"code": current_code(secret)},
+    ):
+        r = await client.post("/account/2fa/setup", data=form)
+
+        assert r.status_code == 400 and WRONG_CURRENT_PASSWORD in r.text
+        assert SECRET_ON_PAGE.search(r.text)[1] == secret  # the same key, still not turned on
+        assert r.headers["cache-control"] == "no-store"
+        user = await dave(db)
+        assert (user.totp_enabled, user.totp_last_step) == (False, None)  # the code not used up
+        assert await recovery_code_hashes(db) == set()
+
+    form = {"password": DEFAULT_PASSWORD, "code": current_code(secret)}
+    r = await client.post("/account/2fa/setup", data=form)
+
+    assert r.status_code == 200
+    assert len(set(RECOVERY_CODES_ON_PAGE.findall(r.text))) == 10
+    assert (await dave(db)).totp_enabled is True
+
+
+async def test_setup_shares_the_password_guess_budget(client, db):
+    await create_user(db, EMAIL)
+    await login(client, EMAIL)
+    secret = SECRET_ON_PAGE.search((await client.get("/account/2fa/setup")).text)[1]
+    form = {"password": WRONG_PASSWORD, "code": current_code(secret)}
+    statuses = [(await client.post("/account/2fa/setup", data=form)).status_code for _ in range(10)]
+    assert statuses == [400] * 10
+
+    # The change-password form, the 2FA forms and this one have one budget per IP.
+    r = await client.post("/account/2fa/setup", data=form | {"password": DEFAULT_PASSWORD})
+    assert r.status_code == 429
+    r = await client.post("/account/password", data={"current_password": DEFAULT_PASSWORD})
+    assert r.status_code == 429
+    assert (await dave(db)).totp_enabled is False
 
 
 async def test_setup_is_refused_while_2fa_is_on(client, db, user_with_2fa):
     await sign_in_with_2fa(client, user_with_2fa.secret)
     before = (await dave(db)).totp_secret_enc
 
+    code = next_code(user_with_2fa.secret)
     for r in (
         await client.get("/account/2fa/setup"),
-        await client.post("/account/2fa/setup", data={"code": next_code(user_with_2fa.secret)}),
+        await client.post("/account/2fa/setup", data={"password": DEFAULT_PASSWORD, "code": code}),
+        await client.post("/account/2fa/setup", data={"password": WRONG_PASSWORD, "code": code}),
     ):
         assert r.status_code == 409
         assert "Two-factor authentication is already on." in r.text
+        assert user_with_2fa.secret not in r.text  # the secret in use is never shown again
     user = await dave(db)
     assert (user.totp_enabled, user.totp_secret_enc) == (True, before)
 

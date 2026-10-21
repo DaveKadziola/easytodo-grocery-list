@@ -26,15 +26,17 @@ from easytodo.auth.sessions import (
     set_session_cookie,
 )
 from easytodo.auth.twofa import (
+    ACCOUNT_CODE_ATTEMPTS,
+    ACCOUNT_CODE_WINDOW_S,
     INVALID_CODE,
     MAX_CODE_FAILURES,
     count_failed_code,
     verify_second_factor,
 )
-from easytodo.errors import AppError, NotFound
+from easytodo.errors import AppError, NotFound, TooManyRequests
 from easytodo.models import User, UserSession
 from easytodo.realtime.events import commit_and_publish
-from easytodo.security.ratelimit import rate_limit
+from easytodo.security.ratelimit import limit_user, rate_limit
 from easytodo.web import flash, render
 
 router = APIRouter()
@@ -153,10 +155,17 @@ async def second_factor(
     next_: NextParam = None,
 ) -> Response:
     """A right code swaps the pending session for a full one (a new token); the fifth wrong one
-    ends the pending session, so the password has to be entered again."""
+    ends the pending session, so the password has to be entered again.
+
+    Besides the limit per IP, the account has a budget of codes over all its pending sessions,
+    which signing in again does not renew; an attempt over it is not checked at all."""
     if pending is None:
         return RedirectResponse("/login", status_code=303)
     user, session = pending
+    try:
+        limit_user(request, "login-2fa", user.id, ACCOUNT_CODE_ATTEMPTS, ACCOUNT_CODE_WINDOW_S)
+    except TooManyRequests as exc:  # the code form again, with the reason, for a later try
+        return render(request, "auth/login_2fa.html", {"error": exc.message}, status_code=429)
     settings = request.app.state.settings
     if await verify_second_factor(db, user, code, settings):
         await revoke_session(db, session.id)

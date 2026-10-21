@@ -1,14 +1,19 @@
-"""Auth fixtures: an account with two-factor authentication on, and the live server (for the
-board WebSocket)."""
+"""Auth fixtures: an account with two-factor authentication on, clients that come from a given
+IP address, and the live server (for the board WebSocket)."""
 
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
+import httpx
 import pyotp
 import pytest
 from factories import create_user
 from live_server import live_server  # noqa: F401 (fixture)
+from starlette.types import ASGIApp
 
 from easytodo.auth.twofa import begin_setup, confirm_setup
+from easytodo.config import Settings
 from easytodo.models import User
 
 
@@ -29,3 +34,22 @@ async def user_with_2fa(db, settings) -> TwoFactorUser:
     user.totp_last_step = None  # confirming the setup used up the current step
     await db.commit()
     return TwoFactorUser(user, secret, codes)
+
+
+@pytest.fixture
+async def client_from_ip(
+    _running_app: ASGIApp, settings: Settings
+) -> AsyncIterator[Callable[[str], Awaitable[httpx.AsyncClient]]]:
+    """``await client_from_ip("10.0.0.1")`` -> a new client (own cookies) for the app whose
+    requests come from that address (the per-IP rate limits key on it)."""
+    async with AsyncExitStack() as stack:
+
+        async def factory(ip: str) -> httpx.AsyncClient:
+            transport = httpx.ASGITransport(app=_running_app, client=(ip, 123))
+            origin = settings.public_origin
+            client = httpx.AsyncClient(
+                transport=transport, base_url=origin, headers={"Origin": origin}
+            )
+            return await stack.enter_async_context(client)
+
+        yield factory

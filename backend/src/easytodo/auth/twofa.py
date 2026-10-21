@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 RECOVERY_CODE_COUNT = 10
 RECOVERY_CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"  # no 0/o, 1/i/l to mix up
 MAX_CODE_FAILURES = 5  # wrong codes before a pending sign-in is dropped
+# Codes one account may try at the second step per window, over all its pending sign-ins and
+# from any IP: whoever has the password gets no more guesses by signing in again.
+ACCOUNT_CODE_ATTEMPTS = 20
+ACCOUNT_CODE_WINDOW_S = 900
 
 INVALID_CODE = "Invalid code. Try again."
 WRONG_PASSWORD = "Current password is incorrect."
@@ -109,7 +113,7 @@ async def disable_2fa(
     phone is no dead end); the secret and the recovery codes are deleted."""
     if not user.totp_enabled:
         raise Conflict(NOT_ON)
-    _check_password(user, password)
+    check_password(user, password)
     if not await verify_second_factor(db, user, code, settings):
         raise ValidationFailed(INVALID_CODE)
     user.totp_enabled = False
@@ -123,7 +127,7 @@ async def regenerate_recovery_codes(db: AsyncSession, user: User, password: str)
     """New recovery codes in place of all the old ones; needs the password."""
     if not user.totp_enabled:
         raise Conflict(NOT_ON)
-    _check_password(user, password)
+    check_password(user, password)
     codes = await _replace_recovery_codes(db, user)
     await db.commit()
     return codes
@@ -141,7 +145,8 @@ def _secret(user: User, settings: Settings) -> str | None:
         return None
 
 
-def _check_password(user: User, password: str) -> None:
+def check_password(user: User, password: str) -> None:
+    """``ValidationFailed`` unless ``password`` is the user's current password."""
     if len(password) > MAX_PASSWORD_LENGTH or not verify_password(user.password_hash, password):
         raise ValidationFailed(WRONG_PASSWORD)
 

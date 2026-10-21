@@ -13,12 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from easytodo.auth.deps import CurrentUser, DbSession, FormField, require_user
 from easytodo.auth.sessions import revoke_all_sessions, revoke_session, sessions_revoked
 from easytodo.auth.twofa import (
+    ALREADY_ON,
     begin_setup,
+    check_password,
     confirm_setup,
     disable_2fa,
     regenerate_recovery_codes,
 )
-from easytodo.errors import AppError, NotFound, ValidationFailed
+from easytodo.errors import AppError, Conflict, NotFound, ValidationFailed
 from easytodo.models import User, UserSession
 from easytodo.realtime.events import commit_and_publish
 from easytodo.security.crypto import decrypt
@@ -120,10 +122,20 @@ async def two_factor_setup_page(request: Request, db: DbSession, user: CurrentUs
 
 @router.post("/2fa/setup")
 async def confirm_two_factor_setup(
-    request: Request, db: DbSession, user: CurrentUser, code: FormField = ""
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    _: PasswordGuesses,
+    password: FormField = "",
+    code: FormField = "",
 ) -> Response:
+    """Turn 2FA on: needs the current password as well as a code, because a stolen session that
+    turns it on would lock the owner out."""
+    if user.totp_enabled:  # before the password check, whose error page shows the secret
+        raise Conflict(ALREADY_ON)
     settings = request.app.state.settings
     try:
+        check_password(user, password)
         codes = await confirm_setup(db, user, code, settings)
     except ValidationFailed as exc:
         # The secret already scanned stays, so another try needs no new scan.
