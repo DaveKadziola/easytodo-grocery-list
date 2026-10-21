@@ -16,7 +16,7 @@ SHA256_CHECK := $(if $(filter Darwin,$(shell uname -s)),shasum -a 256 -c,sha256s
 test-db:
 	docker compose -f compose.test.yml up -d --wait
 
-test: test-db
+test: test-db css
 	cd backend && uv run pytest
 
 e2e: test-db css
