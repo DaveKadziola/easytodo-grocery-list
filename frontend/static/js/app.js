@@ -1,11 +1,12 @@
 // Page shell: headers for every HTMX request (and the page's id, window.easytodo.clientId), toasts
 // (from HX-Trigger, the flash cookie, or a request that failed without one), menus that close
-// themselves, and copy buttons.
+// themselves, and copy and download buttons.
 (() => {
   "use strict";
 
   const FLASH_COOKIE = "easytodo_flash";
   const TOAST_MS = 4000; // how long a toast stays
+  const DOWNLOAD_URL_MS = 40000; // how long a saved file's blob URL lives (see data-download)
 
   function randomId() {
     if (crypto.randomUUID) return crypto.randomUUID();
@@ -114,20 +115,41 @@
     if (document.visibilityState === "hidden") openMenus().forEach((menu) => (menu.open = false));
   });
 
-  // <button data-copy="field-id">: copies that field's value (an invite link). The Clipboard API
-  // exists only in secure contexts, so a plain-http LAN install falls back to execCommand.
+  // <button data-copy="field-id">: copies that field's value (an invite link, the recovery codes).
+  // The Clipboard API exists only in secure contexts, so a plain-http LAN install falls back to
+  // execCommand, which needs the field selected; the focus then goes back to the button, as the
+  // field may be hidden from assistive technology (aria-hidden).
   document.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-copy]");
     const field = button && document.getElementById(button.dataset.copy);
     if (!field) return;
-    field.select();
     let copied;
     try {
       await navigator.clipboard.writeText(field.value);
       copied = true;
     } catch {
+      field.select();
       copied = document.execCommand("copy");
+      button.focus();
     }
     if (copied) showToast("info", "Copied.");
+  });
+
+  // <button data-download="field-id" data-filename="name.txt">: saves that field's value as a
+  // UTF-8 text file. No toast: the browser shows the download itself.
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-download]");
+    const field = button && document.getElementById(button.dataset.download);
+    if (!field) return;
+    const url = URL.createObjectURL(new Blob([field.value], { type: "text/plain;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = button.dataset.filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Not at once: iOS Safari reads the blob after this handler has returned, and a revoked URL
+    // fails there with "WebKitBlobResource error 1".
+    setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_URL_MS);
   });
 })();

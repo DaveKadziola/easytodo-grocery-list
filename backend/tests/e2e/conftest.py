@@ -34,6 +34,20 @@ document.addEventListener("htmx:afterSettle", (event) => {
 });
 """
 
+
+def watch_console(page: Page) -> list[str]:
+    """Every console error or warning and every uncaught exception on ``page`` from now on."""
+    problems: list[str] = []
+    page.on(
+        "console",
+        lambda msg: (
+            problems.append(f"{msg.type}: {msg.text}") if msg.type in ("error", "warning") else None
+        ),
+    )
+    page.on("pageerror", lambda exc: problems.append(f"pageerror: {exc}"))
+    return problems
+
+
 type Seed = Callable[[Callable[[AsyncSession], Awaitable[Any]]], Any]
 
 

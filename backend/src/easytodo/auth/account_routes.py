@@ -147,7 +147,13 @@ async def confirm_two_factor_setup(
         # when there is none, or it cannot be decrypted since EASYTODO_SECRET_KEY changed).
         secret = await begin_setup(db, user, settings)
         return _setup_page(request, user, secret, error=exc.message, status_code=400)
-    return _no_store(render(request, "account/2fa_recovery.html", {"codes": codes}))
+    return _no_store(
+        render(
+            request,
+            "account/2fa_recovery.html",
+            {"codes": codes, "generated_at": datetime.now(UTC)},
+        )
+    )
 
 
 @router.post("/2fa/disable")
@@ -181,7 +187,13 @@ async def new_recovery_codes(
         codes = await regenerate_recovery_codes(db, user, password)
     except ValidationFailed as exc:
         return await _account_page(request, db, user, {"twofa_error": exc.message}, 400)
-    return _no_store(render(request, "account/2fa_recovery.html", {"codes": codes}))
+    return _no_store(
+        render(
+            request,
+            "account/2fa_recovery.html",
+            {"codes": codes, "generated_at": datetime.now(UTC)},
+        )
+    )
 
 
 @router.post("/sessions/revoke-others")

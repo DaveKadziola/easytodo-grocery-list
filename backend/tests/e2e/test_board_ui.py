@@ -11,6 +11,7 @@ from factories import create_board, create_category, create_item
 from playwright.sync_api import Locator, Page, expect
 from sqlalchemy import delete, update
 
+from e2e.conftest import watch_console
 from easytodo.models import Category, Item
 
 pytestmark = pytest.mark.e2e
@@ -62,19 +63,6 @@ def item(page: Page, name: str) -> Locator:
 
 def items_of(page: Page, category_name: str) -> Locator:
     return category(page, category_name).locator("li[data-item-id]")
-
-
-def watch_console(page: Page) -> list[str]:
-    """Every console error or warning and every uncaught exception on ``page`` from now on."""
-    problems: list[str] = []
-    page.on(
-        "console",
-        lambda msg: (
-            problems.append(f"{msg.type}: {msg.text}") if msg.type in ("error", "warning") else None
-        ),
-    )
-    page.on("pageerror", lambda exc: problems.append(f"pageerror: {exc}"))
-    return problems
 
 
 def too_small_targets(page: Page) -> list[str]:
@@ -184,7 +172,7 @@ def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, ope
         seed, user, {"Dairy": ["Milk", "Yogurt"], "Bakery": ["Bread"]}, done=("Milk",)
     )
     page = logged_in_page
-    problems += watch_console(page)
+    board_problems = watch_console(page)
     page.goto("/boards")
     open_board(page, board_id)  # as the owner: rename and delete are in the board's menu
     page.get_by_label("Board actions").click()
@@ -206,7 +194,7 @@ def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, ope
     expect(category(page, "Dairy").get_by_role("button", name="Clear done (1)")).to_be_visible()
 
     assert [p for p in problems if "Content Security Policy" in p or "Refused to" in p] == []
-    assert problems == []
+    assert problems == [] and board_problems == []
 
 
 def test_owner_renames_and_deletes_the_board(logged_in_page, seed, user, open_board):

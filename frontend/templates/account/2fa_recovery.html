@@ -9,6 +9,19 @@
     <li data-recovery-code>{{ code }}</li>
     {% endfor %}
   </ul>
+  {#- sr-only, never hidden: the copy fallback needs a rendered field. The lines have no indent, as it would end up in the file. #}
+  <textarea id="recovery-codes-text" readonly class="sr-only" aria-hidden="true" tabindex="-1">EasyToDo recovery codes
+Account: {{ current_user.email }}
+Created: {{ generated_at.strftime("%Y-%m-%d %H:%M") }} UTC
+
+{{ codes|join("\n") }}
+
+Each code signs you in once.
+</textarea>
+  <div class="mt-4 flex flex-wrap gap-2">
+    <button type="button" class="btn-secondary" data-download="recovery-codes-text" data-filename="easytodo-recovery-codes.txt">Save as .txt</button>
+    <button type="button" class="btn-secondary" data-copy="recovery-codes-text">Copy</button>
+  </div>
   <p class="mt-6 text-center"><a href="/account" class="btn-primary">Done</a></p>
 </div>
 {% endblock %}

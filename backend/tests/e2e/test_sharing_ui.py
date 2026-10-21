@@ -9,22 +9,10 @@ import pytest
 from factories import DEFAULT_PASSWORD, create_board
 from playwright.sync_api import Browser, Page, expect
 
+from e2e.conftest import watch_console
 from easytodo.config import Settings
 
 pytestmark = pytest.mark.e2e
-
-
-def watch_console(page: Page) -> list[str]:
-    """Every console error or warning and every uncaught exception on ``page`` from now on."""
-    problems: list[str] = []
-    page.on(
-        "console",
-        lambda msg: (
-            problems.append(f"{msg.type}: {msg.text}") if msg.type in ("error", "warning") else None
-        ),
-    )
-    page.on("pageerror", lambda exc: problems.append(f"pageerror: {exc}"))
-    return problems
 
 
 def create_invite_link(page: Page, base_url: str, board_id: int) -> str:
