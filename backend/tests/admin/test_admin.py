@@ -255,6 +255,25 @@ async def test_created_user_must_change_password(admin_client, client_factory, d
     r = await newcomer.get("/boards")
     assert r.status_code == 303
     assert r.headers["location"] == "/account/password"
+    # A first board, as a registered account gets: not "You have no boards yet."
+    assert [b.name for b in await db.scalars(select(Board).where(Board.owner_id == user.id))] == [
+        "My list"
+    ]
+
+
+async def test_refreshing_the_account_created_page_says_the_account_exists(admin_client, db):
+    """A refresh posts the form again: the answer must not read like the creation failed."""
+    for _ in range(2):
+        r = await admin_client.post("/admin/users", data={"email": "new@example.com"})
+    assert r.status_code == 409
+    assert "This account already exists. Use Send password reset" in r.text
+    assert await db.scalar(select(func.count()).select_from(User)) == 2  # admin and new
+
+
+async def test_user_search_with_nul_is_not_a_500(admin_client, admin):
+    r = await admin_client.get("/admin/users", params={"q": "admin\x00"})
+    assert r.status_code == 200
+    assert "admin@example.com" in r.text
 
 
 async def test_forced_change_refuses_the_temporary_password(client_factory, db):
@@ -294,7 +313,7 @@ async def test_created_account_can_be_an_admin(admin_client, db):
 @pytest.mark.parametrize(
     ("email", "status_code", "message"),
     [
-        ("Admin@Example.com", 409, "An account with this email already exists."),
+        ("Admin@Example.com", 409, "This account already exists. Use Send password reset"),
         ("not-an-email", 422, "Enter a valid email address."),
     ],
 )

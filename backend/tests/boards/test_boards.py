@@ -427,3 +427,45 @@ async def test_board_view_uses_two_queries(db, monkeypatch):
         ("Dairy", ["milk"]),
         ("Empty", []),
     ]
+
+
+async def test_home_opens_the_last_board_or_the_only_one(client, db):
+    """Opening the app ("/", the PWA's start URL) goes straight to a board where it can: the one
+    last opened on this device, else the user's only board; the board list otherwise."""
+    dave = await create_user(db, "dave@example.com")
+    await login(client, "dave@example.com")
+    assert (await client.get("/")).headers["location"] == "/boards"  # no boards yet
+
+    only = await create_board(db, dave, "Groceries")
+    assert (await client.get("/")).headers["location"] == f"/boards/{only.id}"
+
+    other = await create_board(db, dave, "Weekend")
+    assert (await client.get("/")).headers["location"] == "/boards"  # which one is unclear
+    assert (await client.get(f"/boards/{other.id}")).status_code == 200
+    assert (await client.get("/")).headers["location"] == f"/boards/{other.id}"
+
+    stranger = await create_user(db, "eve@example.com")
+    foreign = await create_board(db, stranger, "Eve's")
+    client.cookies.set("easytodo_last_board", str(foreign.id))
+    assert (await client.get("/")).headers["location"] == "/boards"  # not a member: ignored
+    client.cookies.set("easytodo_last_board", "not-a-number")
+    assert (await client.get("/")).headers["location"] == "/boards"
+
+
+@pytest.mark.parametrize("name", ["a\x00b", "\x00"])
+async def test_board_name_with_nul_is_cleaned_not_a_500(client, db, name):
+    await create_user(db, "dave@example.com")
+    await login(client, "dave@example.com")
+
+    r = await client.post("/boards", data={"name": name, "csrf_token": client.cookies[CSRF_COOKIE]})
+
+    if name == "\x00":
+        assert r.status_code == 422 and NAME_ERROR in r.text
+    else:
+        assert r.status_code == 303
+        board = (await db.scalars(select(Board))).one()
+        assert board.name == "ab"
+        r = await client.patch(f"/boards/{board.id}", data={"name": "x\x00y"}, headers=HX)
+        assert r.status_code == 200
+        await db.refresh(board)
+        assert board.name == "xy"

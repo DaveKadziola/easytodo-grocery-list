@@ -1,6 +1,6 @@
 """The admin panel under ``/admin``: the statistics, the user list and its actions, and creating
-an account with a temporary password. Only admins reach it; anyone else gets a 404, so it does
-not show that it exists.
+an account with a temporary password. Only admins reach it: any signed-in non-admin gets a 404,
+so it does not show them that it exists (an anonymous visitor is sent to the login page first).
 
 The actions in the user list are htmx requests: each answers with the user's row again (swapped
 in place; nothing once the account is deleted) and a toast. Without htmx they go back to the list.

@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from easytodo.boards.permissions import Action, is_possible_id, require_board
-from easytodo.errors import Conflict, Forbidden, NotFound, ValidationFailed
+from easytodo.content.validation import clean_name
+from easytodo.errors import Conflict, Forbidden, NotFound
 from easytodo.models import Board, BoardMember, BoardRole, Category, Item, User
 from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
 
@@ -52,10 +53,9 @@ class MemberView:
 
 
 def _clean_name(name: str) -> str:
-    name = name.strip()
-    if not 1 <= len(name) <= _NAME_MAX_LENGTH:
-        raise ValidationFailed("Board name must be 1–80 characters.")
-    return name
+    """As category and item names: stripped, inner whitespace runs as one space, no NUL
+    (PostgreSQL text cannot hold it)."""
+    return clean_name(name, max_len=_NAME_MAX_LENGTH, label="Board name")
 
 
 async def add_board(db: AsyncSession, owner: User, name: str) -> Board:
@@ -73,6 +73,28 @@ async def create_board(db: AsyncSession, owner: User, name: str) -> Board:
     board = await add_board(db, owner, name)
     await commit_and_publish(db)  # nobody can be watching a board that did not exist
     return board
+
+
+async def is_member(db: AsyncSession, board_id: int, user: User) -> bool:
+    return (
+        await db.scalar(
+            select(BoardMember.user_id).where(
+                BoardMember.board_id == board_id, BoardMember.user_id == user.id
+            )
+        )
+        is not None
+    )
+
+
+async def landing_board_id(db: AsyncSession, user: User, last_opened: int | None) -> int | None:
+    """The board to open the app on: ``last_opened`` (the last board this device showed) while
+    ``user`` is still a member of it, else their only board; None when there is no such one."""
+    board_ids = list(
+        await db.scalars(select(BoardMember.board_id).where(BoardMember.user_id == user.id))
+    )
+    if last_opened in board_ids:
+        return last_opened
+    return board_ids[0] if len(board_ids) == 1 else None
 
 
 async def list_boards(db: AsyncSession, user: User) -> list[BoardSummary]:

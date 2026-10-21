@@ -13,9 +13,10 @@ from sqlalchemy import ColumnExpressionArgument, ScalarSelect, Select, delete, f
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from easytodo.auth.service import normalize_email
+from easytodo.auth.service import DEFAULT_BOARD_NAME, normalize_email
 from easytodo.auth.sessions import revoke_all_sessions, sessions_revoked
 from easytodo.boards.permissions import is_possible_id
+from easytodo.boards.service import add_board
 from easytodo.errors import Conflict, NotFound
 from easytodo.models import (
     Board,
@@ -34,7 +35,8 @@ ACTIVE_WINDOW = timedelta(days=30)  # "active" users signed in within it
 CANNOT_DELETE_SELF = "You can't delete your own account here."
 LAST_ADMIN = "At least one active admin is required."
 USER_NOT_FOUND = "User not found."
-EMAIL_TAKEN = "An account with this email already exists."  # as at registration
+# Also what a refresh of the "Account created" page gets (the form is posted again).
+EMAIL_TAKEN = "This account already exists. Use Send password reset to give them a new password."
 _LIKE_ESCAPE = "/"
 
 
@@ -138,6 +140,7 @@ async def list_users(
     """The users whose e-mail contains ``q`` (ignoring case; all of them without ``q``), by
     e-mail. A page past the last shows the last one, a page before the first the first."""
     where: list[ColumnExpressionArgument[bool]] = []
+    q = q.replace("\x00", "") if q else q  # PostgreSQL text cannot hold NUL
     if q:
         where.append(User.email.ilike(f"%{_escape_like(q)}%", escape=_LIKE_ESCAPE))
     total = await db.scalar(select(func.count()).select_from(User).where(*where))
@@ -170,7 +173,8 @@ async def create_user_with_temp_password(
     db: AsyncSession, email: str, *, is_admin: bool = False
 ) -> tuple[User, str]:
     """A new account with a random temporary password, which it must change when it first signs
-    in; returns the account and the password (to be shown this once)."""
+    in, and its first board, "My list" (as at registration); returns the account and the
+    password (to be shown this once)."""
     email = normalize_email(email)
     password = secrets.token_urlsafe(12)
     user = User(
@@ -183,8 +187,10 @@ async def create_user_with_temp_password(
         # A savepoint: a failed insert must not expire the signed-in admin the page shows.
         async with db.begin_nested():
             db.add(user)
+            await db.flush()
     except IntegrityError:  # users.email is unique
         raise Conflict(EMAIL_TAKEN) from None
+    await add_board(db, user, DEFAULT_BOARD_NAME)
     await db.commit()
     return user, password
 

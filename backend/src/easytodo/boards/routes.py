@@ -16,6 +16,9 @@ from easytodo.web import is_htmx, render
 
 router = APIRouter(prefix="/boards")
 
+LAST_BOARD_COOKIE = "easytodo_last_board"  # the board this device showed last (read by "/")
+LAST_BOARD_MAX_AGE_S = 365 * 24 * 3600
+
 
 @router.get("")
 async def boards_page(request: Request, db: DbSession, user: CurrentUser) -> Response:
@@ -40,7 +43,18 @@ async def board_page(request: Request, db: DbSession, user: CurrentUser, board_i
     view = await get_board_view(db, board_id, user)  # first: a non-member gets the 404
     # The user's boards, for the board switcher in the phone's bottom bar.
     context = {"view": view, "boards": await list_boards(db, user)}
-    return render(request, "boards/board.html", context)
+    response = render(request, "boards/board.html", context)
+    # Where "/" (the app's start page) opens next time on this device.
+    response.set_cookie(
+        LAST_BOARD_COOKIE,
+        str(view.board.id),
+        max_age=LAST_BOARD_MAX_AGE_S,
+        path="/",
+        secure=request.app.state.settings.cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
+    return response
 
 
 @router.patch("/{board_id}")

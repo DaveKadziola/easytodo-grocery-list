@@ -34,6 +34,8 @@ from easytodo.auth.twofa import (
     count_failed_code,
     verify_second_factor,
 )
+from easytodo.boards.routes import LAST_BOARD_COOKIE
+from easytodo.boards.service import landing_board_id
 from easytodo.errors import AppError, NotFound, TooManyRequests, ValidationFailed
 from easytodo.models import User, UserSession
 from easytodo.realtime.events import commit_and_publish
@@ -238,6 +240,13 @@ async def logout(
 
 # require_user first: anonymous users go to the login page, and users who must change their
 # password to the password form, before anything else.
-@router.get("/", dependencies=[Depends(require_user)])
-async def home() -> Response:
-    return RedirectResponse("/boards", status_code=303)
+@router.get("/")
+async def home(
+    request: Request, db: DbSession, user: Annotated[User, Depends(require_user)]
+) -> Response:
+    """The app's start page (the PWA opens here): the board this device showed last, or the
+    user's only board, or else the board list."""
+    raw = request.cookies.get(LAST_BOARD_COOKIE, "")
+    last_opened = int(raw) if raw.isdecimal() and len(raw) <= 18 else None
+    board_id = await landing_board_id(db, user, last_opened)
+    return RedirectResponse("/boards" if board_id is None else f"/boards/{board_id}", 303)
