@@ -48,7 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         listener = EventListener(
             listener_dsn(settings.database_url),
             on_event=hub.dispatch,
-            on_reconnect=hub.broadcast_resync,
+            on_reconnect=hub.reconnect_all,
         )
         await listener.start()
         try:

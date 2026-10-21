@@ -146,13 +146,19 @@ async def test_role_change_tells_only_that_member_to_reload():
     assert all(s.close_code is None for s in (member_tab, member_phone, other, owner))
 
 
-async def test_broadcast_resync_reaches_every_socket():
+async def test_reconnect_all_closes_every_socket_with_1013():
+    """After the listener lost its connection, events may have been missed, revocations and
+    removals too: every socket is closed with 1013, so its page reconnects (and reloads its
+    board), and the reconnect checks the session and the membership again."""
     subscribers = [sub(board_id=1, client_id="A"), sub(board_id=2), sub(board_id=3)]
     hub = hub_with(*subscribers)
+    await hub.dispatch(BoardEvent(EventType.BOARD_UPDATED, board_id=1))
 
-    await hub.broadcast_resync()
+    await hub.reconnect_all()
 
-    assert [messages(s) for s in subscribers] == [[{"type": "resync"}]] * 3
+    assert [s.close_code for s in subscribers] == [1013] * 3
+    assert [messages(s) for s in subscribers] == [[]] * 3  # all is reloaded on reconnect anyway
+    assert hub.subscribers() == []
 
 
 async def test_unsubscribed_socket_gets_nothing():
@@ -162,8 +168,9 @@ async def test_unsubscribed_socket_gets_nothing():
     hub.unsubscribe(gone)  # twice is fine (the route always unsubscribes on the way out)
 
     await hub.dispatch(BoardEvent(EventType.BOARD_UPDATED, board_id=1))
-    await hub.broadcast_resync()
 
     assert gone.queue.empty()
-    assert len(messages(staying)) == 2
+    assert len(messages(staying)) == 1
     assert hub.subscribers() == [staying]
+    await hub.reconnect_all()
+    assert gone.close_code is None and staying.close_code == 1013

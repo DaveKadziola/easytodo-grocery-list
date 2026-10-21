@@ -11,12 +11,13 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from factories import create_board, create_category, create_user
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
 from easytodo.auth.sessions import SESSION_COOKIE, create_session
 from easytodo.models import BoardMember, BoardRole, User, UserSession, UserStatus
+from easytodo.realtime import routes
 from easytodo.security.tokens import hash_token
 
 WAIT_S = 1.0
@@ -143,15 +144,51 @@ async def test_ws_rejects_non_member_with_4404(
 
 
 @pytest.mark.parametrize("origin", ["http://evil.example", None])
-async def test_ws_rejects_foreign_origin_with_4403(
+async def test_ws_rejects_foreign_origin_with_4400(
     live_server, groceries, sign_in, subscribed, origin
 ):
+    """Its own code (not 4403, "removed from the board"): the page is at another address than
+    EASYTODO_PUBLIC_URL, and says so instead of leaving the board."""
     board, _ = groceries
     dave = await sign_in(live_server, "dave@example.com")
 
     async with board_socket(live_server, board.id, token=token_of(dave), origin=origin) as ws:
-        assert await close_code(ws) == 4403
+        assert await close_code(ws) == 4400
     assert subscribed == []
+
+
+async def test_removal_between_the_admission_check_and_the_subscription_still_closes(
+    live_server, db, dave, groceries, sign_in, monkeypatch
+):
+    """A member removed after the socket's membership check, but before it is subscribed (so
+    the removal's event reached nobody), is still refused: the check runs again once the socket
+    is subscribed."""
+    board, _ = groceries
+    eve = await create_user(db, "eve@example.com")
+    db.add(BoardMember(board_id=board.id, user_id=eve.id, role=BoardRole.EDITOR))
+    await db.commit()
+    member = await sign_in(live_server, "eve@example.com")
+    admit = routes._admit
+    calls = []
+
+    async def admit_then_remove(websocket, board_id):
+        admitted = await admit(websocket, board_id)
+        calls.append(admitted)
+        if len(calls) == 1:  # removed right after the first check, without an event
+            async with websocket.app.state.sessionmaker() as other:
+                await other.execute(
+                    delete(BoardMember).where(
+                        BoardMember.board_id == board_id, BoardMember.user_id == eve.id
+                    )
+                )
+                await other.commit()
+        return admitted
+
+    monkeypatch.setattr(routes, "_admit", admit_then_remove)
+
+    async with board_socket(live_server, board.id, token=token_of(member)) as ws:
+        assert await close_code(ws) == 4404
+    assert live_server.app.state.hub.subscribers() == []
 
 
 async def test_ws_rejects_must_change_password_user_with_4401(

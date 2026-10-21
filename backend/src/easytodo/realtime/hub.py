@@ -17,9 +17,10 @@ QUEUE_SIZE = 100  # messages a socket may fall behind before it is closed
 
 
 class CloseCode(IntEnum):
-    TRY_AGAIN_LATER = 1013  # fell behind: reconnect, which reloads the board
+    TRY_AGAIN_LATER = 1013  # fell behind, or events were missed: reconnect, which reloads the board
+    WRONG_ORIGIN = 4400  # a page at another address than EASYTODO_PUBLIC_URL: not retried
     NOT_AUTHENTICATED = 4401  # signed out, or the session was revoked
-    FORBIDDEN = 4403  # no longer a member, or a foreign Origin
+    FORBIDDEN = 4403  # no longer a member
     NOT_FOUND = 4404  # the board was deleted, or the user is not a member of it
 
 
@@ -92,12 +93,13 @@ class Hub:
                 reload = event.type == EventType.BOARD_UPDATED and sub.user_id == event.user_id
                 self._send(sub, _message(event, reload=reload))
 
-    async def broadcast_resync(self) -> None:
-        """Every socket reloads its board: events may have been missed (the listener lost its
-        connection)."""
-        message = json.dumps({"type": EventType.RESYNC})
+    async def reconnect_all(self) -> None:
+        """Close every socket with 1013: the listener lost its connection, so events may have
+        been missed, revocations and member removals among them. Each page reconnects and
+        reloads its board, and the reconnect checks its session and membership again (a mere
+        "resync" message would leave a socket open that the server meant to close)."""
         for sub in self.subscribers():
-            self._send(sub, message)
+            self._close_now(sub, CloseCode.TRY_AGAIN_LATER)
 
     def _send(self, sub: Subscriber, message: str) -> bool:
         try:

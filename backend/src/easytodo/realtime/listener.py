@@ -2,7 +2,10 @@
 that hands every notified event to the hub.
 
 A lost connection is re-established with a backoff of 1 s doubling up to 30 s; once it is back,
-``on_reconnect`` runs, because events notified meanwhile were missed.
+``on_reconnect`` runs, because events notified meanwhile were missed. A connection that looks
+open but no longer answers (half-open: dropped by a NAT or a firewall without a word) is found
+by a ``SELECT 1`` every ``HEALTH_CHECK_INTERVAL_S``. Any other failure is logged and the loop
+starts over, so a worker never stops delivering events without a trace.
 """
 
 import asyncio
@@ -21,6 +24,8 @@ MIN_BACKOFF_S = 1
 MAX_BACKOFF_S = 30
 CONNECT_TIMEOUT_S = 10
 CLOSE_TIMEOUT_S = 5
+HEALTH_CHECK_INTERVAL_S = 30  # how often an idle connection is asked whether it is still there
+HEALTH_CHECK_TIMEOUT_S = 5
 _CONNECTION_ERRORS = (OSError, TimeoutError, asyncpg.PostgresError, asyncpg.InterfaceError)
 
 
@@ -84,17 +89,52 @@ class EventListener:
     async def _keep_listening(self, connected: bool) -> None:
         delay = MIN_BACKOFF_S
         while True:
-            if connected:
-                delay = MIN_BACKOFF_S
-                await self._lost.wait()
-                self._connection = None
-                log.warning("Lost the board events connection; reconnecting.")
-            await asyncio.sleep(delay)
-            connected = await self._connect()
-            if connected:
-                await self._on_reconnect()
-            else:
+            try:
+                if connected:
+                    delay = MIN_BACKOFF_S
+                    await self._until_lost()
+                    self._drop_connection()
+                    log.warning("Lost the board events connection; reconnecting.")
+                await asyncio.sleep(delay)
+                connected = await self._connect()
+                if connected:
+                    await self._on_reconnect()
+                else:
+                    delay = min(delay * 2, MAX_BACKOFF_S)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("The board events listener failed; starting over.")
+                self._drop_connection()
+                connected = False
                 delay = min(delay * 2, MAX_BACKOFF_S)
+
+    async def _until_lost(self) -> None:
+        """Returns once the connection is gone: closed (asyncpg's termination callback), or no
+        longer answering."""
+        while True:
+            try:
+                await asyncio.wait_for(self._lost.wait(), HEALTH_CHECK_INTERVAL_S)
+                return
+            except TimeoutError:
+                pass
+            connection = self._connection
+            if connection is None:
+                return
+            try:
+                async with asyncio.timeout(HEALTH_CHECK_TIMEOUT_S):
+                    await self._ping(connection)
+            except _CONNECTION_ERRORS:  # TimeoutError among them
+                log.warning("The board events connection does not answer.")
+                return
+
+    async def _ping(self, connection: asyncpg.Connection) -> None:
+        await connection.fetchval("SELECT 1")
+
+    def _drop_connection(self) -> None:
+        connection, self._connection = self._connection, None
+        if connection is not None and not connection.is_closed():
+            connection.terminate()
 
     async def _notified(
         self, _connection: asyncpg.Connection, _pid: int, _channel: str, payload: str

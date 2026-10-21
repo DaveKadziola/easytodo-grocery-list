@@ -4,9 +4,11 @@ The server only sends: ``{"type", "board_id", "category_ids"}`` messages from th
 fetches the HTML it needs itself), then possibly a close code. The page sends nothing.
 
 verify_csrf skips WebSockets, so this route is their only guard: before anything is subscribed
-or sent it checks the ``Origin`` (4403), the session (4401) and the membership (4404). A refused
-socket is accepted and closed at once with that code, because a socket closed before the
-handshake reaches the browser as a bare HTTP 403, without the code the page acts on.
+or sent it checks the ``Origin`` (4400), the session (4401) and the membership (4404), and once
+the socket is subscribed it checks the session and membership again, so a revocation or removal
+committed in between (whose event went out before the socket could get it) still refuses it. A
+refused socket is accepted and closed at once with that code, because a socket closed before
+the handshake reaches the browser as a bare HTTP 403, without the code the page acts on.
 """
 
 import asyncio
@@ -37,7 +39,13 @@ async def board_socket(websocket: WebSocket, board_id: int, client_id: str | Non
     hub = websocket.app.state.hub
     hub.subscribe(sub)  # before the handshake completes: no event slips between the two
     try:
+        # From now on every revocation or removal reaches ``sub``; one from before is in the
+        # database by now.
+        again = await _admit(websocket, board_id)
         await websocket.accept()
+        if again != admitted:
+            await websocket.close(again if isinstance(again, CloseCode) else CloseCode.NOT_FOUND)
+            return
         await _serve(websocket, sub)
     except WebSocketDisconnect:
         pass  # the page went away mid-send
@@ -48,7 +56,7 @@ async def board_socket(websocket: WebSocket, board_id: int, client_id: str | Non
 async def _admit(websocket: WebSocket, board_id: int) -> tuple[int, int] | CloseCode:
     """The user and session ids to subscribe, or the code to refuse the socket with."""
     if websocket.headers.get("origin") != websocket.app.state.settings.public_origin:
-        return CloseCode.FORBIDDEN
+        return CloseCode.WRONG_ORIGIN
     # A session of its own, closed again before the socket's (long) life: no pooled connection
     # is held per open board page.
     async with websocket.app.state.sessionmaker() as db:

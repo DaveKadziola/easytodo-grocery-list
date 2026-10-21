@@ -12,6 +12,7 @@ from helpers import login, signed_in
 from sqlalchemy import select, text
 
 from easytodo.models import UserSession
+from easytodo.realtime import listener as listener_module
 from easytodo.realtime.events import (
     MAX_PAYLOAD_BYTES,
     BoardEvent,
@@ -134,6 +135,77 @@ async def test_listener_reconnect_triggers_resync(db, settings):
 
         await commit_and_publish(db, event)
         assert await asyncio.wait_for(received.get(), 2) == event  # listening again
+    finally:
+        await listener.stop()
+
+
+async def test_listener_notices_a_connection_that_no_longer_answers(db, settings, monkeypatch):
+    """Half-open: the connection looks fine, but nothing comes back (a NAT or a firewall dropped
+    it without a word). A periodic SELECT 1 finds out, and the listener reconnects."""
+    monkeypatch.setattr(listener_module, "HEALTH_CHECK_INTERVAL_S", 0.2)
+    monkeypatch.setattr(listener_module, "HEALTH_CHECK_TIMEOUT_S", 0.2)
+    received: asyncio.Queue[BoardEvent] = asyncio.Queue()
+    reconnected = asyncio.Event()
+
+    async def on_event(event: BoardEvent) -> None:
+        received.put_nowait(event)
+
+    async def on_reconnect() -> None:
+        reconnected.set()
+
+    listener = EventListener(listener_dsn(settings.database_url), on_event, on_reconnect)
+    await listener.start()
+    try:
+
+        async def no_answer(*_args: object) -> None:
+            await asyncio.sleep(3600)
+
+        monkeypatch.setattr(listener, "_ping", no_answer)
+        await asyncio.wait_for(reconnected.wait(), 5)
+
+        event = BoardEvent(EventType.CATEGORY_CHANGED, board_id=3, category_ids=(4,))
+        await commit_and_publish(db, event)
+        assert await asyncio.wait_for(received.get(), 2) == event  # listening again
+    finally:
+        await listener.stop()
+
+
+async def test_listener_keeps_going_after_an_unexpected_error(db, settings, caplog):
+    """A failure in the listener's loop is logged and the loop goes on; it never ends silently,
+    leaving the worker without events for good."""
+    received: asyncio.Queue[BoardEvent] = asyncio.Queue()
+    failures = []
+
+    async def on_event(event: BoardEvent) -> None:
+        received.put_nowait(event)
+
+    async def on_reconnect() -> None:
+        if not failures:
+            failures.append(True)
+            raise RuntimeError("boom")
+
+    listener = EventListener(listener_dsn(settings.database_url), on_event, on_reconnect)
+    await listener.start()
+    try:
+        await db.execute(
+            text(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
+                " WHERE application_name = :name"
+            ),
+            {"name": LISTENER_APPLICATION_NAME},
+        )
+        await db.commit()
+        event = BoardEvent(EventType.CATEGORY_CHANGED, board_id=3, category_ids=(4,))
+        for _ in range(100):  # until it listens again, after the failed on_reconnect
+            await commit_and_publish(db, event)
+            try:
+                assert await asyncio.wait_for(received.get(), 0.1) == event
+                break
+            except TimeoutError:
+                continue
+        else:
+            pytest.fail("the listener never listened again")
+        assert failures and "boom" in caplog.text
     finally:
         await listener.stop()
 
