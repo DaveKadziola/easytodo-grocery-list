@@ -97,6 +97,23 @@ async def err_app_client(mini_app: FastAPI, settings: Settings) -> AsyncIterator
 
 
 @pytest.fixture
+def extra_origin() -> str:
+    """The origin of a second address the app is opened at (``EASYTODO_EXTRA_ORIGINS``)."""
+    return "http://192.168.122.50:8000"
+
+
+@pytest.fixture
+async def extra_origin_app_client(
+    settings: Settings, extra_origin: str
+) -> AsyncIterator[httpx.AsyncClient]:
+    """A mini app whose ``extra_origins`` is ``[extra_origin]``, and a client of it opened at
+    that address (base URL and ``Origin``)."""
+    extra = Settings(_env_file=None, **(settings.model_dump() | {"extra_origins": [extra_origin]}))
+    async with mini_client(build_mini_app(extra), extra_origin) as c:
+        yield c
+
+
+@pytest.fixture
 async def https_csrf_app_client(settings: Settings) -> AsyncIterator[httpx.AsyncClient]:
     """A mini app whose public URL is https://testserver (secure cookies, HSTS)."""
     https = settings.model_copy(update={"public_url": AnyHttpUrl("https://testserver")})

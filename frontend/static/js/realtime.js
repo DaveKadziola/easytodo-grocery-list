@@ -19,7 +19,7 @@
   const MAX_DELAY_S = 30;
   const SIGNED_OUT = 4401; // the session ended: sign in again
   const NO_ACCESS = [4403, 4404]; // removed from the board, or the board is gone
-  const WRONG_ADDRESS = 4400; // the page is not at EASYTODO_PUBLIC_URL
+  const WRONG_ADDRESS = 4400; // the page is at an address the server does not accept
 
   // Updates not run yet: the whole board, or single categories to fetch again or to remove.
   const pending = { board: false, changed: new Set(), deleted: new Set() };
@@ -310,8 +310,9 @@
           // the socket was down, and the reconnect is refused.
           location.assign("/boards");
         } else if (event.code === WRONG_ADDRESS) {
-          // Opened at another address than the server's EASYTODO_PUBLIC_URL (localhost instead
-          // of the LAN address, say): live updates and saving cannot work here. Not retried.
+          // Opened at an address the server does not know (EASYTODO_PUBLIC_URL and
+          // EASYTODO_EXTRA_ORIGINS): localhost instead of the LAN address, say. Live updates and
+          // saving cannot work here. Not retried.
           setStatus("offline", "Offline");
           const address = document.getElementById("conn-status").dataset.publicUrl;
           const message = `Live updates and saving do not work at this address. Open EasyToDo at ${address}.`;

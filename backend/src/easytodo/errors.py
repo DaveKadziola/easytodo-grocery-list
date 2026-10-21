@@ -82,7 +82,7 @@ class SecondFactorRequired(RedirectRequired):
 
 def _login_after(request: Request) -> str:
     """For an htmx request: the login page, then back to the page it was sent from (its
-    ``HX-Current-URL``, when that is a page of this app)."""
+    ``HX-Current-URL``, when that is a page of this app, at any of its addresses)."""
     current = request.headers.get("HX-Current-URL", "")
     try:
         parts = urlsplit(current)
@@ -90,7 +90,7 @@ def _login_after(request: Request) -> str:
         return "/login"
     origin = f"{parts.scheme}://{parts.netloc}"
     path = parts.path
-    if origin != request.app.state.settings.public_origin or not path.startswith("/"):
+    if origin not in request.app.state.settings.allowed_origins or not path.startswith("/"):
         return "/login"
     if path.startswith("//"):  # would read as another host once it is a URL again
         return "/login"

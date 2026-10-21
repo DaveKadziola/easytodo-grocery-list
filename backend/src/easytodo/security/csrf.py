@@ -1,4 +1,5 @@
-"""CSRF protection: same-origin ``Origin``/``Referer`` plus a double-submit token.
+"""CSRF protection: an ``Origin``/``Referer`` of the app's own addresses
+(``Settings.allowed_origins``) plus a double-submit token.
 
 ``CsrfCookieMiddleware`` issues the token cookie; pages send it back in the ``X-CSRF-Token``
 header (HTMX) or the ``csrf_token`` form field.
@@ -40,10 +41,11 @@ async def verify_csrf(request: HTTPConnection) -> None:
     """
     if not isinstance(request, Request) or request.method in SAFE_METHODS:
         return
-    public_origin = request.app.state.settings.public_origin
-    if _request_origin(request) != public_origin:
+    settings = request.app.state.settings
+    if _request_origin(request) not in settings.allowed_origins:
         raise Forbidden(
-            f"This page was opened at a different address. Open the app at {public_origin}."
+            "This page was opened at a different address. "
+            f"Open the app at {settings.public_origin}."
         )
     cookie = request.cookies.get(CSRF_COOKIE)
     submitted = request.headers.get(CSRF_HEADER)

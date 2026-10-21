@@ -200,3 +200,15 @@ async def test_htmx_not_authenticated_comes_back_to_the_page_after_sign_in(err_a
     for elsewhere in ("https://evil.example/boards/7", "not a url", "http://testserver//evil"):
         r = await err_app_client.get("/raise-401", headers=HX | {"HX-Current-URL": elsewhere})
         assert r.headers["hx-redirect"] == "/login", elsewhere
+
+
+async def test_htmx_sign_in_again_comes_back_to_a_page_at_an_extra_origin(
+    extra_origin_app_client, extra_origin
+):
+    current = {"HX-Current-URL": f"{extra_origin}/boards/7"}
+    r = await extra_origin_app_client.get("/raise-401", headers=HX | current)
+    assert r.headers["hx-redirect"] == "/login?next=%2Fboards%2F7"
+
+    foreign = {"HX-Current-URL": "http://192.168.1.100:8000/boards/7"}
+    r = await extra_origin_app_client.get("/raise-401", headers=HX | foreign)
+    assert r.headers["hx-redirect"] == "/login"

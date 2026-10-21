@@ -53,6 +53,32 @@ async def test_post_with_foreign_origin_is_403(csrf_app_client):
     assert "Open the app at http://testserver." in r.text
 
 
+async def test_post_from_an_extra_origin_passes(extra_origin_app_client, extra_origin):
+    token = await _token(extra_origin_app_client)
+    r = await extra_origin_app_client.post("/submit", headers={CSRF_HEADER: token})
+    assert r.status_code == 200
+    r = await extra_origin_app_client.post(
+        "/submit", headers={CSRF_HEADER: token, "Origin": "http://testserver"}
+    )
+    assert r.status_code == 200  # the public origin still works
+    del extra_origin_app_client.headers["Origin"]  # without it, the Referer counts the same way
+    r = await extra_origin_app_client.post(
+        "/submit", headers={CSRF_HEADER: token, "Referer": f"{extra_origin}/boards/1"}
+    )
+    assert r.status_code == 200
+
+
+async def test_post_from_neither_public_nor_extra_origin_is_403(extra_origin_app_client):
+    token = await _token(extra_origin_app_client)
+    r = await extra_origin_app_client.post(
+        "/submit", headers={CSRF_HEADER: token, "Origin": "http://192.168.1.100:8000"}
+    )
+    assert r.status_code == 403
+    assert (
+        "This page was opened at a different address. Open the app at http://testserver." in r.text
+    )
+
+
 async def test_post_with_matching_token_and_origin_passes(csrf_app_client):
     token = await _token(csrf_app_client)
     r = await csrf_app_client.post("/submit", headers={CSRF_HEADER: token})

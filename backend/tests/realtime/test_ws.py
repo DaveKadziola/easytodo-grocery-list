@@ -4,13 +4,14 @@ it receives, and when the server closes it."""
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 from factories import create_board, create_category, create_user
+from live_server import LiveServer, emptying_tables, serving
 from sqlalchemy import delete, select, update
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
@@ -23,6 +24,7 @@ from easytodo.security.tokens import hash_token
 WAIT_S = 1.0
 HX = {"HX-Request": "true"}
 SAME_ORIGIN = object()  # board_socket's default: the server's own origin
+EXTRA_ORIGIN = "http://192.168.122.50:8000"  # a second address the app is opened at
 
 
 @asynccontextmanager
@@ -148,13 +150,36 @@ async def test_ws_rejects_foreign_origin_with_4400(
     live_server, groceries, sign_in, subscribed, origin
 ):
     """Its own code (not 4403, "removed from the board"): the page is at another address than
-    EASYTODO_PUBLIC_URL, and says so instead of leaving the board."""
+    EASYTODO_PUBLIC_URL (or EASYTODO_EXTRA_ORIGINS), and says so instead of leaving the board."""
     board, _ = groceries
     dave = await sign_in(live_server, "dave@example.com")
 
     async with board_socket(live_server, board.id, token=token_of(dave), origin=origin) as ws:
         assert await close_code(ws) == 4400
     assert subscribed == []
+
+
+@pytest.fixture
+def live_server_with_extra_origin(settings) -> Iterator[LiveServer]:
+    """A live server whose EASYTODO_EXTRA_ORIGINS is ``EXTRA_ORIGIN``."""
+    extra = settings.model_copy(update={"extra_origins": [EXTRA_ORIGIN]})
+    with emptying_tables(extra), serving(extra) as server:
+        yield server
+
+
+async def test_ws_admits_an_extra_origin_and_still_rejects_others(
+    live_server_with_extra_origin, groceries, sign_in
+):
+    server = live_server_with_extra_origin
+    board, dairy = groceries
+    dave = await sign_in(server, "dave@example.com")
+
+    async with board_socket(server, board.id, token=token_of(dave), origin=EXTRA_ORIGIN) as ws:
+        await add_item(dave, dairy.id, client_id="other-tab")
+        assert (await next_message(ws))["type"] == "category.changed"  # admitted: it is live
+    other = "http://192.168.1.100:8000"
+    async with board_socket(server, board.id, token=token_of(dave), origin=other) as ws:
+        assert await close_code(ws) == 4400
 
 
 async def test_removal_between_the_admission_check_and_the_subscription_still_closes(

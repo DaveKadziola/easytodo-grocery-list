@@ -55,7 +55,7 @@ async def board_socket(websocket: WebSocket, board_id: int, client_id: str | Non
 
 async def _admit(websocket: WebSocket, board_id: int) -> tuple[int, int] | CloseCode:
     """The user and session ids to subscribe, or the code to refuse the socket with."""
-    if websocket.headers.get("origin") != websocket.app.state.settings.public_origin:
+    if websocket.headers.get("origin") not in websocket.app.state.settings.allowed_origins:
         return CloseCode.WRONG_ORIGIN
     # A session of its own, closed again before the socket's (long) life: no pooled connection
     # is held per open board page.
