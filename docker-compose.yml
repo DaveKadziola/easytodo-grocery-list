@@ -24,8 +24,33 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "${EASYTODO_PORT:-8000}:8000"
+      # Published on every host interface, or only on EASYTODO_BIND when it is set (127.0.0.1
+      # with the proxy profile below, so that only Caddy and this machine reach the app).
+      - "${EASYTODO_BIND:+${EASYTODO_BIND}:}${EASYTODO_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  # Optional HTTPS reverse proxy: docker compose --profile proxy up -d (docs/deployment.md).
+  # With it, .env also needs EASYTODO_PUBLIC_URL=https://<EASYTODO_DOMAIN>,
+  # EASYTODO_BIND=127.0.0.1 and EASYTODO_FORWARDED_ALLOW_IPS=*.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["proxy"]
+    depends_on:
+      - app
+    environment:
+      EASYTODO_DOMAIN: ${EASYTODO_DOMAIN:-}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
     restart: unless-stopped
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

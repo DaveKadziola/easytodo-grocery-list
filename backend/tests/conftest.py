@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 from starlette.types import ASGIApp
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 import easytodo.models  # noqa: F401  (registers every table on Base.metadata)
 from easytodo.config import Settings
@@ -135,6 +136,19 @@ async def client_factory(_running_app: ASGIApp, settings: Settings) -> AsyncIter
             return await stack.enter_async_context(_new_client(manager.app, other.public_origin))
 
         yield factory
+
+
+@pytest.fixture
+async def https_client(_clean_db: None) -> AsyncIterator[httpx.AsyncClient]:
+    """A client (base URL and ``Origin`` https://testserver) of an app whose public URL is
+    https://testserver, served as the ``proxy`` compose profile runs it behind Caddy: uvicorn's
+    proxy-headers middleware trusting every peer (``EASYTODO_FORWARDED_ALLOW_IPS=*``), so
+    ``X-Forwarded-Proto`` / ``X-Forwarded-For`` set the request's scheme and client."""
+    https = _test_settings(public_url="https://testserver")
+    async with LifespanManager(create_app(https)) as manager:
+        proxied = ProxyHeadersMiddleware(manager.app, trusted_hosts="*")
+        async with _new_client(proxied, https.public_origin) as c:
+            yield c
 
 
 @pytest.fixture

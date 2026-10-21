@@ -1,0 +1,14 @@
+# Caddy in front of the app: automatic HTTPS for EASYTODO_DOMAIN, used by the `proxy` profile
+# of docker-compose.yml (see docs/deployment.md). Both variables come from .env.
+{
+	# Contact address for the ACME account (Let's Encrypt / ZeroSSL certificate notices).
+	email {$ACME_EMAIL}
+}
+
+# Caddy redirects http:// to https:// and proxies WebSockets (/ws/...) as they are. It sets
+# X-Forwarded-For to the address that connected to it (any such header sent by the client is
+# dropped), which is how the app's per-IP rate limits see the real client.
+{$EASYTODO_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:8000
+}
