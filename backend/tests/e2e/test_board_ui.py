@@ -3,6 +3,7 @@ and touch), the item modal, the category menu, renaming and deleting the board, 
 lost a race with another device, and no CSP violations anywhere."""
 
 import re
+from datetime import datetime, timedelta
 from urllib.parse import parse_qs
 
 import pytest
@@ -581,6 +582,29 @@ def test_tap_beside_the_item_modal_asks_before_dropping_edits(
 
     assert questions == ["Discard your changes to this item?"] * 2
     expect(item(page, "Milk")).to_be_visible()  # nothing was saved
+
+
+def test_item_modal_and_the_inert_page_behind_it_change_together(
+    logged_in_page, seed, user, open_board
+):
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
+    page.clock.install()  # time runs as usual until it is paused
+    open_board(page, board_id)
+    dialog = page.get_by_role("dialog")
+    # From here on no animation frame (nor timer) runs in the page, as on a busy phone (or CI
+    # runner) whose next frame is late: the modal must show and hide without waiting for one, as
+    # the page behind turns inert and back at once (a tap in between landed on that inert page,
+    # and the modal opened after it).
+    page.clock.pause_at(datetime.now() + timedelta(seconds=1))
+
+    page.get_by_role("button", name="Milk", exact=True).click()
+    expect(dialog).to_be_visible()
+    expect(page.locator("#board-content")).to_have_attribute("inert", "")
+
+    page.mouse.click(x=5, y=5)  # beside it, at once
+    expect(dialog).to_be_hidden()
+    expect(page.locator("#board-content")).not_to_have_attribute("inert", "")
 
 
 def test_menus_close_on_esc_and_outside_clicks_one_open_at_a_time(

@@ -156,8 +156,3 @@
 #categories > section:last-of-type [data-move="down"] {
   display: none;
 }
-
-/* Hidden until Alpine has started (it removes the attribute), so the modal never flashes. */
-[x-cloak] {
-  display: none !important;
-}

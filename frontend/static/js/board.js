@@ -388,6 +388,14 @@
       itemId: "",
       original: {},
 
+      // The modal's hidden attribute (:hidden in the template), which Alpine sets as soon as
+      // `open` changes: in the same task as the page behind turns inert, or back. x-show would
+      // wait for the next animation frame, which a busy phone can be slow to draw: a tap meanwhile
+      // landed on the inert page, the modal then opened over it, and Name never got the cursor.
+      get closed() {
+        return !this.open;
+      },
+
       // @click on an item's name. Values go into the fields as text (.value, new Option).
       openItem(event) {
         const button = event.currentTarget;
