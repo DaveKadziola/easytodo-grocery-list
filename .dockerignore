@@ -1,0 +1,18 @@
+# Keep the build context to what the image needs: backend/ and frontend/ sources, deploy/.
+.git
+.github
+.superpowers
+.env
+.env.*
+legacy
+docs
+scripts
+bin
+Makefile
+*.md
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+backend/tests
+frontend/static/css/app.css
