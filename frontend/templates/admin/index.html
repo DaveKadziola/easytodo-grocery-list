@@ -1,0 +1,32 @@
+{# The admin panel's start page. Context: stats (AdminStats). -#}
+{% extends "base.html" %}
+{% block title %}Admin · EasyToDo{% endblock %}
+{% block content %}
+<div class="mx-auto w-full max-w-3xl space-y-6">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <h1 class="text-2xl font-semibold">Admin</h1>
+    <a href="/admin/users" class="btn-primary">Manage users</a>
+  </div>
+
+  <section class="card" aria-labelledby="stats-heading">
+    <h2 id="stats-heading" class="text-lg font-semibold">Statistics</h2>
+    <dl class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {% for label, value in [
+        ("Users", stats.users_total),
+        ("Active in the last 30 days", stats.users_active_30d),
+        ("With two-factor authentication", stats.users_with_2fa),
+        ("Boards", stats.boards_total),
+        ("Shared boards", stats.shared_boards),
+        ("Categories", stats.categories_total),
+        ("Items", stats.items_total),
+        ("Open items", stats.items_open),
+      ] %}
+      <div class="flex flex-col-reverse justify-end gap-1 rounded-lg bg-slate-50 p-4 ring-1 ring-slate-200">
+        <dt class="text-sm text-slate-600">{{ label }}</dt>
+        <dd class="text-2xl font-semibold">{{ value }}</dd>
+      </div>
+      {% endfor %}
+    </dl>
+  </section>
+</div>
+{% endblock %}

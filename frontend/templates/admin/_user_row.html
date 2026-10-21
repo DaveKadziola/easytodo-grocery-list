@@ -1,0 +1,69 @@
+{# One user in the admin user list: a table row on wide screens, a card on a phone. Context: row
+   (UserRow). Its actions answer with this row again, which takes its place (an empty answer
+   removes it). There are none on the admin's own row, besides the password reset mail. -#}
+{% set own = row.id == current_user.id %}
+<tr id="user-{{ row.id }}" class="block space-y-2 py-4 md:table-row md:space-y-0 md:py-0">
+  <td class="block md:table-cell md:py-3 md:pr-4 md:align-top">
+    <p class="break-all font-medium">{{ row.email }}</p>
+    {% if own or row.is_admin %}
+    <p class="mt-1 flex flex-wrap gap-1">
+      {% if own %}<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">You</span>{% endif %}
+      {% if row.is_admin %}<span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">Admin</span>{% endif %}
+    </p>
+    {% endif %}
+    <p class="mt-1 text-xs text-slate-500">Joined <time datetime="{{ row.created_at.isoformat() }}">{{ row.created_at.strftime("%Y-%m-%d") }}</time></p>
+  </td>
+  <td class="block md:table-cell md:py-3 md:pr-4 md:align-top">
+    <span class="text-slate-500 md:hidden">Status:</span>
+    {% if row.status == "disabled" %}
+    <span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">Disabled</span>
+    {% else %}
+    <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">Active</span>
+    {% endif %}
+    {% if row.totp_enabled %}<span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">2FA on</span>{% endif %}
+  </td>
+  <td class="block md:table-cell md:py-3 md:pr-4 md:align-top">
+    <span class="text-slate-500 md:hidden">Boards owned:</span>
+    {{ row.owned_boards }}
+  </td>
+  <td class="block md:table-cell md:py-3 md:pr-4 md:align-top">
+    <span class="text-slate-500 md:hidden">Last sign-in:</span>
+    {% if row.last_login_at %}
+    <time datetime="{{ row.last_login_at.isoformat() }}" class="whitespace-nowrap">{{ row.last_login_at.strftime("%Y-%m-%d %H:%M") }} UTC</time>
+    {% else %}
+    Never
+    {% endif %}
+  </td>
+  <td class="block pt-2 md:table-cell md:py-3 md:align-top">
+    <div class="flex flex-wrap gap-2 md:justify-end">
+      {% if row.status == "active" %}
+      <form method="post" action="/admin/users/{{ row.id }}/send-reset" hx-post="/admin/users/{{ row.id }}/send-reset" hx-target="closest tr">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn-secondary">Send password reset</button>
+      </form>
+      {% endif %}
+      {% if not own %}
+      {% if row.totp_enabled %}
+      <form method="post" action="/admin/users/{{ row.id }}/reset-2fa" hx-post="/admin/users/{{ row.id }}/reset-2fa" hx-target="closest tr" hx-confirm="Turn off two-factor authentication for {{ row.email }}? They can sign in with the password alone until they set it up again.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn-secondary">Reset 2FA</button>
+      </form>
+      {% endif %}
+      {% if row.status == "active" %}
+      <form method="post" action="/admin/users/{{ row.id }}/status" hx-post="/admin/users/{{ row.id }}/status" hx-target="closest tr" hx-confirm="Disable {{ row.email }}? They are signed out everywhere and can't sign in until you enable the account again.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="status" value="disabled">
+        <button type="submit" class="btn-secondary">Disable</button>
+      </form>
+      {% else %}
+      <form method="post" action="/admin/users/{{ row.id }}/status" hx-post="/admin/users/{{ row.id }}/status" hx-target="closest tr">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="status" value="active">
+        <button type="submit" class="btn-secondary">Enable</button>
+      </form>
+      {% endif %}
+      <button type="button" class="btn-danger" hx-delete="/admin/users/{{ row.id }}" hx-target="closest tr" hx-confirm="Delete {{ row.email }}{% if row.owned_boards %} and the {{ row.owned_boards }} board{% if row.owned_boards != 1 %}s{% endif %} they own{% endif %}? This can't be undone.">Delete</button>
+      {% endif %}
+    </div>
+  </td>
+</tr>

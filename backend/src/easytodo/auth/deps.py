@@ -39,8 +39,8 @@ async def active_session(
     session = await load_session(db, raw_token) if raw_token else None
     if session is None:
         return None
-    user = await db.get_one(User, session.user_id)
-    if user.status == UserStatus.DISABLED:
+    user = await db.get(User, session.user_id)
+    if user is None or user.status == UserStatus.DISABLED:  # None: deleted since the session read
         return None
     return user, session
 

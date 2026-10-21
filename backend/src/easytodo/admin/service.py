@@ -1,0 +1,253 @@
+"""What the admin panel shows and does: the statistics, the user list, and creating, deleting,
+disabling and enabling accounts and turning their 2FA off.
+
+Being an admin opens no board: board pages go through ``require_board`` as for anyone. There is
+always an active admin left: the last one can be neither deleted nor disabled.
+"""
+
+import secrets
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+
+from sqlalchemy import ColumnExpressionArgument, ScalarSelect, Select, delete, func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from easytodo.auth.service import normalize_email
+from easytodo.auth.sessions import revoke_all_sessions, sessions_revoked
+from easytodo.boards.permissions import is_possible_id
+from easytodo.errors import Conflict, NotFound
+from easytodo.models import (
+    Board,
+    BoardMember,
+    Category,
+    Item,
+    RecoveryCode,
+    User,
+    UserSession,
+    UserStatus,
+)
+from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
+from easytodo.security.passwords import hash_password
+
+ACTIVE_WINDOW = timedelta(days=30)  # "active" users signed in within it
+CANNOT_DELETE_SELF = "You can't delete your own account here."
+LAST_ADMIN = "At least one active admin is required."
+USER_NOT_FOUND = "User not found."
+EMAIL_TAKEN = "An account with this email already exists."  # as at registration
+_LIKE_ESCAPE = "/"
+
+
+@dataclass(frozen=True)
+class AdminStats:
+    users_total: int
+    users_active_30d: int  # signed in within the last 30 days (``last_login_at``)
+    users_with_2fa: int
+    boards_total: int
+    shared_boards: int  # with more than one member
+    categories_total: int
+    items_total: int
+    items_open: int
+
+
+def _page_count(total: int, per_page: int) -> int:
+    """How many pages ``total`` rows take (at least 1, an empty one)."""
+    return max(1, -(-total // per_page))
+
+
+@dataclass
+class Page[T]:
+    items: list[T]
+    total: int  # matching rows on every page
+    page: int  # 1-based
+    per_page: int
+
+    @property
+    def pages(self) -> int:
+        return _page_count(self.total, self.per_page)
+
+
+@dataclass(frozen=True)
+class UserRow:
+    id: int
+    email: str
+    is_admin: bool
+    status: UserStatus
+    totp_enabled: bool
+    created_at: datetime
+    last_login_at: datetime | None
+    owned_boards: int
+
+
+async def get_stats(db: AsyncSession) -> AdminStats:
+    """Every count in one query."""
+
+    def count(entity: type, *where: ColumnExpressionArgument[bool]) -> ScalarSelect[int]:
+        return select(func.count()).select_from(entity).where(*where).scalar_subquery()
+
+    shared = (
+        select(BoardMember.board_id)
+        .group_by(BoardMember.board_id)
+        .having(func.count() > 1)
+        .subquery()
+    )
+    row = (
+        await db.execute(
+            select(
+                count(User),
+                count(User, User.last_login_at >= func.now() - ACTIVE_WINDOW),
+                count(User, User.totp_enabled),
+                count(Board),
+                select(func.count()).select_from(shared).scalar_subquery(),
+                count(Category),
+                count(Item),
+                count(Item, Item.is_done.is_(False)),
+            )
+        )
+    ).one()
+    return AdminStats(*row)
+
+
+def _user_rows() -> Select:
+    owned_boards = (
+        select(func.count()).select_from(Board).where(Board.owner_id == User.id).scalar_subquery()
+    )
+    return select(
+        User.id,
+        User.email,
+        User.is_admin,
+        User.status,
+        User.totp_enabled,
+        User.created_at,
+        User.last_login_at,
+        owned_boards,
+    )
+
+
+def _escape_like(value: str) -> str:
+    """``value`` matched literally in a LIKE pattern (``ESCAPE '/'``): ``%`` and ``_`` are no
+    wildcards."""
+    for char in (_LIKE_ESCAPE, "%", "_"):
+        value = value.replace(char, _LIKE_ESCAPE + char)
+    return value
+
+
+async def list_users(
+    db: AsyncSession, *, q: str | None, page: int, per_page: int = 50
+) -> Page[UserRow]:
+    """The users whose e-mail contains ``q`` (ignoring case; all of them without ``q``), by
+    e-mail. A page past the last shows the last one, a page before the first the first."""
+    where: list[ColumnExpressionArgument[bool]] = []
+    if q:
+        where.append(User.email.ilike(f"%{_escape_like(q)}%", escape=_LIKE_ESCAPE))
+    total = await db.scalar(select(func.count()).select_from(User).where(*where))
+    page = min(max(page, 1), _page_count(total, per_page))
+    rows = await db.execute(
+        _user_rows()
+        .where(*where)
+        .order_by(User.email)
+        .limit(per_page)
+        .offset((page - 1) * per_page)
+    )
+    return Page([UserRow(*row) for row in rows], total, page, per_page)
+
+
+async def get_user(db: AsyncSession, user_id: int) -> User:
+    user = await db.get(User, user_id) if is_possible_id(user_id) else None
+    if user is None:
+        raise NotFound(USER_NOT_FOUND)
+    return user
+
+
+async def get_user_row(db: AsyncSession, user_id: int) -> UserRow:
+    row = (await db.execute(_user_rows().where(User.id == user_id))).one_or_none()
+    if row is None:
+        raise NotFound(USER_NOT_FOUND)
+    return UserRow(*row)
+
+
+async def create_user_with_temp_password(
+    db: AsyncSession, email: str, *, is_admin: bool = False
+) -> tuple[User, str]:
+    """A new account with a random temporary password, which it must change when it first signs
+    in; returns the account and the password (to be shown this once)."""
+    email = normalize_email(email)
+    password = secrets.token_urlsafe(12)
+    user = User(
+        email=email,
+        password_hash=hash_password(password),
+        is_admin=is_admin,
+        must_change_password=True,
+    )
+    try:
+        # A savepoint: a failed insert must not expire the signed-in admin the page shows.
+        async with db.begin_nested():
+            db.add(user)
+    except IntegrityError:  # users.email is unique
+        raise Conflict(EMAIL_TAKEN) from None
+    await db.commit()
+    return user, password
+
+
+async def _keep_an_active_admin(db: AsyncSession, user: User) -> None:
+    """``Conflict`` if ``user`` is the only active admin, so they may not go.
+
+    Locks the active admins' rows until the commit: two admins removing each other at once
+    cannot both succeed.
+    """
+    if not user.is_admin or user.status != UserStatus.ACTIVE:
+        return
+    admins = await db.scalars(
+        select(User.id)
+        .where(User.is_admin, User.status == UserStatus.ACTIVE)
+        .order_by(User.id)
+        .with_for_update()
+    )
+    if not any(admin_id != user.id for admin_id in admins):
+        raise Conflict(LAST_ADMIN)
+
+
+async def delete_user(db: AsyncSession, admin: User, user_id: int) -> None:
+    """Delete the account; the boards it owns go with it (FK cascades), and its devices are
+    signed out."""
+    if user_id == admin.id:
+        raise Conflict(CANNOT_DELETE_SELF)
+    user = await get_user(db, user_id)
+    await _keep_an_active_admin(db, user)
+    owned = list(await db.scalars(select(Board.id).where(Board.owner_id == user.id)))
+    # Deleted here rather than by the cascade, so their sockets are closed too.
+    revoked = await revoke_all_sessions(db, user.id)
+    await db.delete(user)
+    await commit_and_publish(
+        db,
+        *sessions_revoked(user.id, revoked),
+        *(BoardEvent(EventType.BOARD_DELETED, board_id=board_id) for board_id in owned),
+    )
+
+
+async def set_status(db: AsyncSession, admin: User, user_id: int, status: UserStatus) -> None:
+    """Disable the account (it is signed out everywhere and cannot sign in) or enable it."""
+    user = await get_user(db, user_id)
+    revoked: list[int] = []
+    if status == UserStatus.DISABLED:
+        await _keep_an_active_admin(db, user)
+        revoked = await revoke_all_sessions(db, user.id)
+    user.status = status
+    await commit_and_publish(db, *sessions_revoked(user.id, revoked))
+
+
+async def reset_2fa(db: AsyncSession, admin: User, user_id: int) -> None:
+    """Turn the account's 2FA off, as ``twofa.disable_2fa`` does but without its password and
+    code (for a lost authenticator): the secret and the recovery codes are deleted, and sign-ins
+    still waiting for a code end."""
+    user = await get_user(db, user_id)
+    user.totp_enabled = False
+    user.totp_secret_enc = None
+    user.totp_last_step = None
+    await db.execute(delete(RecoveryCode).where(RecoveryCode.user_id == user.id))
+    pending = await db.scalars(
+        delete(UserSession)
+        .where(UserSession.user_id == user.id, UserSession.mfa_pending.is_(True))
+        .returning(UserSession.id)
+    )
+    await commit_and_publish(db, *sessions_revoked(user.id, list(pending)))
