@@ -441,6 +441,33 @@ def test_tick_sends_the_state_its_user_wants(logged_in_page, seed, user, open_bo
     assert parse_qs(unticked.value.post_data)["done"] == ["false"]
 
 
+def test_untick_while_the_tick_is_on_its_way_is_sent(logged_in_page, seed, user, open_board):
+    """A quick double tap: the second one lands before the first one's answer has replaced the
+    category. It still reaches the server, and the board ends up as its user left it."""
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
+    open_board(page, board_id)
+    milk = page.get_by_role("checkbox", name="Milk")
+    held = []
+    # The first answer waits for the second tap; anything after it goes through.
+    page.route(TOGGLED, lambda route: route.continue_() if held else held.append(route))
+
+    with page.expect_request(TOGGLED) as ticked:
+        milk.click()
+    while not held:
+        page.wait_for_timeout(10)
+    milk.click()
+    with page.expect_request(TOGGLED) as unticked:
+        held[0].continue_()
+
+    assert parse_qs(ticked.value.post_data)["done"] == ["true"]
+    assert parse_qs(unticked.value.post_data)["done"] == ["false"]
+    unticked.value.response()
+    expect(milk).not_to_be_checked()
+    page.reload()
+    expect(milk).not_to_be_checked()
+
+
 @pytest.mark.parametrize("failure", ["error", "no answer"])
 def test_drag_that_did_not_go_through_puts_the_item_back(
     logged_in_page, seed, user, open_board, failure

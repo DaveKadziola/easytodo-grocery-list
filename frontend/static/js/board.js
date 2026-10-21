@@ -261,8 +261,44 @@
     checkbox.closest("[data-item-id]").classList.toggle("line-through", checkbox.checked);
   }
 
+  // A tap on a checkbox whose last tap is still on its way (a quick double tap): htmx holds the
+  // new request back on that checkbox until the answer comes, but the answer replaces the
+  // category, checkbox and all, and htmx then drops what it held for an element that is gone. So
+  // the state its user wants is noted here and sent from the new checkbox once it is set up.
+  const ticking = new WeakSet(); // checkboxes whose request is on its way
+  const heldTicks = new Map(); // checkbox id -> {from: checkbox tapped, checked: wanted state}
+
   document.addEventListener("htmx:beforeRequest", (event) => {
-    if (event.detail.elt.matches(TICK)) strike(event.detail.elt);
+    const checkbox = event.detail.elt;
+    if (!checkbox.matches(TICK)) return;
+    strike(checkbox);
+    ticking.add(checkbox);
+    const held = heldTicks.get(checkbox.id);
+    if (held && held.from === checkbox) heldTicks.delete(checkbox.id); // htmx sends it itself
+  });
+
+  document.addEventListener(
+    "change",
+    (event) => {
+      const checkbox = event.target;
+      if (!(checkbox instanceof Element) || !checkbox.matches(TICK) || !ticking.has(checkbox)) return;
+      heldTicks.set(checkbox.id, { from: checkbox, checked: checkbox.checked });
+      strike(checkbox);
+    },
+    true, // before htmx's own listener on the checkbox, which may send a request at once
+  );
+
+  document.addEventListener("htmx:afterRequest", (event) => ticking.delete(event.detail.elt));
+
+  document.addEventListener("htmx:afterSettle", () => {
+    for (const [id, { from, checked }] of heldTicks) {
+      const checkbox = document.getElementById(id);
+      if (checkbox === from) continue; // not replaced: htmx still sends it from there
+      heldTicks.delete(id);
+      if (!checkbox || !checkbox.matches(TICK) || checkbox.checked === checked) continue;
+      checkbox.checked = checked;
+      htmx.trigger(checkbox, "change");
+    }
   });
 
   function failed(event) {
