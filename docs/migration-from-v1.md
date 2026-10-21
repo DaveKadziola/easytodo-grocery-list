@@ -2,7 +2,8 @@
 
 v2 is a new application with its own database. Nothing is converted in place. You start v2 next to
 v1, and one command copies v1's list into a board of your v2 account. v1 keeps running unchanged
-until you switch it off at the end. The v1 code stays available in the git tag `legacy-v1`.
+until you switch it off at the end. The v1 code stays available in the git history: commit
+`0fcbd9c` (tagged `legacy-v1`), e.g. `git switch --detach 0fcbd9c`.
 
 **What is copied.** v1 has one shared list. The import puts it into **one new board** owned by a
 v2 account:
@@ -12,6 +13,7 @@ v2 account:
   category named "Uncategorized".
 - Each item keeps its description, its done state and its created/updated times. v1 stored times
   without a time zone; they are read as local time in `--legacy-tz` (default `Europe/Warsaw`).
+  With v1's Docker setups, pass `--legacy-tz UTC` (see step 4).
 - v1's internal tables (`updates_log`, `temporary_data`) are not copied.
 
 Changes made in v1 after the import are not copied. Stop using v1 before you start, or import
@@ -83,7 +85,7 @@ list. Pass it in `PGPASSWORD` instead:
 read -rs PGPASSWORD && export PGPASSWORD      # type the v1 database password, then Enter
 docker compose exec -e PGPASSWORD app python -m easytodo.cli import-legacy \
     --legacy-dsn postgresql://prod_todo_grocery@192.168.1.20:5433/todo_grocery \
-    --schema prod --owner-email you@example.com
+    --schema prod --owner-email you@example.com --legacy-tz UTC
 unset PGPASSWORD
 ```
 
@@ -99,7 +101,9 @@ unset PGPASSWORD
   too.
 - **Schema:** v1's `DB_SCHEMA` (`prod`, or `dev`/`test` if you used those).
 - **Options:** `--board-name NAME` (default "Imported from v1") and `--legacy-tz ZONE` (default
-  `Europe/Warsaw`, the time zone v1's server ran in).
+  `Europe/Warsaw`, the time zone v1's server ran in). v1's Docker setups (`with-db`, `no-db`) set
+  no time zone, so v1 stored UTC times there: pass `--legacy-tz UTC`. Not sure? Run
+  `SHOW timezone;` in v1's database (`psql`, as in step 5) and pass what it shows.
 
 The command prints a report, for example:
 
@@ -116,7 +120,7 @@ Here v1 had "dairy  products" (two spaces) and "Dairy products": in v2 they are
 Notes:
 
 - **Every run creates another board.** To import again (say, after more changes in v1), delete the
-  earlier board first (the "Delete board" button at the top of the board), or you get the data
+  earlier board first ("Delete board" in the ⋮ menu next to the board's name), or you get the data
   twice.
 - **Names are tidied and made unique.** Runs of spaces become one space. Two categories whose
   names differ only in letter case get " (2)", " (3)"... The report lists the v1 names that
@@ -145,8 +149,8 @@ gives the same numbers:
 
 ```sh
 docker compose exec db psql -U easytodo -d easytodo \
-    -c "SELECT count(*) FROM items JOIN boards ON boards.id = items.board_id WHERE boards.name = 'Imported from v1'" \
-    -c "SELECT count(*) FROM categories JOIN boards ON boards.id = categories.board_id WHERE boards.name = 'Imported from v1'"
+    -c "SELECT count(*) FROM items WHERE board_id = (SELECT max(id) FROM boards WHERE name = 'Imported from v1')" \
+    -c "SELECT count(*) FROM categories WHERE board_id = (SELECT max(id) FROM boards WHERE name = 'Imported from v1')"
 ```
 
 Then open the board in v2 and compare a few categories with v1.

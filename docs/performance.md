@@ -87,8 +87,10 @@ empty for its runs to compare. v2 starts empty to match.
 ### v2
 
 The docker compose stack of this repository: the image built from `deploy/Dockerfile`, one
-Uvicorn worker, `.env` made from `.env.example` (`EASYTODO_PUBLIC_URL=http://localhost:8000`,
-which `--base-url` must equal because the CSRF check compares the `Origin`). Per run, from the
+Uvicorn worker, `.env` as the README's quick start makes it (`cp .env.example .env` plus its
+`sed` line, which fills in the required `EASYTODO_SECRET_KEY`; `EASYTODO_PUBLIC_URL` stays
+`http://localhost:8000`, which `--base-url` must equal because the CSRF check compares the
+`Origin`). Per run, from the
 repository root (`down -v` deletes the database, so use a checkout that holds no data you need):
 
 ```sh
@@ -100,8 +102,8 @@ cd backend && uv run python ../scripts/bench.py --target v2 --base-url http://lo
 
 ### v1 (legacy)
 
-v1's code is in the git tag `legacy-v1`. It ran through the same entrypoint as its Docker image
-(`docker/v1.0.0/entrypoint.sh` writes `config.ini` and `socketio.json`, then runs
+v1's code is commit `0fcbd9c` (tagged `legacy-v1`). It ran through the same entrypoint as its
+Docker image (`docker/v1.0.0/entrypoint.sh` writes `config.ini` and `socketio.json`, then runs
 `python3 run.py`), which starts Flask-SocketIO with eventlet and `debug=True`, so debug mode and
 Socket.IO logging are part of the numbers. The stock `docker compose -f
 docker/v1.0.0/with-db/docker-compose.yml up --build` does not work on this machine, so two parts
@@ -121,7 +123,7 @@ throwaway values):
 
 ```sh
 V1=$(mktemp -d)
-git worktree add "$V1/code" legacy-v1
+git worktree add "$V1/code" 0fcbd9c   # v1's last commit (tag legacy-v1)
 cat > "$V1/v1.env" <<'EOF'
 DB_HOST=127.0.0.1
 DB_PORT=5433

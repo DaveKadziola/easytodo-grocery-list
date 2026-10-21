@@ -89,7 +89,7 @@ A tunnel connector on your side opens an outgoing connection to the provider. Th
 ## (d) Checklist
 
 - [ ] **`POSTGRES_PASSWORD`**: set a random value before the first `docker compose up`, e.g. `openssl rand -hex 24`. Postgres stores it in the `pgdata` volume on its first start, so changing `.env` later does not change it.
-- [ ] **`EASYTODO_SECRET_KEY`**: a strong random key, e.g. `openssl rand -hex 32` (at least 32 characters). It encrypts the 2FA secrets stored in the database. Keep it unchanged, and keep a copy with your backups: without it, the 2FA secrets in a restored database cannot be read.
+- [ ] **`EASYTODO_SECRET_KEY`**: a strong random key, e.g. `openssl rand -hex 32` (at least 32 characters). It encrypts the 2FA secrets stored in the database. Keep it unchanged, and keep a copy in a safe place apart from the backups (a password manager, say): without it, the 2FA secrets in a restored database cannot be read, and with it anyone holding a dump can read them.
 - [ ] **`EASYTODO_REGISTRATION_OPEN=false`** once everyone has an account, then apply it with `docker compose up -d`. While it is `true`, anyone who can reach the app can sign up.
 - [ ] **Mail over SMTP, not the console.** Set `EASYTODO_MAIL_BACKEND=smtp` and the `EASYTODO_SMTP_*` settings. The default `console` backend sends nothing: it writes every mail, password-reset and invite links included, to the app's log as a WARNING. Never use it in production.
 - [ ] **Logs contain live links. Restrict who can read them.**
@@ -98,17 +98,18 @@ A tunnel connector on your side opens an outgoing connection to the provider. Th
   - Both appear in the app's access log (`docker compose logs app`), in a proxy's access log if you turn one on (Caddy logs no requests by default), and, with the console mail backend, in the mails the app writes to that same log.
   - On Linux, anyone in the `docker` group can read the container logs.
   - Revoke a leaked invite link on the board's Members page. A password change invalidates all of the account's reset links.
-- [ ] **Backups** with `pg_dump`, run from the repository root. Copy the dumps off the server, e.g. from a daily cron job:
+- [ ] **Backups** with `pg_dump`, run from the repository root, into `backups/` (git-ignored). A dump holds every account's password hash, so it is created readable by your user only (`umask 077`). Copy the dumps off the server, e.g. from a daily cron job:
 
   ```sh
-  docker compose exec -T db pg_dump -U easytodo -d easytodo -Fc > easytodo-$(date +%F).dump
+  mkdir -p backups
+  (umask 077 && docker compose exec -T db pg_dump -U easytodo -d easytodo -Fc > backups/easytodo-$(date +%F).dump)
   ```
 
   To restore a dump:
 
   ```sh
   docker compose stop app
-  docker compose exec -T db pg_restore -U easytodo -d easytodo --clean --if-exists < easytodo-2026-10-21.dump
+  docker compose exec -T db pg_restore -U easytodo -d easytodo --clean --if-exists < backups/easytodo-2026-10-21.dump
   docker compose start app
   ```
 

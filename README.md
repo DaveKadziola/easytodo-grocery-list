@@ -18,12 +18,13 @@ Coming from v1? See [docs/migration-from-v1.md](docs/migration-from-v1.md).
 
 - **Boards, categories and items.** As many boards as you like. Items have an optional
   description and are ticked off with one tap. Drag items between categories and reorder
-  categories, with a mouse or by touch. "Clear done" empties a category of ticked items.
+  categories, with a mouse, by touch or from the keyboard (Move up / Move down in a category's
+  menu). Fold a category away on one device. "Clear done" empties a category of ticked items.
 - **Real-time sync.** Every open board stays current over a WebSocket. A phone that was asleep or
   lost its signal catches up as soon as it is back. The header shows "Live" (on a phone, a green
   dot) while connected.
 - **Sharing.** Invite people by link or by email, as an editor (can change items) or a viewer
-  (can only look). Owners manage members; anyone can leave a board.
+  (can only look). Owners manage members; every member other than the owner can leave a board.
 - **Accounts.** Sign-up (can be closed), sign-in with a lockout after 10 wrong passwords,
   optional two-factor authentication (an authenticator app, plus 10 recovery codes), password
   reset by email, and a list of where you are signed in, with "Sign out other devices".
@@ -61,6 +62,11 @@ phone, see "Phone on the home network" in the checklist below.
 
 `docker compose down` stops the app and keeps the data. `docker compose up -d` starts it again.
 
+On a server with a public IP address (a VPS, say), set `EASYTODO_BIND=127.0.0.1` in `.env`
+before the first start and follow [docs/deployment.md](docs/deployment.md) (b) or (c): otherwise
+the app is reachable from the internet over plain HTTP, with registration open, and ports that
+Docker publishes bypass firewalls such as ufw.
+
 ## Manual test checklist
 
 A walk through everything by hand on a fresh install. The steps with two people need two
@@ -86,15 +92,18 @@ browsers, or a normal and a private window, each signed in as someone else.
    everywhere.
 4. **Sharing.** As the owner, open a board → Members. Under "Invite someone", pick the role
    "Viewer", then either leave the email empty to get a link (it is shown once: copy it) or enter
-   `bob@example.com` (the console backend writes that invite mail to the log too:
-   `docker compose logs app | grep /invite/`). Open the link in Bob's browser and choose
+   `bob@example.com` (the console backend sends no mail: the page then shows the invite link to
+   pass on, which only Bob's account can use). Open the link in Bob's browser and choose
    "Join board". As a viewer, Bob sees the board without edit controls. Change his role to
-   editor on the Members page and he can edit. Try removing him, and "Leave board" as Bob.
+   editor on the Members page and he can edit. As Bob, choose "Leave board"; invite him again,
+   and then remove him from the Members page.
 5. **Real time with two browsers.** Open the same board in both browsers; each header shows
    "Live". Add, tick, rename and drag items in one: the other follows without reloading. Then
    take one of them offline (airplane mode on a phone, or developer tools → Network → Offline),
    change something in the other, and go back online: the first one catches up by itself, without
-   a reload (meanwhile its header may show "Reconnecting…").
+   a reload (meanwhile its header may show "Reconnecting…"). On an iPhone or iPad, check the
+   same in Safari: the board shows "Live" (the green dot), and a change made on another device
+   appears without reloading.
 6. **Admin panel.** As the admin: "Admin" in the header shows the statistics, "Manage users" the
    accounts. Create an account (its temporary password is shown once, and it must choose a new one
    at its first sign-in), send a password reset (link in the log, as in step 3), reset 2FA,
@@ -105,7 +114,8 @@ browsers, or a normal and a private window, each signed in as someone else.
    Open `http://192.168.1.20:8000` on the phone, on the same Wi-Fi. Use that address on the
    computer as well: the app accepts form submissions only from the address in
    `EASYTODO_PUBLIC_URL`, so at `http://localhost:8000` signing in and saving now fail with
-   "Invalid CSRF token.". If the phone cannot connect, allow incoming TCP port 8000 in the
+   "Invalid CSRF token.", and a board page there shows "Offline" with a message naming the
+   address to use. If the phone cannot connect, allow incoming TCP port 8000 in the
    computer's firewall. The browser's "Add to Home Screen" installs it like an app.
 
 ## Configuration
@@ -116,7 +126,7 @@ each line. After a change, `docker compose up -d` applies it.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `EASYTODO_DATABASE_URL` | required | PostgreSQL URL, `postgresql+asyncpg://user:password@host:port/db`. `.env.example` points it at the compose `db` service, with `POSTGRES_PASSWORD` filled in. |
-| `EASYTODO_SECRET_KEY` | required | At least 32 characters (`openssl rand -hex 32`). Encrypts the 2FA secrets in the database: keep it unchanged and keep a copy with your backups. |
+| `EASYTODO_SECRET_KEY` | required | At least 32 characters (`openssl rand -hex 32`). Encrypts the 2FA secrets in the database: keep it unchanged, and keep a copy in a safe place apart from your backups. |
 | `EASYTODO_PUBLIC_URL` | `http://localhost:8000` | The address people type in the browser. The only origin the app accepts form submissions from (CSRF check). An `https://` address also makes the session cookie `Secure`. |
 | `EASYTODO_REGISTRATION_OPEN` | `true` | `false` closes `/register`. Admins can still create accounts. |
 | `EASYTODO_SESSION_TTL_DAYS` | `30` | How long a sign-in stays valid, in days. |
@@ -131,7 +141,7 @@ each line. After a change, `docker compose up -d` applies it.
 | `EASYTODO_ENV` | `dev` (`prod` in `.env.example`) | `dev`, `test` or `prod`. A label only: nothing depends on it yet. |
 | `EASYTODO_PORT` | `8000` | Host port docker compose publishes the app on. Use the same port in `EASYTODO_PUBLIC_URL`. |
 | `EASYTODO_BIND` | every interface | Host address for that port. `127.0.0.1` with the reverse proxy. |
-| `EASYTODO_WORKERS` | `1` | Uvicorn worker processes. |
+| `EASYTODO_WORKERS` | `1` | Uvicorn worker processes. The rate limits live in each worker's memory, so N workers allow N times as many attempts (and a restart resets them): keep `1`, which is plenty for a household, on an install reachable from the internet. |
 | `EASYTODO_DOMAIN` | none | Domain name for Caddy's certificate (only with the `proxy` profile). |
 
 `.env` also holds two settings for the other containers: `POSTGRES_PASSWORD` (the `db` service's
@@ -160,6 +170,10 @@ EASYTODO_SMTP_PASSWORD=your-smtp-password
 EASYTODO_SMTP_FROM=EasyToDo <you@example.com>
 ```
 
+docker compose fills in `${...}` in `.env` values, so wrap a value that contains a `$` in single
+quotes (`EASYTODO_SMTP_PASSWORD='pa$$word'`); otherwise it is silently changed and sign-in to the
+SMTP server fails.
+
 Then run `docker compose up -d`. The app connects on port 587 and upgrades with STARTTLS. A
 server that needs TLS from the start (port 465) is not supported. For a relay without TLS (a
 local server on port 25), set `EASYTODO_SMTP_STARTTLS=false`. To test it, request a password
@@ -169,22 +183,26 @@ mail to ..." with the reason.
 ## Backup and restore
 
 The data lives in the `pgdata` volume of the `db` service. Back it up with `pg_dump`, from the
-repository root, and copy the dumps off the server:
+repository root, into `backups/` (git-ignored; the dumps are readable by your user only, as they
+hold every account's password hash), and copy the dumps off the server:
 
 ```sh
-docker compose exec -T db pg_dump -U easytodo -d easytodo -Fc > easytodo-$(date +%F).dump
+mkdir -p backups
+(umask 077 && docker compose exec -T db pg_dump -U easytodo -d easytodo -Fc > backups/easytodo-$(date +%F).dump)
 ```
 
 Restore a dump:
 
 ```sh
 docker compose stop app
-docker compose exec -T db pg_restore -U easytodo -d easytodo --clean --if-exists < easytodo-2026-10-21.dump
+docker compose exec -T db pg_restore -U easytodo -d easytodo --clean --if-exists < backups/easytodo-2026-10-21.dump
 docker compose start app
 ```
 
-Keep a copy of `EASYTODO_SECRET_KEY` with the dumps: without it, the 2FA secrets in a restored
-database cannot be read. Never run `docker compose down -v`: `-v` deletes the database volume.
+Keep a copy of `EASYTODO_SECRET_KEY` too, in a safe place but not next to the dumps (a password
+manager, say): without it, the 2FA secrets in a restored database cannot be read, and with it
+anyone holding a dump can read them. Never run `docker compose down -v`: `-v` deletes the
+database volume.
 
 ## Local development
 
@@ -214,7 +232,7 @@ make run              # http://localhost:8000, restarts on code changes
 ```sh
 make test             # tests, without the browser tests
 cd backend && uv run playwright install chromium && cd ..   # once, before the first make e2e
-make e2e              # browser tests (Playwright, Chromium); they need make css first
+make e2e              # browser tests (Playwright, Chromium); builds the CSS first
 make lint             # ruff
 ```
 

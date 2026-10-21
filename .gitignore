@@ -6,3 +6,6 @@ formatted_commit_message.txt
 .venv/
 frontend/static/css/app.css
 bin/
+# Database backups (README: Backups).
+backups/
+*.dump
