@@ -1,10 +1,14 @@
-{# Context: view (BoardView). The board is rendered inline, so the first view is ready HTML. -#}
+{# Context: view (BoardView). The board is rendered inline, so the first view is ready HTML; then
+   realtime.js keeps it current over the board's WebSocket, and shows the connection in
+   #conn-status (a fixed height, so the text appearing moves nothing). -#}
 {% extends "base.html" %}
 {% block title %}{{ view.board.name }} · EasyToDo{% endblock %}
 {% block scripts %}
   <script src="/static/js/board.js" defer></script>
+  <script src="/static/js/realtime.js" defer></script>
 {% endblock %}
 {% block content %}
+<p id="conn-status" data-board-id="{{ view.board.id }}" role="status" class="-mt-6 mb-2 h-4 text-right text-xs font-medium text-slate-500"></p>
 {% if can(view.role, Action.EDIT_CONTENT) %}
 <div x-data="itemModal">
   {% include "boards/_board_content.html" %}

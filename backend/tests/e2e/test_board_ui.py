@@ -84,10 +84,10 @@ def too_small_targets(page: Page) -> list[str]:
     )
 
 
-def test_add_and_toggle_item_on_phone(logged_in_page_mobile, seed, user):
+def test_add_and_toggle_item_on_phone(logged_in_page_mobile, seed, user, open_board):
     page = logged_in_page_mobile
     board_id = seed_board(seed, user, {"Dairy": ["Yogurt"], "Bakery": ["Bread"]})
-    page.goto(f"/boards/{board_id}")
+    open_board(page, board_id)
     dairy = category(page, "Dairy")
     new_item = dairy.get_by_placeholder("Add item")
 
@@ -106,10 +106,10 @@ def test_add_and_toggle_item_on_phone(logged_in_page_mobile, seed, user):
     assert too_small_targets(page) == []
 
 
-def test_drag_item_to_other_category(logged_in_page, seed, user):
+def test_drag_item_to_other_category(logged_in_page, seed, user, open_board):
     page = logged_in_page
     board_id = seed_board(seed, user, {"Dairy": ["Milk", "Yogurt"], "Bakery": ["Bread"]})
-    page.goto(f"/boards/{board_id}")
+    open_board(page, board_id)
 
     bread = items_of(page, "Bakery").first
     with page.expect_response(re.compile(r"/items/\d+/move$")) as moved:
@@ -144,10 +144,10 @@ def touch_drag(page: Page, source: Locator, target: Locator, hold_ms: int) -> No
     finger("touchEnd")
 
 
-def test_long_press_drags_an_item_on_a_touch_screen(logged_in_page_mobile, seed, user):
+def test_long_press_drags_an_item_on_a_touch_screen(logged_in_page_mobile, seed, user, open_board):
     page = logged_in_page_mobile
     board_id = seed_board(seed, user, {"Dairy": ["Milk"], "Bakery": ["Bread"]})
-    page.goto(f"/boards/{board_id}")
+    open_board(page, board_id)
     moves: list[str] = []
     page.on(
         "request", lambda request: moves.append(request.url) if "/move" in request.url else None
@@ -166,7 +166,7 @@ def test_long_press_drags_an_item_on_a_touch_screen(logged_in_page_mobile, seed,
     expect(items_of(page, "Bakery")).to_have_text([re.compile("Bread"), re.compile("Milk")])
 
 
-def test_no_csp_violations(browser, live_server, logged_in_page, seed, user):
+def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, open_board):
     anonymous = browser.new_context(base_url=live_server.url)
     page = anonymous.new_page()
     problems = watch_console(page)
@@ -179,7 +179,7 @@ def test_no_csp_violations(browser, live_server, logged_in_page, seed, user):
     page = logged_in_page
     problems += watch_console(page)
     page.goto("/boards")
-    page.goto(f"/boards/{board_id}")  # as the owner: rename and delete are on the page too
+    open_board(page, board_id)  # as the owner: rename and delete are on the page too
     expect(page.get_by_role("button", name="Delete board")).to_be_visible()
     page.get_by_role("button", name="Milk", exact=True).click()
     dialog = page.get_by_role("dialog")
@@ -193,10 +193,10 @@ def test_no_csp_violations(browser, live_server, logged_in_page, seed, user):
     assert problems == []
 
 
-def test_owner_renames_and_deletes_the_board(logged_in_page, seed, user):
+def test_owner_renames_and_deletes_the_board(logged_in_page, seed, user, open_board):
     page = logged_in_page
     board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
-    page.goto(f"/boards/{board_id}")
+    open_board(page, board_id)
     problems = watch_console(page)
     statuses: list[int] = []
     page.on("response", lambda response: statuses.append(response.status))
@@ -217,11 +217,11 @@ def test_owner_renames_and_deletes_the_board(logged_in_page, seed, user):
     assert problems == []
 
 
-def test_editing_only_the_name_keeps_the_description(logged_in_page, seed, user):
+def test_editing_only_the_name_keeps_the_description(logged_in_page, seed, user, open_board):
     page = logged_in_page
     board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
     describe(seed, "Milk", "2 litres, organic")
-    page.goto(f"/boards/{board_id}")
+    open_board(page, board_id)
 
     page.get_by_role("button", name="Milk", exact=True).click()
     dialog = page.get_by_role("dialog")
@@ -236,11 +236,13 @@ def test_editing_only_the_name_keeps_the_description(logged_in_page, seed, user)
     expect(item(page, "Oat milk")).to_contain_text("2 litres, organic")
 
 
-def test_item_modal_shows_names_with_quotes_and_html_literally(logged_in_page, seed, user):
+def test_item_modal_shows_names_with_quotes_and_html_literally(
+    logged_in_page, seed, user, open_board
+):
     page = logged_in_page
     board_id = seed_board(seed, user, {NASTY: [NASTY]})
     describe(seed, NASTY, NASTY)
-    page.goto(f"/boards/{board_id}")
+    open_board(page, board_id)
     page.on("dialog", lambda dialog: pytest.fail(f"a script ran: {dialog.message}"))
 
     page.get_by_role("button", name=NASTY, exact=True).click()
@@ -252,10 +254,10 @@ def test_item_modal_shows_names_with_quotes_and_html_literally(logged_in_page, s
     expect(page.get_by_role("heading", name=NASTY, exact=True)).to_be_visible()
 
 
-def test_item_modal_moves_and_deletes_items(logged_in_page, seed, user):
+def test_item_modal_moves_and_deletes_items(logged_in_page, seed, user, open_board):
     page = logged_in_page
     board_id = seed_board(seed, user, {"Dairy": ["Butter", "Milk"], "Bakery": ["Bread"]})
-    page.goto(f"/boards/{board_id}")
+    open_board(page, board_id)
     dialog = page.get_by_role("dialog")
 
     page.get_by_role("button", name="Milk", exact=True).click()
@@ -277,10 +279,12 @@ def test_item_modal_moves_and_deletes_items(logged_in_page, seed, user):
     expect(items_of(page, "Bakery")).to_have_text([re.compile("Bread"), re.compile("Milk")])
 
 
-def test_new_category_goes_last_and_the_field_is_ready_for_the_next(logged_in_page, seed, user):
+def test_new_category_goes_last_and_the_field_is_ready_for_the_next(
+    logged_in_page, seed, user, open_board
+):
     page = logged_in_page
     board_id = seed_board(seed, user, {})
-    page.goto(f"/boards/{board_id}")
+    open_board(page, board_id)
     expect(page.get_by_text("This board has no categories yet.")).to_be_visible()
     field = page.get_by_placeholder("New category")
 
@@ -296,12 +300,12 @@ def test_new_category_goes_last_and_the_field_is_ready_for_the_next(logged_in_pa
     expect(page.locator("section[data-category-id] h2")).to_have_text(["Dairy", "Bakery"])
 
 
-def test_category_menu_renames_clears_done_and_deletes(logged_in_page, seed, user):
+def test_category_menu_renames_clears_done_and_deletes(logged_in_page, seed, user, open_board):
     page = logged_in_page
     board_id = seed_board(
         seed, user, {"Dairy": ["Milk", "Yogurt"], "Bakery": ["Bread"]}, done=("Milk",)
     )
-    page.goto(f"/boards/{board_id}")
+    open_board(page, board_id)
 
     category(page, "Dairy").locator("summary").click()
     category(page, "Dairy").get_by_label("Category name").fill("Fridge")
@@ -321,10 +325,10 @@ def test_category_menu_renames_clears_done_and_deletes(logged_in_page, seed, use
     expect(page.locator("section[data-category-id] h2")).to_have_text(["Bakery"])
 
 
-def test_dragging_the_handle_reorders_categories(logged_in_page, seed, user):
+def test_dragging_the_handle_reorders_categories(logged_in_page, seed, user, open_board):
     page = logged_in_page
     board_id = seed_board(seed, user, {"Dairy": ["Milk"], "Bakery": ["Bread"]})
-    page.goto(f"/boards/{board_id}")
+    open_board(page, board_id)
 
     with page.expect_response(re.compile(r"/categories/order$")) as saved:
         category(page, "Bakery").locator(".category-handle").drag_to(
@@ -337,11 +341,11 @@ def test_dragging_the_handle_reorders_categories(logged_in_page, seed, user):
 
 
 def test_ticking_an_item_deleted_on_another_device_resyncs_the_board(
-    logged_in_page, seed, user
+    logged_in_page, seed, user, open_board
 ):  # Review Focus 2
     page = logged_in_page
     board_id = seed_board(seed, user, {"Dairy": ["Milk", "Yogurt"]})
-    page.goto(f"/boards/{board_id}")
+    open_board(page, board_id)
 
     async def other_device(db) -> None:
         await db.execute(delete(Item).where(Item.name == "Milk"))
@@ -359,11 +363,11 @@ def test_ticking_an_item_deleted_on_another_device_resyncs_the_board(
 
 
 @pytest.mark.parametrize(("width", "columns"), [(375, "auto"), (768, "2"), (1280, "3")])
-def test_categories_flow_into_columns(signed_in_page, seed, user, width, columns):
+def test_categories_flow_into_columns(signed_in_page, seed, user, width, columns, open_board):
     board_id = seed_board(seed, user, {name: [] for name in ("Dairy", "Bakery", "Fruit")})
     page = signed_in_page(viewport={"width": width, "height": 900})
 
-    page.goto(f"/boards/{board_id}")
+    open_board(page, board_id)
 
     column_count = page.locator("#categories").evaluate("(el) => getComputedStyle(el).columnCount")
     assert column_count == columns

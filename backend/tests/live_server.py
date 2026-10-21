@@ -3,7 +3,8 @@
 Synchronous on purpose: Playwright's sync API leaves its own event loop marked as running in the
 test thread, so everything here that needs asyncio (migrations, emptying the tables) runs on a
 fresh loop in a worker thread. Import the fixture into the conftest of each test package that
-uses it (``from live_server import live_server``).
+uses it (``from live_server import live_server``); ``serving`` starts further servers on the same
+database (several workers).
 """
 
 import asyncio
@@ -12,6 +13,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cache
 from typing import Any
@@ -20,6 +22,7 @@ import pytest
 import uvicorn
 from alembic import command
 from conftest import alembic_cfg, truncate_all_tables
+from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -33,6 +36,7 @@ STARTUP_TIMEOUT_S = 10
 class LiveServer:
     url: str  # http://127.0.0.1:<port>, also the app's public_url
     settings: Settings
+    app: FastAPI  # running in the server's thread (and event loop)
 
 
 def in_worker_thread[T](fn: Callable[..., T], *args: Any) -> T:
@@ -56,18 +60,19 @@ def _migrate_test_db() -> None:
     in_worker_thread(command.upgrade, alembic_cfg(), "head")  # env.py calls asyncio.run
 
 
-@pytest.fixture
-def live_server(settings: Settings) -> Iterator[LiveServer]:
+@contextmanager
+def serving(settings: Settings) -> Iterator[LiveServer]:
     """``create_app(settings)`` served by ``uvicorn.Server`` in a thread on a free port, with
-    ``public_url`` set to that address; every table is emptied after the test."""
+    ``public_url`` set to that address."""
     _migrate_test_db()
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))
     url = f"http://127.0.0.1:{sock.getsockname()[1]}"
     live_settings = Settings(_env_file=None, **(settings.model_dump() | {"public_url": url}))
+    app = create_app(live_settings)
     server = uvicorn.Server(
         uvicorn.Config(
-            create_app(live_settings),
+            app,
             log_config=None,
             log_level="warning",
             access_log=False,
@@ -82,10 +87,25 @@ def live_server(settings: Settings) -> Iterator[LiveServer]:
             if not thread.is_alive() or time.monotonic() > deadline:
                 raise RuntimeError(f"the live server at {url} did not start")
             time.sleep(0.01)
-        yield LiveServer(url, live_settings)
+        yield LiveServer(url, live_settings, app)
     finally:
         server.should_exit = True
         thread.join(timeout=STARTUP_TIMEOUT_S)
         sock.close()
-        in_worker_thread(asyncio.run, _empty_tables(live_settings.database_url))
     assert not thread.is_alive(), "the live server did not stop"
+
+
+@contextmanager
+def emptying_tables(settings: Settings) -> Iterator[None]:
+    """Every table of the test database is emptied on the way out."""
+    try:
+        yield
+    finally:
+        in_worker_thread(asyncio.run, _empty_tables(settings.database_url))
+
+
+@pytest.fixture
+def live_server(settings: Settings) -> Iterator[LiveServer]:
+    """``serving(settings)`` for the test; every table is emptied after it."""
+    with emptying_tables(settings), serving(settings) as server:
+        yield server

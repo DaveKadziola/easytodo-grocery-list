@@ -24,6 +24,9 @@ from easytodo.middleware import (
     CsrfCookieMiddleware,
     SecurityHeadersMiddleware,
 )
+from easytodo.realtime.hub import Hub
+from easytodo.realtime.listener import EventListener, listener_dsn
+from easytodo.realtime.routes import router as realtime_router
 from easytodo.security.csrf import verify_csrf
 from easytodo.security.ratelimit import RateLimiter
 from easytodo.web import FRONTEND_DIR, templates
@@ -39,9 +42,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = engine
         app.state.sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         app.state.mailer = get_mailer(settings)
+        # This worker's board sockets, and the LISTEN connection that feeds them every event.
+        app.state.hub = hub = Hub()
+        listener = EventListener(
+            listener_dsn(settings.database_url),
+            on_event=hub.dispatch,
+            on_reconnect=hub.broadcast_resync,
+        )
+        await listener.start()
         try:
             yield
         finally:
+            await listener.stop()
             await engine.dispose()
 
     # No /docs, /redoc or /openapi.json: no public API, and Swagger UI's CDN assets break the CSP.
@@ -77,5 +89,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(boards_router)
     app.include_router(invite_router)
     app.include_router(content_router)
+    app.include_router(realtime_router)
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
     return app

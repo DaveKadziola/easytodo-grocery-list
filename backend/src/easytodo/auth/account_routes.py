@@ -8,9 +8,10 @@ from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 
 from easytodo.auth.deps import CurrentUser, DbSession, FormField, require_user
-from easytodo.auth.sessions import revoke_all_sessions, revoke_session
+from easytodo.auth.sessions import revoke_all_sessions, revoke_session, sessions_revoked
 from easytodo.errors import AppError, NotFound, ValidationFailed
 from easytodo.models import UserSession
+from easytodo.realtime.events import commit_and_publish
 from easytodo.security.passwords import (
     MAX_PASSWORD_LENGTH,
     hash_password,
@@ -65,8 +66,8 @@ async def change_password(
         return render(request, "account/password.html", {"error": exc.message}, status_code=400)
     user.password_hash = hash_password(new_password)
     user.must_change_password = False
-    # Commits the new hash together with the revocation.
-    await revoke_all_sessions(db, user.id, except_session_id=request.state.session.id)
+    revoked = await revoke_all_sessions(db, user.id, except_session_id=request.state.session.id)
+    await commit_and_publish(db, *sessions_revoked(user.id, revoked))  # with the new hash
     response = RedirectResponse("/account", status_code=303)
     flash(response, "Password changed.", request.app.state.settings)
     return response
@@ -74,7 +75,8 @@ async def change_password(
 
 @router.post("/sessions/revoke-others")
 async def revoke_other_sessions(request: Request, db: DbSession, user: CurrentUser) -> Response:
-    await revoke_all_sessions(db, user.id, except_session_id=request.state.session.id)
+    revoked = await revoke_all_sessions(db, user.id, except_session_id=request.state.session.id)
+    await commit_and_publish(db, *sessions_revoked(user.id, revoked))
     return RedirectResponse("/account", status_code=303)
 
 
@@ -86,4 +88,5 @@ async def revoke_own_session(db: DbSession, user: CurrentUser, session_id: int) 
     if await db.scalar(select(UserSession.user_id).where(UserSession.id == session_id)) != user.id:
         raise NotFound()
     await revoke_session(db, session_id)
+    await commit_and_publish(db, *sessions_revoked(user.id, [session_id]))
     return RedirectResponse("/account", status_code=303)

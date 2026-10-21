@@ -1,8 +1,11 @@
 """Server-side sessions: the cookie carries a random token, the database only its hash.
 
-Every function here that writes commits its change (and anything pending on ``db``).
+Every function here that writes commits its change (and anything pending on ``db``), except the
+revoke functions: their caller commits the deletion with ``commit_and_publish(db,
+*sessions_revoked(...))``, so the WebSockets of those sessions are closed (``realtime.hub``).
 """
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Response
@@ -11,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.config import Settings
 from easytodo.models import User, UserSession
+from easytodo.realtime.events import BoardEvent, EventType
 from easytodo.security.tokens import hash_token, new_token
 
 SESSION_COOKIE = "easytodo_session"
@@ -60,20 +64,27 @@ async def load_session(db: AsyncSession, raw_token: str) -> UserSession | None:
 
 
 async def revoke_session(db: AsyncSession, session_id: int) -> None:
+    """Delete the session (not committed yet)."""
     await db.execute(delete(UserSession).where(UserSession.id == session_id))
-    await db.commit()
 
 
 async def revoke_all_sessions(
     db: AsyncSession, user_id: int, *, except_session_id: int | None = None
 ) -> list[int]:
-    """Delete the user's sessions, except ``except_session_id``; returns the deleted ids."""
+    """Delete the user's sessions, except ``except_session_id`` (not committed yet); returns
+    the deleted ids."""
     statement = delete(UserSession).where(UserSession.user_id == user_id)
     if except_session_id is not None:
         statement = statement.where(UserSession.id != except_session_id)
-    revoked = list(await db.scalars(statement.returning(UserSession.id)))
-    await db.commit()
-    return revoked
+    return list(await db.scalars(statement.returning(UserSession.id)))
+
+
+def sessions_revoked(user_id: int, session_ids: Sequence[int]) -> list[BoardEvent]:
+    """What to commit a revocation with: the event that closes those sessions' WebSockets
+    (nothing when no session was revoked)."""
+    if not session_ids:
+        return []
+    return [BoardEvent(EventType.SESSIONS_REVOKED, user_id=user_id, session_ids=tuple(session_ids))]
 
 
 def set_session_cookie(response: Response, raw_token: str, settings: Settings) -> None:

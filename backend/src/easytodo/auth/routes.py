@@ -13,10 +13,12 @@ from easytodo.auth.sessions import (
     clear_session_cookie,
     create_session,
     revoke_session,
+    sessions_revoked,
     set_session_cookie,
 )
 from easytodo.errors import AppError, NotFound
 from easytodo.models import User, UserSession
+from easytodo.realtime.events import commit_and_publish
 from easytodo.security.ratelimit import rate_limit
 from easytodo.web import render
 
@@ -122,6 +124,7 @@ async def logout(
 ) -> Response:
     if session is not None:
         await revoke_session(db, session.id)
+        await commit_and_publish(db, *sessions_revoked(session.user_id, [session.id]))
     response = RedirectResponse("/login", status_code=303)
     clear_session_cookie(response)
     return response

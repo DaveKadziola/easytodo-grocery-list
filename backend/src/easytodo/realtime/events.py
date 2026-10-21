@@ -6,16 +6,24 @@ channels. ``origin`` is the browser tab (``X-Client-Id``) whose request caused t
 tab can be skipped: it already shows the change.
 
 Every service that changes a board's data commits through ``commit_and_publish``, so its events
-leave only together with the commit.
+leave only together with the commit: each is a ``pg_notify`` on ``board_events`` inside the
+transaction, which every worker's ``realtime.listener`` hands to its ``realtime.hub``. A socket
+gets the event as ``{"type", "board_id", "category_ids"}``; the hub decides which sockets get it.
 """
 
 import json
+from collections.abc import Iterator
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from typing import Self
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+NOTIFY_CHANNEL = "board_events"  # the channel _NOTIFY sends on
+MAX_PAYLOAD_BYTES = 8000  # PostgreSQL's limit for a NOTIFY payload
+_NOTIFY = text("SELECT pg_notify('board_events', :p)")
 
 
 class EventType(StrEnum):
@@ -61,7 +69,30 @@ current_origin: ContextVar[str | None] = ContextVar("current_origin", default=No
 async def commit_and_publish(db: AsyncSession, *events: BoardEvent) -> None:
     """Commit ``db``'s transaction together with ``events``.
 
-    For now this only commits; delivering the events (``pg_notify`` inside the same
-    transaction) is not wired up yet.
+    Each event is notified inside the transaction, so listeners get it only once the commit
+    succeeds, and never after a rollback. An event without an origin gets the request's
+    (``current_origin``).
     """
+    origin = current_origin.get()
+    for event in events:
+        if event.origin is None:
+            event = replace(event, origin=origin)
+        for payload in _payloads(event):
+            await db.execute(_NOTIFY, {"p": payload})
     await db.commit()
+
+
+def _payloads(event: BoardEvent) -> Iterator[str]:
+    """``event`` as JSON; one too large for a notification goes as several events, each with
+    part of its longest id list (many revoked sessions, say)."""
+    payload = event.to_json()
+    if len(payload.encode()) < MAX_PAYLOAD_BYTES:
+        yield payload
+        return
+    field = max(("session_ids", "category_ids"), key=lambda name: len(getattr(event, name)))
+    ids = getattr(event, field)
+    if len(ids) < 2:
+        raise ValueError(f"A {event.type} event does not fit in a notification.")
+    half = len(ids) // 2
+    yield from _payloads(replace(event, **{field: ids[:half]}))
+    yield from _payloads(replace(event, **{field: ids[half:]}))

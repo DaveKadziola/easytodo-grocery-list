@@ -1,5 +1,5 @@
-// Page shell: headers for every HTMX request, toasts from HX-Trigger or the flash cookie, and
-// copy buttons.
+// Page shell: headers for every HTMX request (and the tab's id, window.easytodo.clientId), toasts
+// from HX-Trigger or the flash cookie, and copy buttons.
 (() => {
   "use strict";
 
@@ -39,6 +39,9 @@
     event.detail.headers["X-CSRF-Token"] = meta ? meta.content : "";
     event.detail.headers["X-Client-Id"] = clientId();
   });
+
+  // realtime.js names the tab the same way when it subscribes to the board.
+  window.easytodo = { clientId };
 
   // The message may quote names that other board members chose, so it is only ever set as text.
   function showToast(level, message) {
