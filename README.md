@@ -75,7 +75,10 @@ browsers, or a normal and a private window, each signed in as someone else.
 1. **Registration.** Sign out, choose "Create an account" and create a second account, e.g.
    `bob@example.com`. It starts with a board named "My list". With
    `EASYTODO_REGISTRATION_OPEN=false` in `.env` (then `docker compose up -d`), `/register` is
-   closed (404).
+   closed (404), except from a valid invite link (step 4): its sign-in page still offers
+   "Create an account". An e-mail invite works only for its own address. A link invite lets
+   anyone who has the link create an account until it expires (7 days) or is revoked, so revoke
+   links you no longer need.
 2. **Two-factor authentication.** Account → "Set up two-factor authentication". Scan the QR code
    with an authenticator app (or type the key shown under it), enter the 6-digit code, and keep
    the recovery codes. Sign out and in again: after the password the app asks for a code. A
@@ -111,12 +114,14 @@ browsers, or a normal and a private window, each signed in as someone else.
 7. **Phone on the home network.** Find the computer's LAN address (Linux: `hostname -I`, macOS:
    `ipconfig getifaddr en0`), say `192.168.1.20`. In `.env` set
    `EASYTODO_PUBLIC_URL=http://192.168.1.20:8000`, then run `docker compose up -d` to apply it.
-   Open `http://192.168.1.20:8000` on the phone, on the same Wi-Fi. Use that address on the
-   computer as well: the app accepts form submissions only from the address in
-   `EASYTODO_PUBLIC_URL`, so at `http://localhost:8000` signing in and saving now fail with
-   "Invalid CSRF token.", and a board page there shows "Offline" with a message naming the
-   address to use. If the phone cannot connect, allow incoming TCP port 8000 in the
-   computer's firewall. The browser's "Add to Home Screen" installs it like an app.
+   Open `http://192.168.1.20:8000` on the phone, on the same Wi-Fi. The app accepts form
+   submissions only from the address in `EASYTODO_PUBLIC_URL` and those in
+   `EASYTODO_EXTRA_ORIGINS`, so at `http://localhost:8000` signing in and saving now fail with
+   "This page was opened at a different address.", and a board page there shows "Offline" with
+   a message naming the address to use. To keep `http://localhost:8000` working as well, also
+   set `EASYTODO_EXTRA_ORIGINS=http://localhost:8000` (more addresses: comma-separated). If the
+   phone cannot connect, allow incoming TCP port 8000 in the computer's firewall. The
+   browser's "Add to Home Screen" installs it like an app.
 
 ## Configuration
 
@@ -127,8 +132,9 @@ each line. After a change, `docker compose up -d` applies it.
 | --- | --- | --- |
 | `EASYTODO_DATABASE_URL` | required | PostgreSQL URL, `postgresql+asyncpg://user:password@host:port/db`. `.env.example` points it at the compose `db` service, with `POSTGRES_PASSWORD` filled in. |
 | `EASYTODO_SECRET_KEY` | required | At least 32 characters (`openssl rand -hex 32`). Encrypts the 2FA secrets in the database: keep it unchanged, and keep a copy in a safe place apart from your backups. |
-| `EASYTODO_PUBLIC_URL` | `http://localhost:8000` | The address people type in the browser. The only origin the app accepts form submissions from (CSRF check). An `https://` address also makes the session cookie `Secure`. |
-| `EASYTODO_REGISTRATION_OPEN` | `true` | `false` closes `/register`. Admins can still create accounts. |
+| `EASYTODO_PUBLIC_URL` | `http://localhost:8000` | The address people type in the browser, and the one links in mails and invites use. The app accepts form submissions (CSRF check) and live updates only from its origin and from `EASYTODO_EXTRA_ORIGINS`. An `https://` address also makes the session cookie `Secure`. |
+| `EASYTODO_EXTRA_ORIGINS` | none | More addresses the app is opened at, comma-separated, e.g. `http://localhost:8000, http://192.168.1.20:8000`: form submissions and live updates work there too. Mail and invite links still use `EASYTODO_PUBLIC_URL`. An `https://` `EASYTODO_PUBLIC_URL` cannot be combined with `http://` extras (the app refuses to start): its session cookie is `Secure`, so the browser never sends it to an http address and signing in there would loop. |
+| `EASYTODO_REGISTRATION_OPEN` | `true` | `false` closes `/register`, except from a valid invite link. An e-mail invite works only for its own address; a link invite lets anyone who has the link create an account until it expires (7 days) or is revoked, so revoke links you no longer need. Admins can still create accounts. |
 | `EASYTODO_SESSION_TTL_DAYS` | `30` | How long a sign-in stays valid, in days. |
 | `EASYTODO_MAIL_BACKEND` | `console` | `console` writes mails to the app's log and sends nothing. `smtp` sends them (see SMTP below). |
 | `EASYTODO_SMTP_HOST` | none | SMTP server. |
@@ -179,6 +185,25 @@ server that needs TLS from the start (port 465) is not supported. For a relay wi
 local server on port 25), set `EASYTODO_SMTP_STARTTLS=false`. To test it, request a password
 reset for your own account. If no mail arrives, `docker compose logs app` shows "Could not send
 mail to ..." with the reason.
+
+### Proton Mail
+
+Proton Mail takes mail from apps with an SMTP token, not with the account password. Create one in
+Proton under Settings → IMAP/SMTP → SMTP tokens (this needs a paid plan with a custom domain),
+for the address the app sends from. Then, in `.env`:
+
+```sh
+EASYTODO_MAIL_BACKEND=smtp
+EASYTODO_SMTP_HOST=smtp.protonmail.ch
+EASYTODO_SMTP_PORT=587
+EASYTODO_SMTP_STARTTLS=true
+EASYTODO_SMTP_USER=todo@your-domain.example
+EASYTODO_SMTP_PASSWORD=<the SMTP token>
+EASYTODO_SMTP_FROM=EasyToDo <todo@your-domain.example>
+```
+
+The From address must be the token's address (the one in `EASYTODO_SMTP_USER`). If the token
+contains a `$`, wrap it in single quotes, as explained above.
 
 ## Backup and restore
 

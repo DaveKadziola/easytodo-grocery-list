@@ -22,7 +22,7 @@ Phones and laptops on the same network reach the app over plain http.
 2. Start the stack: `docker compose up -d`
 3. Open `http://192.168.1.20:8000` on a device on the network.
 
-- The app accepts form submissions only from the origin in `EASYTODO_PUBLIC_URL`. If every save fails with "Invalid CSRF token.", the address in the browser (IP, host name or port) is different from it.
+- The app accepts form submissions and live updates only from the origin in `EASYTODO_PUBLIC_URL` and the ones in `EASYTODO_EXTRA_ORIGINS`. If every save fails with "This page was opened at a different address.", the address in the browser (IP, host name or port) is none of them. To use the app at more than one address (`http://localhost:8000` on the server itself next to the LAN address, say, or a port forward next to the machine's own address), list the others comma-separated, e.g. `EASYTODO_EXTRA_ORIGINS=http://localhost:8000, http://192.168.122.50:8000`. Links in mails and invites always use `EASYTODO_PUBLIC_URL`. With an `https://` `EASYTODO_PUBLIC_URL`, as in (b) and (c), the extra addresses must be `https://` too, or the app refuses to start: the session cookie is then `Secure`, so the browser never sends it to an http address and signing in there would loop.
 - Everything, passwords included, crosses the network unencrypted, and the cookies are not `Secure`. Use this only on a network you trust. Never forward port 8000 on the router: to reach the app from outside, use (b) or (c).
 - Keep `EASYTODO_FORWARDED_ALLOW_IPS=127.0.0.1` and leave `EASYTODO_BIND` unset. The app then sees each device's own address, which is what the per-IP rate limits count.
 
@@ -90,10 +90,10 @@ A tunnel connector on your side opens an outgoing connection to the provider. Th
 
 - [ ] **`POSTGRES_PASSWORD`**: set a random value before the first `docker compose up`, e.g. `openssl rand -hex 24`. Postgres stores it in the `pgdata` volume on its first start, so changing `.env` later does not change it.
 - [ ] **`EASYTODO_SECRET_KEY`**: a strong random key, e.g. `openssl rand -hex 32` (at least 32 characters). It encrypts the 2FA secrets stored in the database. Keep it unchanged, and keep a copy in a safe place apart from the backups (a password manager, say): without it, the 2FA secrets in a restored database cannot be read, and with it anyone holding a dump can read them.
-- [ ] **`EASYTODO_REGISTRATION_OPEN=false`** once everyone has an account, then apply it with `docker compose up -d`. While it is `true`, anyone who can reach the app can sign up.
-- [ ] **Mail over SMTP, not the console.** Set `EASYTODO_MAIL_BACKEND=smtp` and the `EASYTODO_SMTP_*` settings. The default `console` backend sends nothing: it writes every mail, password-reset and invite links included, to the app's log as a WARNING. Never use it in production.
+- [ ] **`EASYTODO_REGISTRATION_OPEN=false`** once everyone has an account, then apply it with `docker compose up -d`. While it is `true`, anyone who can reach the app can sign up. With `false`, people can still sign up from a valid invite link: an e-mail invite works only for its own address, but a link invite lets anyone who has the link create an account until it expires (after 7 days) or is revoked. Revoke the links you no longer need on the board's Members page.
+- [ ] **Mail over SMTP, not the console.** Set `EASYTODO_MAIL_BACKEND=smtp` and the `EASYTODO_SMTP_*` settings (the README's SMTP section has a Proton Mail example). The default `console` backend sends nothing: it writes every mail, password-reset and invite links included, to the app's log as a WARNING. Never use it in production.
 - [ ] **Logs contain live links. Restrict who can read them.**
-  - `/invite/{token}` links let anyone who has one join the board until the link expires (after 7 days) or is revoked.
+  - `/invite/{token}` links let anyone who has one join the board (and create an account, even with registration closed) until the link expires (after 7 days) or is revoked.
   - `/password/reset/{token}` links work once within 60 minutes, and until then they are a full account takeover.
   - Both appear in the app's access log (`docker compose logs app`), in a proxy's access log if you turn one on (Caddy logs no requests by default), and, with the console mail backend, in the mails the app writes to that same log.
   - On Linux, anyone in the `docker` group can read the container logs.
