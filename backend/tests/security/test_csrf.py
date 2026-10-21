@@ -50,6 +50,7 @@ async def test_post_with_foreign_origin_is_403(csrf_app_client):
         "/submit", headers={CSRF_HEADER: token, "Origin": "https://evil.example"}
     )
     assert r.status_code == 403
+    assert "Open the app at http://testserver." in r.text
 
 
 async def test_post_with_matching_token_and_origin_passes(csrf_app_client):
@@ -196,6 +197,6 @@ async def test_create_app_applies_csrf_to_every_route(settings):
         await c.get("/no-such-page")  # any response issues the cookie
         token = c.cookies[CSRF_COOKIE]
         r = await c.post("/probe", headers={CSRF_HEADER: token})  # no Origin/Referer
-        assert r.status_code == 403 and "Invalid CSRF token." in r.text
+        assert r.status_code == 403 and "Open the app at http://testserver." in r.text
         r = await c.post("/probe", headers={CSRF_HEADER: token, "Origin": "http://testserver"})
         assert r.status_code == 200

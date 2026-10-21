@@ -55,7 +55,7 @@ async def test_forwarded_proto_does_not_override_public_url_origin_check(
         "/login", data=form, headers=proxied | {"Origin": "http://testserver"}
     )
     assert r.status_code == 403
-    assert "Invalid CSRF token." in r.text
+    assert "Open the app at https://testserver." in r.text
 
     # The same request from the public https origin passes the CSRF check (and fails the login).
     r = await https_client.post("/login", data=form, headers=proxied)

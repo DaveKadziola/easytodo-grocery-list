@@ -40,8 +40,11 @@ async def verify_csrf(request: HTTPConnection) -> None:
     """
     if not isinstance(request, Request) or request.method in SAFE_METHODS:
         return
-    if _request_origin(request) != request.app.state.settings.public_origin:
-        raise Forbidden("Invalid CSRF token.")
+    public_origin = request.app.state.settings.public_origin
+    if _request_origin(request) != public_origin:
+        raise Forbidden(
+            f"This page was opened at a different address. Open the app at {public_origin}."
+        )
     cookie = request.cookies.get(CSRF_COOKIE)
     submitted = request.headers.get(CSRF_HEADER)
     if submitted is None:
