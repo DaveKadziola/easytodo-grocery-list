@@ -9,18 +9,20 @@
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0f172b" media="(prefers-color-scheme: dark)">
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "defaultSwapStyle": "outerHTML"}'>
+  {#- No "style" in attributesToSettle: htmx would copy the empty style attribute that SortableJS
+      leaves on a dragged item onto the new element, which the CSP (style-src 'self') refuses. #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "defaultSwapStyle": "outerHTML", "attributesToSettle": ["class", "width", "height"]}'>
   <title>{% block title %}EasyToDo{% endblock %}</title>
   <link rel="icon" type="image/webp" href="/static/images/favicon.webp">
   <link rel="apple-touch-icon" href="/static/images/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
-  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="{{ static_url('css/app.css') }}">
   <script src="/static/vendor/htmx-2.0.4.min.js" defer></script>
   {#- A page's own scripts run before Alpine starts, so they can register components on alpine:init. #}
   {% block scripts %}{% endblock %}
   <script src="/static/vendor/alpine-csp-3.14.8.min.js" defer></script>
   <script src="/static/vendor/sortable-1.15.6.min.js" defer></script>
-  <script src="/static/js/app.js" defer></script>
+  <script src="{{ static_url('js/app.js') }}" defer></script>
 </head>
 <body class="min-h-dvh bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
   <header class="border-b border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
@@ -28,7 +30,7 @@
         than scroll sideways. #}
     <div class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-2 px-4 py-2 sm:gap-4">
       <div class="flex min-w-0 items-center gap-2 sm:gap-3">
-        <a href="/" class="flex min-h-11 shrink-0 items-center gap-2 text-lg font-semibold">
+        <a href="/boards" class="flex min-h-11 shrink-0 items-center gap-2 text-lg font-semibold">
           <img src="/static/images/favicon.webp" alt="" class="size-7">
           EasyToDo
         </a>

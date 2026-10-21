@@ -5,26 +5,31 @@
 {% set role = view.role %}
 {% set can_edit = can(role, Action.EDIT_CONTENT) %}
 <div id="board-content" data-board-id="{{ view.board.id }}" data-board-name="{{ view.board.name }}" class="space-y-6">
-  <div class="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
-    <div class="min-w-0">
+  {#- On a phone the list starts right below the name: the owner's rare controls (rename, delete)
+      sit in the ⋮ menu, and "New category" is in the bottom bar, which shows this form. #}
+  <div class="flex items-end gap-2">
+    <div class="min-w-0 flex-1">
       <a href="/boards" class="link inline-flex min-h-11 items-center text-sm">All boards</a>
       <h1 class="break-words text-2xl font-semibold">{{ view.board.name }}</h1>
     </div>
-    <div class="flex flex-wrap items-center gap-2">
-      <a href="/boards/{{ view.board.id }}/members" class="btn-secondary">Members</a>
-      {% if can(role, Action.MANAGE_BOARD) %}
-      <form hx-patch="/boards/{{ view.board.id }}" class="flex gap-2">
-        <label for="board-name" class="sr-only">Board name</label>
-        <input id="board-name" name="name" value="{{ view.board.name }}" required maxlength="80" autocomplete="off" class="input">
-        <button type="submit" class="btn-secondary shrink-0">Rename</button>
-      </form>
-      <button type="button" class="btn-secondary" hx-delete="/boards/{{ view.board.id }}" hx-confirm="Delete this board with all its categories and items?">Delete board</button>
-      {% endif %}
-    </div>
+    <a href="/boards/{{ view.board.id }}/members" class="btn-secondary shrink-0">Members</a>
+    {% if can(role, Action.MANAGE_BOARD) %}
+    <details class="relative shrink-0">
+      <summary class="btn-icon cursor-pointer list-none text-slate-600 dark:text-slate-400 [&::-webkit-details-marker]:hidden" title="Board actions" aria-label="Board actions">⋮</summary>
+      <div class="menu">
+        <form hx-patch="/boards/{{ view.board.id }}" class="space-y-2 p-2">
+          <label for="board-name" class="label">Board name</label>
+          <input id="board-name" name="name" value="{{ view.board.name }}" required maxlength="80" autocomplete="off" class="input">
+          <button type="submit" class="btn-secondary w-full">Rename</button>
+        </form>
+        <button type="button" class="menu-item text-red-700 dark:text-red-400" hx-delete="/boards/{{ view.board.id }}" hx-confirm="Delete this board with all its categories and items?">Delete board</button>
+      </div>
+    </details>
+    {% endif %}
   </div>
 
   {% if can_edit %}
-  <form hx-post="/boards/{{ view.board.id }}/categories" hx-target="#categories" hx-swap="beforeend" data-refocus="new-category-name" class="flex max-w-md gap-2">
+  <form id="new-category-form" hx-post="/boards/{{ view.board.id }}/categories" hx-target="#categories" hx-swap="beforeend" data-refocus="new-category-name" hx-disabled-elt="find button" class="hidden max-w-md gap-2 sm:flex">
     <label for="new-category-name" class="sr-only">New category</label>
     <input id="new-category-name" name="name" placeholder="New category" required maxlength="120" autocomplete="off" class="input">
     <button type="submit" class="btn-secondary shrink-0">Add category</button>

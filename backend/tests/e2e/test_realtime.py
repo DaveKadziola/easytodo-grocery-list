@@ -13,7 +13,7 @@ from playwright.sync_api import Locator, Page, Route, WebSocketRoute, expect
 from sqlalchemy import delete
 
 from easytodo.content import service
-from easytodo.models import BoardMember, BoardRole
+from easytodo.models import BoardMember, BoardRole, Category
 
 pytestmark = pytest.mark.e2e
 
@@ -84,6 +84,24 @@ def routed_sockets(page: Page) -> list[WebSocketRoute]:
     return sockets
 
 
+def set_visibility(page: Page, state: str) -> None:
+    """Make ``page`` look hidden or visible again (the tab in the background, the phone locked),
+    as the browser does: document.visibilityState, then a visibilitychange event."""
+    page.evaluate(
+        """(state) => {
+            Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+            Object.defineProperty(document, "hidden", { configurable: true, get: () => state === "hidden" });
+            document.dispatchEvent(new Event("visibilitychange"));
+        }""",
+        state,
+    )
+
+
+def board_reloads(page: Page) -> str | None:
+    """How many times the board content was reloaded so far (see COUNT_BOARD_RELOADS)."""
+    return page.locator("html").get_attribute("data-board-reloads")
+
+
 def wait_until(page: Page, condition: Callable[[], object], what: str) -> None:
     """Wait (up to 2 s) until ``condition()`` holds, letting ``page``'s events come in."""
     for _ in range(40):
@@ -114,6 +132,7 @@ def test_rename_shows_on_the_other_device_without_reload(two_logged_in_pages):
     a, b = two_logged_in_pages
     b.evaluate("window.notReloaded = true")
 
+    a.get_by_label("Board actions").click()
     a.get_by_label("Board name").fill("Weekend")
     a.locator("form", has=a.get_by_label("Board name")).get_by_role("button", name="Rename").click()
 
@@ -384,3 +403,233 @@ def test_dropped_connection_reconnects_and_catches_up(signed_in_page, seed, user
     expect(status).to_have_text("Live", timeout=5000)  # the first retry comes after about 1 s
     assert len(sockets) == 2
     expect(items_of(page, "Dairy")).to_have_text([re.compile("Bread"), re.compile("Milk")])
+
+
+def test_cursor_left_in_an_empty_field_does_not_hold_updates(two_logged_in_pages, seed, user):
+    a, b = two_logged_in_pages
+    add_item(b, "Dairy", "Eggs")  # the field is emptied, the cursor stays in it
+    field = category(b, "Dairy").get_by_placeholder("Add item")
+    expect(field).to_be_focused()
+    expect(field).to_have_value("")
+    board_id = int(b.locator("#board-content").get_attribute("data-board-id"))
+
+    add_item(a, "Dairy", "Bread")
+    with a.expect_response(TOGGLED):
+        a.get_by_role("checkbox", name="Milk").click()
+    seed(lambda db: service.create_category(db, board_id, user, "Drinks"))
+
+    expect(b.get_by_role("checkbox", name="Bread")).to_be_visible(timeout=LIVE_UPDATE_MS)
+    expect(b.get_by_role("checkbox", name="Milk")).to_be_checked(timeout=LIVE_UPDATE_MS)
+    expect(category(b, "Drinks")).to_be_visible(timeout=LIVE_UPDATE_MS)
+    expect(field).to_be_focused()  # still ready for the next item
+
+
+def test_back_on_the_tab_it_catches_up_with_the_cursor_in_an_empty_field(two_logged_in_pages, seed):
+    _, b = two_logged_in_pages
+    add_item(b, "Dairy", "Eggs")
+    field = category(b, "Dairy").get_by_placeholder("Add item")
+    expect(field).to_be_focused()
+    dairy_id = int(category(b, "Dairy").get_attribute("data-category-id"))
+    set_visibility(b, "hidden")
+
+    async def no_event(db):  # written straight to the database: only the catch-up brings it
+        await create_item(db, await db.get(Category, dairy_id), "Bread")
+
+    seed(no_event)
+    set_visibility(b, "visible")
+
+    expect(b.get_by_role("checkbox", name="Bread")).to_be_visible(timeout=LIVE_UPDATE_MS)
+    expect(field).to_be_focused()
+
+
+def test_deleted_category_disappears_on_the_other_device_without_reload(two_logged_in_pages):
+    a, b = two_logged_in_pages
+    b.evaluate("window.notReloaded = true")
+    reloads = board_reloads(b)
+
+    category(a, "Dairy").get_by_label("Category actions").click()
+    a.once("dialog", lambda dialog: dialog.accept())
+    category(a, "Dairy").get_by_role("button", name="Delete category").click()
+
+    expect(category(b, "Dairy")).to_have_count(0, timeout=LIVE_UPDATE_MS)
+    assert b.evaluate("window.notReloaded") is True
+    assert board_reloads(b) == reloads  # only that section went, the board was not fetched again
+
+
+def test_text_typed_into_add_item_survives_changes_to_its_category(two_logged_in_pages):
+    a, b = two_logged_in_pages
+    field = category(b, "Dairy").get_by_placeholder("Add item")
+    field.fill("Chee")
+    b.get_by_role("heading", level=1).click()  # looked away: the field keeps its text
+
+    add_item(a, "Dairy", "Bread")
+
+    expect(items_of(b, "Dairy")).to_have_text(
+        [re.compile("Bread"), re.compile("Milk")], timeout=LIVE_UPDATE_MS
+    )
+    expect(field).to_have_value("Chee")
+    with b.expect_response(TOGGLED):  # its own tick's answer replaces the category too
+        b.get_by_role("checkbox", name="Milk").click()
+    expect(b.get_by_role("checkbox", name="Milk")).to_be_checked()
+    expect(field).to_have_value("Chee")
+
+
+def test_late_answer_to_a_board_reload_does_not_undo_an_own_tick(two_logged_in_pages, seed, user):
+    _, b = two_logged_in_pages
+    held = []
+
+    def answer_late(route: Route) -> None:
+        if held:
+            route.continue_()
+        else:  # the board as it was before the tick, answered only after it
+            held.append((route, route.fetch()))
+
+    b.route(re.compile(r"/boards/\d+/content$"), answer_late)
+    board_id = int(b.locator("#board-content").get_attribute("data-board-id"))
+    seed(lambda db: service.create_category(db, board_id, user, "Bakery"))  # a board reload
+    wait_until(b, lambda: held, "the board reload's request")
+    milk = b.get_by_role("checkbox", name="Milk")
+    with b.expect_response(TOGGLED):
+        milk.click()
+    expect(milk).to_be_checked()
+
+    route, response = held[0]
+    route.fulfill(response=response)
+    b.wait_for_timeout(SETTLE_MS)
+
+    expect(milk).to_be_checked()  # the stale answer was dropped and the board fetched again
+    expect(category(b, "Bakery")).to_be_visible()
+
+
+def test_update_finding_its_category_gone_does_not_reload_the_board_while_typing(
+    signed_in_page, seed, user, open_board
+):
+    board_id = seed_two_categories(seed, user)
+    page = signed_in_page()
+    messages = received_messages(page)
+    open_board(page, board_id)
+    dairy_id = int(category(page, "Dairy").get_attribute("data-category-id"))
+    held: list[Route] = []
+    page.route(
+        re.compile(r"/categories/\d+$"),
+        lambda route: route.continue_() if held else held.append(route),
+    )
+    seed(lambda db: service.create_item(db, dairy_id, user, "Butter"))
+    wait_until(page, lambda: held, "the update's request")
+    seed(lambda db: service.delete_category(db, dairy_id, user))
+    wait_for_message(page, messages, "category.deleted")
+    field = category(page, "Bakery").get_by_placeholder("Add item")
+    field.fill("Chee")
+    reloads = board_reloads(page)
+
+    held[0].continue_()  # answered 404, which asks for a board reload ("resync")
+    page.wait_for_timeout(SETTLE_MS)
+
+    expect(field).to_have_value("Chee")
+    expect(field).to_be_focused()
+    assert board_reloads(page) == reloads  # waits for the typing like any update
+    expect(category(page, "Dairy")).to_have_count(0)
+
+
+def test_update_that_could_not_be_fetched_shows_no_error(two_logged_in_pages):
+    a, b = two_logged_in_pages
+    aborted = []
+
+    def abort(route: Route) -> None:
+        aborted.append(route.request.url)
+        route.abort()
+
+    b.route(re.compile(r"/categories/\d+$"), abort)
+    add_item(a, "Dairy", "Bread")
+    wait_until(b, lambda: aborted, "the update's request")
+    b.wait_for_timeout(SETTLE_MS)
+
+    assert (
+        b.locator("#toasts > *").all_inner_texts() == []
+    )  # the user did nothing: the header says it
+
+
+def test_role_change_reload_waits_for_the_item_modal(
+    logged_in_page, signed_in_as, seed, user, open_board
+):
+    async def make(db):
+        editor = await create_user(db, "ed@example.com")
+        board = await create_board(db, user, "Groceries", members={editor: BoardRole.EDITOR})
+        await create_item(db, await create_category(db, board, "Dairy"), "Milk")
+        return board.id, editor.id
+
+    board_id, editor_id = seed(make)
+    page = signed_in_as("ed@example.com")
+    open_board(page, board_id)
+    page.evaluate("window.notReloaded = true")
+    page.get_by_role("button", name="Milk", exact=True).click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Name").fill("Oat milk")
+
+    owner_page = logged_in_page
+    owner_page.goto(f"/boards/{board_id}/members")
+    with owner_page.expect_response(re.compile(rf"/members/{editor_id}$")):
+        owner_page.get_by_label("Role of ed@example.com").select_option("viewer")
+    page.wait_for_timeout(SETTLE_MS)
+
+    assert page.evaluate("window.notReloaded") is True  # not while the modal is open
+    expect(dialog.get_by_label("Name")).to_have_value("Oat milk")
+    dialog.get_by_role("button", name="Cancel").click()
+    expect(page.get_by_role("button", name="Milk", exact=True)).to_have_count(
+        0, timeout=LIVE_UPDATE_MS
+    )  # reloaded as a viewer
+    assert page.evaluate("window.notReloaded") is None
+
+
+def test_button_held_when_the_tab_was_hidden_does_not_hold_updates(two_logged_in_pages):
+    a, b = two_logged_in_pages
+    b.mouse.move(*centre(b.get_by_role("heading", level=1)))
+    b.mouse.down()  # its pointerup is lost: the tab goes to the background meanwhile
+    add_item(a, "Dairy", "Bread")
+    b.wait_for_timeout(SETTLE_MS)
+    expect(items_of(b, "Dairy")).to_have_text([re.compile("Milk")])  # held: a click is due
+
+    set_visibility(b, "hidden")
+    set_visibility(b, "visible")
+
+    expect(items_of(b, "Dairy")).to_have_text(
+        [re.compile("Bread"), re.compile("Milk")], timeout=LIVE_UPDATE_MS
+    )
+    b.mouse.up()
+
+
+def test_long_time_away_replaces_the_socket(signed_in_page, seed, user, open_board):
+    board_id = seed_two_categories(seed, user)
+    page = signed_in_page()
+    sockets = routed_sockets(page)
+    open_board(page, board_id)
+
+    set_visibility(page, "hidden")
+    # Half a minute later (longer than the server's ping interval): the socket may be dead.
+    page.evaluate(
+        "() => { const now = performance.now.bind(performance); performance.now = () => now() + 30000; }"
+    )
+    set_visibility(page, "visible")
+
+    wait_until(page, lambda: len(sockets) == 2, "a new socket")
+    expect(page.locator("#conn-status")).to_have_text("Live")
+
+
+def test_socket_refused_at_the_wrong_address_says_where_to_open_the_app(
+    signed_in_page, seed, user, open_board, live_server
+):
+    board_id = seed_two_categories(seed, user)
+    page = signed_in_page()
+    sockets = routed_sockets(page)
+    open_board(page, board_id)
+
+    sockets[0].close(code=4400)  # as the server answers an Origin other than the public URL
+
+    expect(page.locator("#conn-status")).to_have_text("Offline")
+    expect(page.locator("#toasts")).to_have_text(
+        "Live updates and saving do not work at this address. "
+        f"Open EasyToDo at {live_server.settings.public_origin}."
+    )
+    page.wait_for_timeout(SETTLE_MS)
+    assert page.url.endswith(f"/boards/{board_id}")  # stays, not sent to the board list
+    assert len(sockets) == 1  # and not retried

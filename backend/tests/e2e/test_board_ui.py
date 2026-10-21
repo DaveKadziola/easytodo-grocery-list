@@ -3,6 +3,7 @@ and touch), the item modal, the category menu, renaming and deleting the board, 
 lost a race with another device, and no CSP violations anywhere."""
 
 import re
+from urllib.parse import parse_qs
 
 import pytest
 from factories import create_board, create_category, create_item
@@ -178,12 +179,23 @@ def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, ope
         expect(page.get_by_role("heading", level=1)).to_be_visible()
     anonymous.close()
 
-    board_id = seed_board(seed, user, {"Dairy": ["Milk"], "Bakery": []}, done=("Milk",))
+    board_id = seed_board(
+        seed, user, {"Dairy": ["Milk", "Yogurt"], "Bakery": ["Bread"]}, done=("Milk",)
+    )
     page = logged_in_page
     problems += watch_console(page)
     page.goto("/boards")
-    open_board(page, board_id)  # as the owner: rename and delete are on the page too
+    open_board(page, board_id)  # as the owner: rename and delete are in the board's menu
+    page.get_by_label("Board actions").click()
     expect(page.get_by_role("button", name="Delete board")).to_be_visible()
+    page.keyboard.press("Escape")
+    # A drag, whose answer swaps the whole board in: htmx must not copy the dragged item's
+    # empty style attribute (from SortableJS) over, which style-src 'self' would refuse.
+    bread = items_of(page, "Bakery").first
+    with page.expect_response(re.compile(r"/items/\d+/move$")):
+        below_centre = {"x": 20, "y": bread.bounding_box()["height"] - 6}
+        item(page, "Yogurt").drag_to(bread, target_position=below_centre)
+    expect(items_of(page, "Bakery")).to_have_text([re.compile("Bread"), re.compile("Yogurt")])
     page.get_by_role("button", name="Milk", exact=True).click()
     dialog = page.get_by_role("dialog")
     expect(dialog.get_by_label("Name")).to_have_value("Milk")
@@ -204,6 +216,8 @@ def test_owner_renames_and_deletes_the_board(logged_in_page, seed, user, open_bo
     statuses: list[int] = []
     page.on("response", lambda response: statuses.append(response.status))
 
+    expect(page.get_by_label("Board name")).to_be_hidden()  # in the menu, not on the page
+    page.get_by_label("Board actions").click()
     page.get_by_label("Board name").fill("Weekend")
     page.locator("form", has=page.get_by_label("Board name")).get_by_role(
         "button", name="Rename"
@@ -211,6 +225,7 @@ def test_owner_renames_and_deletes_the_board(logged_in_page, seed, user, open_bo
     expect(page.get_by_role("heading", level=1)).to_have_text("Weekend")
     expect(page.locator("#board-content")).to_have_attribute("data-board-name", "Weekend")
 
+    page.get_by_label("Board actions").click()
     page.once("dialog", lambda dialog: dialog.accept())
     page.get_by_role("button", name="Delete board").click()
 
@@ -273,6 +288,13 @@ def test_item_modal_moves_and_deletes_items(logged_in_page, seed, user, open_boa
     expect(items_of(page, "Bakery")).to_have_text([re.compile("Bread"), re.compile("Milk")])
 
     page.get_by_role("button", name="Butter", exact=True).click()
+    page.once("dialog", lambda question: question.dismiss())  # "Delete this item?" No
+    dialog.get_by_role("button", name="Delete item").click()
+    expect(dialog).to_be_visible()
+    page.wait_for_timeout(300)
+    expect(items_of(page, "Dairy")).to_have_count(1)  # kept: a single tap deletes nothing
+
+    page.once("dialog", lambda question: question.accept())
     dialog.get_by_role("button", name="Delete item").click()
     expect(dialog).to_be_hidden()
     expect(items_of(page, "Dairy")).to_have_count(0)
@@ -374,3 +396,206 @@ def test_categories_flow_into_columns(signed_in_page, seed, user, width, columns
 
     column_count = page.locator("#categories").evaluate("(el) => getComputedStyle(el).columnCount")
     assert column_count == columns
+
+
+TOGGLED = re.compile(r"/items/\d+/toggle$")
+MOVED = re.compile(r"/items/\d+/move$")
+ORDER_SAVED = re.compile(r"/categories/order$")
+
+
+def category_names(page: Page) -> Locator:
+    return page.locator("section[data-category-id] h2")
+
+
+def test_checkbox_keeps_keyboard_focus_across_a_tick(logged_in_page, seed, user, open_board):
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk", "Yogurt"]})
+    open_board(page, board_id)
+    milk = page.get_by_role("checkbox", name="Milk")
+    milk.focus()
+
+    with page.expect_response(TOGGLED):
+        page.keyboard.press("Space")
+
+    expect(milk).to_be_checked()
+    expect(milk).to_be_focused()  # the category was swapped: the same checkbox has it again
+    with page.expect_response(TOGGLED):
+        page.keyboard.press("Space")
+    expect(milk).not_to_be_checked()
+
+
+def test_tick_sends_the_state_its_user_wants(logged_in_page, seed, user, open_board):
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
+    open_board(page, board_id)
+    milk = page.get_by_role("checkbox", name="Milk")
+
+    with page.expect_request(TOGGLED) as ticked:
+        milk.click()
+    expect(milk).to_be_checked()
+    with page.expect_request(TOGGLED) as unticked:
+        milk.click()
+    expect(milk).not_to_be_checked()
+
+    assert parse_qs(ticked.value.post_data)["done"] == ["true"]
+    assert parse_qs(unticked.value.post_data)["done"] == ["false"]
+
+
+@pytest.mark.parametrize("failure", ["error", "no answer"])
+def test_drag_that_did_not_go_through_puts_the_item_back(
+    logged_in_page, seed, user, open_board, failure
+):
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk", "Yogurt"], "Bakery": ["Bread"]})
+    open_board(page, board_id)
+    page.route(
+        MOVED,
+        lambda route: (
+            route.fulfill(status=500, body="boom") if failure == "error" else route.abort()
+        ),
+    )
+
+    bread = items_of(page, "Bakery").first
+    with page.expect_request(MOVED):
+        below_centre = {"x": 20, "y": bread.bounding_box()["height"] - 6}
+        item(page, "Milk").drag_to(bread, target_position=below_centre)
+
+    expect(items_of(page, "Bakery")).to_have_text([re.compile("Bread")])  # the board reloaded
+    expect(items_of(page, "Dairy")).to_have_text([re.compile("Milk"), re.compile("Yogurt")])
+
+
+def test_reorder_that_did_not_go_through_puts_the_categories_back(
+    logged_in_page, seed, user, open_board
+):
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"], "Bakery": ["Bread"]})
+    open_board(page, board_id)
+    page.route(ORDER_SAVED, lambda route: route.fulfill(status=500, body="boom"))
+
+    with page.expect_request(ORDER_SAVED):
+        category(page, "Bakery").locator(".category-handle").drag_to(
+            category(page, "Dairy").locator(".category-handle")
+        )
+
+    expect(category_names(page)).to_have_text(["Dairy", "Bakery"])
+
+
+def test_categories_move_up_and_down_from_the_keyboard(logged_in_page, seed, user, open_board):
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": [], "Bakery": [], "Fruit": []})
+    open_board(page, board_id)
+    bakery = category(page, "Bakery")
+    bakery.get_by_label("Category actions").press("Enter")  # opens the menu
+
+    with page.expect_response(ORDER_SAVED) as saved:
+        bakery.get_by_role("button", name="Move up").press("Enter")
+    assert saved.value.status == 204
+    expect(category_names(page)).to_have_text(["Bakery", "Dairy", "Fruit"])
+    expect(bakery.get_by_role("button", name="Move up")).to_be_hidden()  # first: nowhere to go
+    expect(bakery.get_by_role("button", name="Move down")).to_be_focused()
+
+    with page.expect_response(ORDER_SAVED):
+        page.keyboard.press("Enter")
+    with page.expect_response(ORDER_SAVED):
+        page.keyboard.press("Enter")
+    expect(category_names(page)).to_have_text(["Dairy", "Fruit", "Bakery"])
+    expect(bakery.get_by_role("button", name="Move down")).to_be_hidden()  # last
+
+    page.reload()
+    expect(category_names(page)).to_have_text(["Dairy", "Fruit", "Bakery"])
+
+
+def test_category_handle_drags_on_a_touch_screen(logged_in_page_mobile, seed, user, open_board):
+    page = logged_in_page_mobile
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"], "Bakery": ["Bread"]})
+    open_board(page, board_id)
+
+    with page.expect_response(ORDER_SAVED) as saved:
+        touch_drag(
+            page,
+            category(page, "Bakery").locator(".category-handle"),
+            category(page, "Dairy").locator(".category-handle"),
+            hold_ms=0,  # the handle does not scroll the page: a finger on it drags at once
+        )
+
+    assert saved.value.status == 204
+    expect(category_names(page)).to_have_text(["Bakery", "Dairy"])
+
+
+def test_tap_beside_the_item_modal_asks_before_dropping_edits(
+    logged_in_page, seed, user, open_board
+):
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
+    open_board(page, board_id)
+    page.get_by_role("button", name="Milk", exact=True).click()
+    dialog = page.get_by_role("dialog")
+    expect(page.locator("#board-content")).to_have_attribute("inert", "")  # the page behind
+    beside = {"x": 5, "y": 5}  # on the dimmed page around the modal
+
+    page.mouse.click(**beside)  # nothing changed: it just closes
+    expect(dialog).to_be_hidden()
+    expect(page.locator("#board-content")).not_to_have_attribute("inert", "")
+
+    page.get_by_role("button", name="Milk", exact=True).click()
+    dialog.get_by_label("Name").fill("Oat milk")
+    questions: list[str] = []
+
+    def answer(question, accept: bool) -> None:
+        questions.append(question.message)
+        question.accept() if accept else question.dismiss()
+
+    page.once("dialog", lambda question: answer(question, accept=False))
+    page.mouse.click(**beside)
+    expect(dialog.get_by_label("Name")).to_have_value("Oat milk")  # kept
+    page.once("dialog", lambda question: answer(question, accept=True))
+    page.mouse.click(**beside)
+    expect(dialog).to_be_hidden()
+
+    assert questions == ["Discard your changes to this item?"] * 2
+    expect(item(page, "Milk")).to_be_visible()  # nothing was saved
+
+
+def test_menus_close_on_esc_and_outside_clicks_one_open_at_a_time(
+    logged_in_page, seed, user, open_board
+):
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"], "Bakery": ["Bread"]})
+    open_board(page, board_id)
+    open_menus = page.locator("details[open]")
+    dairy_menu = category(page, "Dairy").get_by_label("Category actions")
+
+    dairy_menu.click()
+    expect(open_menus).to_have_count(1)
+    category(page, "Bakery").get_by_label("Category actions").click()
+    expect(open_menus).to_have_count(1)  # the other one closed
+    expect(category(page, "Bakery").locator("details")).to_have_attribute("open", "")
+
+    page.keyboard.press("Escape")
+    expect(open_menus).to_have_count(0)
+    expect(category(page, "Bakery").get_by_label("Category actions")).to_be_focused()
+
+    dairy_menu.click()
+    expect(open_menus).to_have_count(1)
+    page.get_by_role("heading", level=1).click()  # anywhere outside it
+    expect(open_menus).to_have_count(0)
+
+
+def test_folded_category_stays_folded_on_this_device(logged_in_page, seed, user, open_board):
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"], "Bakery": ["Bread"]})
+    open_board(page, board_id)
+    fold = category(page, "Dairy").get_by_role("button", name="Hide items")
+
+    fold.click()
+
+    expect(page.get_by_role("checkbox", name="Milk")).to_be_hidden()
+    expect(page.get_by_role("checkbox", name="Bread")).to_be_visible()
+    unfold = category(page, "Dairy").get_by_role("button", name="Show items")
+    expect(unfold).to_have_attribute("aria-expanded", "false")
+    page.reload()
+    expect(page.get_by_role("checkbox", name="Milk")).to_be_hidden()
+    unfold.click()
+    expect(page.get_by_role("checkbox", name="Milk")).to_be_visible()
+    page.reload()
+    expect(page.get_by_role("checkbox", name="Milk")).to_be_visible()

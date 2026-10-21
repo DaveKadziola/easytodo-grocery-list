@@ -12,13 +12,15 @@ from playwright.sync_api import Locator, Page, expect
 pytestmark = pytest.mark.e2e
 
 TOAST_MS = 4000  # how long a toast stays
+AA = 4.5  # WCAG AA contrast for text
 # What a finger must be able to hit: every control at least 44×44 px (the checkbox through the
 # label around it).
 TAP_TARGETS = (
     "a, button, summary, select, input:not([type=checkbox]), label:has(> input[type=checkbox])"
 )
-# Text the theme leaves unreadable: under 3:1 against what is behind it. Done items are faded on
-# purpose, decorations (aria-hidden) are no text to read, and screen-reader-only text is not seen.
+# Text the theme leaves hard to read: under 4.5:1 (WCAG AA) against what is behind it, done
+# items included (greyed, still to be read). Decorations (aria-hidden) are no text to read, and
+# screen-reader-only text is not seen.
 LOW_CONTRAST_TEXT = r"""
 (minimum) => {
   const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
@@ -55,7 +57,7 @@ LOW_CONTRAST_TEXT = r"""
       const box = el.getBoundingClientRect();
       return box.width > 1 && box.height > 1 && getComputedStyle(el).visibility === "visible";
     })
-    .filter((el) => !el.closest(".line-through, [aria-hidden=true]"))
+    .filter((el) => !el.closest("[aria-hidden=true]"))
     .map((el) => [el, contrast(rgba(getComputedStyle(el).color), background(el))])
     .filter(([, ratio]) => ratio < minimum)
     .map(([el, ratio]) => `${el.outerHTML.slice(0, 80)} has ${ratio.toFixed(2)}:1`);
@@ -128,6 +130,7 @@ def test_phone_bottom_bar_adds_categories_and_switches_boards(
     field = page.get_by_placeholder("New category")
 
     expect(bar).to_be_visible()
+    expect(field).to_be_hidden()  # on a phone the form shows only from the bottom bar
     box = bar.bounding_box()
     assert box["y"] + box["height"] == page.viewport_size["height"]  # stuck to the bottom
     page.evaluate("window.scrollTo(0, document.scrollingElement.scrollHeight)")
@@ -149,6 +152,21 @@ def test_phone_bottom_bar_adds_categories_and_switches_boards(
 
     page.set_viewport_size({"width": 1280, "height": 800})
     expect(page.locator("#bottom-bar")).to_be_hidden()  # a phone thing
+
+
+def test_phone_shows_the_list_right_below_the_board_name(
+    logged_in_page_mobile, seeded_board, open_board
+):
+    page = logged_in_page_mobile
+    open_board(page, seeded_board)  # as the owner, with the most controls
+
+    heading = page.get_by_role("heading", level=1).bounding_box()
+    first_item = page.locator("li[data-item-id]").first.bounding_box()
+    assert first_item["y"] - (heading["y"] + heading["height"]) < 160, (heading, first_item)
+    assert page.locator("li[data-item-id]:visible").count() >= 3  # without scrolling:
+    assert first_item["y"] + first_item["height"] < page.viewport_size["height"] / 2
+    expect(page.get_by_label("Board name")).to_be_hidden()  # rename and delete: in the menu
+    expect(page.get_by_role("button", name="Delete board")).to_be_hidden()
 
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])
@@ -173,14 +191,14 @@ def test_theme_follows_the_system_and_stays_readable(
 
     menu = category(page, "Dairy").locator("summary")
     menu.click()  # the category menu, open
-    assert page.evaluate(LOW_CONTRAST_TEXT, 3) == []
+    assert page.evaluate(LOW_CONTRAST_TEXT, AA) == []
     menu.click()
     page.get_by_role("button", name="Bread", exact=True).click()  # the item modal
     expect(page.get_by_role("dialog")).to_be_visible()
-    assert page.evaluate(LOW_CONTRAST_TEXT, 3) == []
+    assert page.evaluate(LOW_CONTRAST_TEXT, AA) == []
     for path in ("/boards", "/account"):
         page.goto(path)
-        assert page.evaluate(LOW_CONTRAST_TEXT, 3) == [], path
+        assert page.evaluate(LOW_CONTRAST_TEXT, AA) == [], path
 
 
 def test_connection_status_is_in_the_header(logged_in_page_with_seed):

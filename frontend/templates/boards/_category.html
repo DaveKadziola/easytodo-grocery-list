@@ -7,9 +7,11 @@
 <section id="category-{{ category.id }}" data-category-id="{{ category.id }}" data-category-name="{{ category.name }}" class="card mb-6 break-inside-avoid p-4 sm:p-5">
   <div class="flex items-start gap-1">
     {% if can_edit %}
-    <span class="category-handle btn-icon shrink-0 cursor-grab text-slate-400 dark:text-slate-500" title="Drag to reorder" aria-hidden="true">⠿</span>
+    <span class="category-handle btn-icon shrink-0 cursor-grab touch-none text-slate-400 dark:text-slate-500" title="Drag to reorder" aria-hidden="true">⠿</span>
     {% endif %}
     <h2 class="min-w-0 flex-1 break-words py-2 text-lg font-semibold">{{ category.name }}</h2>
+    {#- Folds the items away on this device only (board.js keeps it in localStorage). #}
+    <button type="button" class="btn-icon shrink-0 text-slate-600 dark:text-slate-400" data-collapse aria-expanded="true" aria-controls="category-{{ category.id }}-body" aria-label="Hide items" title="Hide or show items"><span aria-hidden="true" class="collapse-icon">▾</span></button>
     {% if can_edit %}
     <details class="relative shrink-0">
       <summary class="btn-icon cursor-pointer list-none text-slate-600 dark:text-slate-400 [&::-webkit-details-marker]:hidden" title="Category actions" aria-label="Category actions">⋮</summary>
@@ -19,6 +21,9 @@
           <input id="category-{{ category.id }}-name" name="name" value="{{ category.name }}" required maxlength="120" autocomplete="off" class="input">
           <button type="submit" class="btn-secondary w-full">Rename</button>
         </form>
+        {#- The keyboard's way to reorder, and a fallback for the drag handle. #}
+        <button type="button" class="menu-item" data-move="up">Move up</button>
+        <button type="button" class="menu-item" data-move="down">Move down</button>
         {% if done_count %}
         <button type="button" class="menu-item" hx-post="/categories/{{ category.id }}/clear-done" hx-target="#category-{{ category.id }}">Clear done ({{ done_count }})</button>
         {% endif %}
@@ -27,18 +32,20 @@
     </details>
     {% endif %}
   </div>
-  {% if can_edit %}
-  <form hx-post="/categories/{{ category.id }}/items" hx-target="#category-{{ category.id }}" data-refocus="new-item-{{ category.id }}" class="mt-2 flex gap-2">
-    <label for="new-item-{{ category.id }}" class="sr-only">Add item</label>
-    <input id="new-item-{{ category.id }}" name="name" placeholder="Add item" required maxlength="200" autocomplete="off" class="input">
-    <button type="submit" class="btn-primary shrink-0">Add</button>
-  </form>
-  {% endif %}
-  <ul class="mt-2 min-h-11"{% if can_edit %} data-sortable-items{% endif %}>
-    {% for item in category_view.items %}
-    {% include "boards/_item.html" %}
-    {% else %}
-    <li class="py-2.5 text-sm text-slate-500 dark:text-slate-400">No items yet.</li>
-    {% endfor %}
-  </ul>
+  <div id="category-{{ category.id }}-body" data-category-body>
+    {% if can_edit %}
+    <form hx-post="/categories/{{ category.id }}/items" hx-target="#category-{{ category.id }}" data-refocus="new-item-{{ category.id }}" hx-disabled-elt="find button" class="mt-2 flex gap-2">
+      <label for="new-item-{{ category.id }}" class="sr-only">Add item</label>
+      <input id="new-item-{{ category.id }}" name="name" placeholder="Add item" required maxlength="200" autocomplete="off" class="input">
+      <button type="submit" class="btn-primary shrink-0">Add</button>
+    </form>
+    {% endif %}
+    <ul class="mt-2 min-h-11"{% if can_edit %} data-sortable-items{% endif %}>
+      {% for item in category_view.items %}
+      {% include "boards/_item.html" %}
+      {% else %}
+      <li class="py-2.5 text-sm text-slate-500 dark:text-slate-400">No items yet.</li>
+      {% endfor %}
+    </ul>
+  </div>
 </section>

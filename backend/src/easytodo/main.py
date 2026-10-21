@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from urllib.parse import parse_qs
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
@@ -8,6 +9,8 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from starlette.responses import Response
+from starlette.types import Scope
 
 from easytodo.admin.routes import router as admin_router
 from easytodo.auth.account_routes import router as account_router
@@ -30,7 +33,21 @@ from easytodo.realtime.listener import EventListener, listener_dsn
 from easytodo.realtime.routes import router as realtime_router
 from easytodo.security.csrf import verify_csrf
 from easytodo.security.ratelimit import RateLimiter
-from easytodo.web import FRONTEND_DIR, templates
+from easytodo.web import STATIC_DIR, templates
+
+IMMUTABLE = "public, max-age=31536000, immutable"
+
+
+class CachedStaticFiles(StaticFiles):
+    """``/static``: a URL with a version (``?v=``, from ``static_url``) may be cached for good;
+    any other is revalidated (ETag) on every use, so a phone never keeps an old file after an
+    update."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        versioned = "v" in parse_qs(scope.get("query_string", b"").decode("latin-1"))
+        response.headers["Cache-Control"] = IMMUTABLE if versioned else "no-cache"
+        return response
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -92,5 +109,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(content_router)
     app.include_router(realtime_router)
     app.include_router(admin_router)
-    app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
+    app.mount("/static", CachedStaticFiles(directory=STATIC_DIR), name="static")
     return app

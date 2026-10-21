@@ -5,11 +5,11 @@
 {% extends "base.html" %}
 {% block title %}{{ view.board.name }} · EasyToDo{% endblock %}
 {% block scripts %}
-  <script src="/static/js/board.js" defer></script>
-  <script src="/static/js/realtime.js" defer></script>
+  <script src="{{ static_url('js/board.js') }}" defer></script>
+  <script src="{{ static_url('js/realtime.js') }}" defer></script>
 {% endblock %}
 {% block header_status %}
-<p id="conn-status" data-board-id="{{ view.board.id }}" role="status" class="conn-status"><span class="sr-only sm:not-sr-only"></span></p>
+<p id="conn-status" data-board-id="{{ view.board.id }}" role="status" class="conn-status" data-public-url="{{ settings.public_origin }}"><span class="sr-only sm:not-sr-only"></span></p>
 {% endblock %}
 {% block content %}
 {% set can_edit = can(view.role, Action.EDIT_CONTENT) %}

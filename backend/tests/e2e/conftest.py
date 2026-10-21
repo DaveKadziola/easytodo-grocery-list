@@ -74,7 +74,8 @@ def sign_in(context: BrowserContext, email: str) -> Page:
     page.get_by_label("Email").fill(email)
     page.get_by_label("Password").fill(DEFAULT_PASSWORD)
     page.get_by_role("button", name="Sign in").click()
-    expect(page).to_have_url(re.compile(r"/boards$"))
+    # The board list, or straight to the board when the user has only one ("/" opens there).
+    expect(page).to_have_url(re.compile(r"/boards(/\d+)?$"))
     return page
 
 

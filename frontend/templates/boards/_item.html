@@ -1,10 +1,10 @@
 {# One item; done items are struck through. The name opens the item modal, which reads the item
    from the data-* attributes only (autoescaped like any other value).
    Context: item (Item), can_edit. -#}
-<li id="item-{{ item.id }}" data-item-id="{{ item.id }}" class="flex items-start{% if item.is_done %} text-slate-400 dark:text-slate-500 line-through{% endif %}">
+<li id="item-{{ item.id }}" data-item-id="{{ item.id }}" class="flex items-start{% if item.is_done %} text-slate-500 dark:text-slate-400 line-through{% endif %}">
   {% if can_edit %}
   <label class="tap-target -ml-2.5">
-    <input type="checkbox" class="size-5 accent-emerald-600" aria-labelledby="item-{{ item.id }}-name" hx-post="/items/{{ item.id }}/toggle" hx-target="#category-{{ item.category_id }}"{% if item.is_done %} checked{% endif %}>
+    <input type="checkbox" id="item-{{ item.id }}-done" class="size-5 accent-emerald-600" aria-labelledby="item-{{ item.id }}-name" hx-post="/items/{{ item.id }}/toggle" hx-target="#category-{{ item.category_id }}"{% if item.is_done %} checked{% endif %}>
   </label>
   {% endif %}
   <div class="min-w-0 flex-1">

@@ -1,22 +1,29 @@
-// Board page: drag and drop (SortableJS), the item modal (Alpine component "itemModal"), ticks
-// that show at once, fields that are ready for the next entry, the bottom bar's "New category",
-// and reloading the board when a change lost a race.
+// Board page: drag and drop (SortableJS) and Move up / Move down for categories, the item modal
+// (Alpine component "itemModal"), ticks that show at once, fields that are ready for the next
+// entry and keep what the user typed when their category is swapped, folding categories away (per
+// device), the bottom bar's "New category", and a board reload when a change did not go through.
 // Loaded before Alpine (see base.html), so the component is registered on alpine:init. The modal
 // reads items only from data-* attributes, which the templates escape; no page data is ever
 // written into a script.
 // For realtime.js: window.easytodoBoard (the board reload and its swap style, and whether a drag
-// or the modal is in progress) and a "board:idle" event on the document when that ends.
+// or the modal is in progress), a "board:idle" event on the document when that ends, and a
+// "board:stale" event when the page no longer shows what the server has (it then queues a reload).
 (() => {
   "use strict";
 
   const BOARD_CONTENT = "#board-content";
   const TICK = 'input[type="checkbox"][hx-post$="/toggle"]';
   const FOCUSABLE = "input, textarea, select, button";
+  const TEXT_FIELDS = "input[id]:not([type=checkbox]):not([type=hidden]), textarea[id]";
+  // Requests whose failure leaves the page out of step: Sortable has already moved the element.
+  const DRAG_REQUEST = /\/items\/\d+\/move$|\/categories\/order$/;
+  const COLLAPSED_KEY = "easytodo.collapsedCategories";
   // A reload that the user did not ask for just now: htmx sets the new content up at once (no
   // settle delay), so a form in it never submits as a plain page request before htmx has it.
   const RELOAD_SWAP = "outerHTML settle:0ms";
   let dragging = false; // a Sortable drag is running
   let editing = false; // the item modal is open
+  let newCategoryShown = false; // on a phone the bottom bar's button showed the "New category" form
 
   function boardContent() {
     return document.querySelector(BOARD_CONTENT);
@@ -47,6 +54,11 @@
     }
   }
 
+  // The page no longer shows what the server has: realtime.js reloads the board when it can.
+  function stale() {
+    document.dispatchEvent(new Event("board:stale"));
+  }
+
   function dragStarted() {
     dragging = true;
   }
@@ -59,11 +71,24 @@
 
   // `source` must be on the page and not inside a form (its fields would be sent along).
   function moveItem(itemId, categoryId, source) {
-    return htmx.ajax("POST", `/items/${itemId}/move`, {
-      source,
-      target: BOARD_CONTENT,
-      values: { category_id: categoryId },
-    });
+    return htmx
+      .ajax("POST", `/items/${itemId}/move`, {
+        source,
+        target: BOARD_CONTENT,
+        values: { category_id: categoryId },
+      })
+      .catch(stale);
+  }
+
+  function categoryIds() {
+    return Array.from(document.querySelectorAll("#categories > [data-category-id]"), (el) => el.dataset.categoryId);
+  }
+
+  function saveCategoryOrder(source) {
+    const boardId = boardContent().dataset.boardId;
+    return htmx
+      .ajax("PUT", `/boards/${boardId}/categories/order`, { source, swap: "none", values: { ids: categoryIds() } })
+      .catch(stale);
   }
 
   function initSortable(root) {
@@ -81,6 +106,8 @@
         onStart: dragStarted,
         onEnd(event) {
           dragging = false;
+          // Sortable leaves style="" behind, which a strict CSP will not let htmx copy over.
+          if (event.item.getAttribute("style") === "") event.item.removeAttribute("style");
           if (event.from !== event.to) {
             const category = event.to.closest("[data-category-id]");
             moveItem(event.item.dataset.itemId, category.dataset.categoryId, event.item);
@@ -92,30 +119,132 @@
     matching(root, "[data-sortable-categories]").forEach((container) => {
       if (Sortable.get(container)) return;
       Sortable.create(container, {
-        handle: ".category-handle",
+        handle: ".category-handle", // touch-action: none, so a finger on it drags, not scrolls
         draggable: "[data-category-id]",
+        supportPointer: false, // as for items: touch events, which end properly on every phone
         onStart: dragStarted,
         onEnd(event) {
           dragging = false;
-          if (event.oldIndex !== event.newIndex) {
-            const ids = Array.from(container.children, (el) => el.dataset.categoryId).filter(Boolean);
-            const boardId = boardContent().dataset.boardId;
-            htmx.ajax("PUT", `/boards/${boardId}/categories/order`, {
-              source: container,
-              swap: "none",
-              values: { ids },
-            });
-          }
+          if (event.item.getAttribute("style") === "") event.item.removeAttribute("style");
+          if (event.oldIndex !== event.newIndex) saveCategoryOrder(container);
           becameIdle();
         },
       });
     });
   }
 
-  document.addEventListener("DOMContentLoaded", () => initSortable(document));
+  // Categories folded away on this device (their ids), kept in localStorage when it works.
+  function collapsedIds() {
+    try {
+      const ids = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]");
+      return new Set(Array.isArray(ids) ? ids.map(String) : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  function saveCollapsed(ids) {
+    try {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify(Array.from(ids)));
+    } catch {
+      // Storage blocked: the category stays folded until the page is reloaded.
+    }
+  }
+
+  function showCollapsed(section, collapsed) {
+    const button = section.querySelector("[data-collapse]");
+    const body = section.querySelector("[data-category-body]");
+    if (!button || !body) return;
+    body.hidden = collapsed;
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.setAttribute("aria-label", collapsed ? "Show items" : "Hide items");
+  }
+
+  let collapsedNow = null; // read once per page, then kept in step with the clicks
+  function applyCollapsed(root) {
+    if (collapsedNow === null) collapsedNow = collapsedIds();
+    matching(root, "section[data-category-id]").forEach((section) => {
+      showCollapsed(section, collapsedNow.has(section.dataset.categoryId));
+    });
+  }
+
+  function newCategoryForm() {
+    const field = document.getElementById("new-category-name");
+    return field && field.form;
+  }
+
+  // Below 640 px the "New category" form is hidden (the bottom bar has the button); once the
+  // button showed it, it stays shown, also after the board is reloaded.
+  function showNewCategoryForm() {
+    const form = newCategoryForm();
+    if (form && form.classList.contains("hidden")) form.classList.replace("hidden", "flex");
+  }
+
+  function setUp(root) {
+    initSortable(root);
+    applyCollapsed(root);
+    if (newCategoryShown) showNewCategoryForm();
+  }
+
+  document.addEventListener("DOMContentLoaded", () => setUp(document));
+
+  // What the user typed into the fields of a category (or the board) that is about to be
+  // replaced, so the new copy gets it back: text not submitted yet survives a live update or
+  // another request's answer, and so does the cursor. A form's own submit answer leaves out what
+  // it sent (that is on the page now) but keeps anything typed since.
+  const sentValues = new WeakMap(); // form -> {field id: value} as sent
+  let kept = null; // {fields: [{id, value, start, end}], focused: id}
+
+  document.addEventListener("htmx:configRequest", (event) => {
+    const { elt, parameters } = event.detail;
+    if (elt.matches(TICK)) parameters.done = String(elt.checked); // the state its user wants
+    if (elt instanceof HTMLFormElement) {
+      const sent = {};
+      for (const field of elt.querySelectorAll(TEXT_FIELDS)) sent[field.id] = field.value;
+      sentValues.set(elt, sent);
+    }
+  });
+
+  document.addEventListener("htmx:beforeSwap", (event) => {
+    kept = null;
+    const { target, requestConfig, xhr } = event.detail;
+    if (!(target instanceof Element)) return;
+    const form = requestConfig && requestConfig.elt;
+    const sent = (xhr.status < 400 && form instanceof HTMLFormElement && sentValues.get(form)) || {};
+    const fields = matching(target, TEXT_FIELDS)
+      .filter((field) => field.value !== field.defaultValue && field.value !== sent[field.id])
+      .map((field) => ({ id: field.id, value: field.value, start: field.selectionStart, end: field.selectionEnd }));
+    const active = document.activeElement;
+    const focused = active && active.id && target.contains(active) ? active.id : null;
+    if (fields.length || focused) kept = { fields, focused };
+  });
+
+  function restoreKept() {
+    if (kept === null) return;
+    const { fields, focused } = kept;
+    kept = null;
+    for (const { id, value, start, end } of fields) {
+      const field = document.getElementById(id);
+      if (!field || field.value !== field.defaultValue) continue;
+      field.value = value;
+      if (id === focused && field.setSelectionRange && start !== null) {
+        try {
+          field.setSelectionRange(start, end);
+        } catch {
+          // Not a text input (email, number): the cursor goes to the end.
+        }
+      }
+    }
+    const active = document.activeElement;
+    if (focused && (active === null || active === document.body)) {
+      const field = document.getElementById(focused);
+      if (field) field.focus({ preventScroll: true });
+    }
+  }
 
   document.addEventListener("htmx:afterSwap", (event) => {
-    if (event.target instanceof Element) initSortable(event.target);
+    if (event.target instanceof Element) setUp(event.target);
+    restoreKept();
     // A form with data-refocus="<input id>" is ready for the next entry after a successful
     // submit: emptied, with the cursor in that input (which the swap may have replaced).
     const form = event.detail.requestConfig && event.detail.requestConfig.elt;
@@ -136,22 +265,63 @@
     if (event.detail.elt.matches(TICK)) strike(event.detail.elt);
   });
 
-  function undoTick(event) {
+  function failed(event) {
     const checkbox = event.detail.elt;
-    if (!checkbox.matches(TICK) || !checkbox.isConnected) return;
-    checkbox.checked = !checkbox.checked;
-    strike(checkbox);
+    if (checkbox.matches(TICK) && checkbox.isConnected) {
+      checkbox.checked = !checkbox.checked;
+      strike(checkbox);
+    }
+    const config = event.detail.requestConfig;
+    if (config && DRAG_REQUEST.test(config.path)) stale(); // put the dragged element back
   }
-  document.addEventListener("htmx:responseError", undoTick);
-  document.addEventListener("htmx:sendError", undoTick);
+  document.addEventListener("htmx:responseError", failed);
+  document.addEventListener("htmx:sendError", failed);
 
-  // <button data-focus="field-id"> (the bottom bar's "New category"): to that field, ready to type.
+  // Moves `section` one place up or down among the categories and saves the order.
+  function moveCategory(section, direction) {
+    const sibling = direction === "up" ? section.previousElementSibling : section.nextElementSibling;
+    if (!sibling || !sibling.matches("[data-category-id]")) return;
+    const container = section.parentElement;
+    container.insertBefore(section, direction === "up" ? sibling : sibling.nextElementSibling);
+    saveCategoryOrder(container);
+  }
+
   document.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-focus]");
-    const field = button && document.getElementById(button.dataset.focus);
-    if (!field) return;
-    field.scrollIntoView({ block: "center" });
-    field.focus();
+    // <button data-focus="field-id"> (the bottom bar's "New category"): to that field, ready to type.
+    const focusButton = event.target.closest("[data-focus]");
+    const field = focusButton && document.getElementById(focusButton.dataset.focus);
+    if (field) {
+      if (field.id === "new-category-name") {
+        newCategoryShown = true;
+        showNewCategoryForm();
+      }
+      field.scrollIntoView({ block: "center" });
+      field.focus();
+      return;
+    }
+    // A category menu's "Move up" / "Move down": the keyboard's (and a fallback's) way to reorder.
+    const moveButton = event.target.closest("[data-move]");
+    if (moveButton) {
+      const section = moveButton.closest("[data-category-id]");
+      moveCategory(section, moveButton.dataset.move);
+      // The menu moved with its category: the next press moves it again. At the top (or the
+      // bottom) the button is hidden, so the cursor goes to the other one.
+      const other = moveButton.dataset.move === "up" ? "down" : "up";
+      const next = moveButton.offsetParent === null ? section.querySelector(`[data-move="${other}"]`) : moveButton;
+      next.focus();
+      return;
+    }
+    // A category's fold button: hides or shows its items on this device.
+    const collapseButton = event.target.closest("[data-collapse]");
+    if (collapseButton) {
+      const section = collapseButton.closest("[data-category-id]");
+      if (collapsedNow === null) collapsedNow = collapsedIds();
+      const collapse = !collapsedNow.has(section.dataset.categoryId);
+      if (collapse) collapsedNow.add(section.dataset.categoryId);
+      else collapsedNow.delete(section.dataset.categoryId);
+      saveCollapsed(collapsedNow);
+      showCollapsed(section, collapse);
+    }
   });
 
   // Lists that htmx swaps out take their Sortable instance with them (Sortable keeps a registry).
@@ -160,18 +330,21 @@
     if (sortable) sortable.destroy();
   });
 
-  // A 404 answer (the item or category was deleted on another device) triggers "resync": reload
-  // the board so nothing stale stays on screen. Not for the board reload's own 404.
-  document.addEventListener("resync", (event) => {
-    const board = boardContent();
-    if (board && event.target !== board) refreshBoard();
-  });
-
   window.easytodoBoard = {
     refresh: refreshBoard,
     reloadSwap: RELOAD_SWAP,
     isBusy: () => dragging || editing,
   };
+
+  // While the modal is open the page behind it can be neither reached nor scrolled.
+  const BEHIND_THE_MODAL = ["body > header", BOARD_CONTENT, "#bottom-bar"];
+  function setPageInert(inert) {
+    for (const selector of BEHIND_THE_MODAL) {
+      const element = document.querySelector(selector);
+      if (element) element.inert = inert;
+    }
+    document.body.classList.toggle("overflow-hidden", inert);
+  }
 
   document.addEventListener("alpine:init", () => {
     Alpine.data("itemModal", () => ({
@@ -201,7 +374,18 @@
         category.value = this.original.categoryId;
         this.open = true;
         editing = true;
+        setPageInert(true);
         this.$nextTick(() => name.focus());
+      },
+
+      changed() {
+        const { name, description, category } = this.$refs;
+        const { original } = this;
+        return (
+          name.value !== original.name ||
+          description.value !== original.description ||
+          category.value !== original.categoryId
+        );
       },
 
       // Tab and Shift+Tab go round the modal's controls, never out to the page behind it.
@@ -218,10 +402,18 @@
         }
       },
 
+      // A tap on the dimmed page around the modal (on a phone, often meant to hide the keyboard):
+      // closes it, but asks first when that would throw edits away.
+      dismiss() {
+        if (this.changed() && !window.confirm("Discard your changes to this item?")) return;
+        this.close();
+      },
+
       close() {
         if (!this.open) return;
         this.open = false;
         editing = false;
+        setPageInert(false);
         const opener = document.getElementById(`item-${this.itemId}-name`);
         if (opener) opener.focus();
         becameIdle();
@@ -242,17 +434,18 @@
             });
           }
           const categoryId = category.value;
-          if (categoryId !== original.categoryId) {
-            saved.then(() => {
+          saved
+            .then(() => {
               const current = itemElement(itemId); // the save swapped the category
-              if (current) moveItem(itemId, categoryId, current);
-            });
-          }
+              if (categoryId !== original.categoryId && current) return moveItem(itemId, categoryId, current);
+            })
+            .catch(stale); // no answer: what the page shows may not be what was saved
         }
         this.close();
       },
 
       remove() {
+        if (!window.confirm("Delete this item?")) return;
         const item = itemElement(this.itemId);
         if (item) {
           htmx.ajax("DELETE", `/items/${this.itemId}`, {

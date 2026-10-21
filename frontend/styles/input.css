@@ -35,15 +35,18 @@
     @apply dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100;
   }
 
+  /* emerald-700: white text on it is above 4.5:1 (WCAG AA). */
   .btn-primary {
-    @apply inline-flex min-h-11 items-center justify-center rounded-lg bg-emerald-600 px-4 font-semibold text-white;
-    @apply hover:bg-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600;
+    @apply inline-flex min-h-11 items-center justify-center rounded-lg bg-emerald-700 px-4 font-semibold text-white;
+    @apply hover:bg-emerald-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600;
+    @apply disabled:cursor-wait disabled:opacity-70;
   }
 
   .btn-secondary {
     @apply inline-flex min-h-11 items-center justify-center rounded-lg px-3 text-sm font-medium text-slate-700 ring-1 ring-slate-300;
     @apply hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600;
     @apply dark:text-slate-200 dark:ring-slate-600 dark:hover:bg-slate-800;
+    @apply disabled:cursor-wait disabled:opacity-70;
   }
 
   .btn-danger {
@@ -95,24 +98,31 @@
     @apply dark:bg-red-950 dark:text-red-200 dark:ring-red-900;
   }
 
-  /* The board's connection in the header: a dot (green when live), and the word beside it from
-     a tablet up (on a phone the header has no room; screen readers still get it). */
+  /* The board's connection in the header: a dot, and the word beside it from a tablet up (on a
+     phone the header has no room; screen readers still get it). The shape tells the states apart
+     without the colour: a filled green dot when live, a hollow ring otherwise (amber while it
+     reconnects). */
   .conn-status {
     @apply flex min-w-0 items-center gap-1.5 text-xs font-medium text-slate-600 dark:text-slate-400;
-    @apply before:size-2.5 before:shrink-0 before:rounded-full before:bg-slate-300 before:content-[''];
-    @apply data-[state=live]:before:bg-emerald-500 data-[state=reconnecting]:before:bg-amber-500;
-    @apply dark:before:bg-slate-600;
+    @apply before:size-2.5 before:shrink-0 before:rounded-full before:border-2 before:border-slate-400 before:content-[''];
+    @apply data-[state=live]:before:border-emerald-500 data-[state=live]:before:bg-emerald-500;
+    @apply data-[state=reconnecting]:before:border-amber-500;
   }
 
   /* The board page on a phone: a bar along the bottom, above the home indicator. */
   .bottom-bar {
-    @apply fixed inset-x-0 bottom-0 z-30 flex items-center justify-between gap-2 px-4 pt-2 sm:hidden;
+    @apply fixed inset-x-0 bottom-0 z-30 flex items-center justify-between gap-2 pt-2 sm:hidden;
     @apply border-t border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900;
+    /* Clear of the home indicator, and in landscape of the notch on either side. */
     padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
   }
 
   .toasts {
     padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
   }
 
   .toast {
@@ -134,6 +144,17 @@
   body:has(.bottom-bar) .toasts {
     bottom: 3.75rem;
   }
+}
+
+/* A category's fold button points down while its items show, right while they are folded away. */
+[data-collapse][aria-expanded="false"] .collapse-icon {
+  rotate: -90deg;
+}
+
+/* A category's "Move up" / "Move down" only where there is somewhere to move to. */
+#categories > section:first-of-type [data-move="up"],
+#categories > section:last-of-type [data-move="down"] {
+  display: none;
 }
 
 /* Hidden until Alpine has started (it removes the attribute), so the modal never flashes. */

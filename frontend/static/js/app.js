@@ -1,12 +1,11 @@
-// Page shell: headers for every HTMX request (and the tab's id, window.easytodo.clientId), toasts
-// (from HX-Trigger, the flash cookie, or a request that failed without one), and copy buttons.
+// Page shell: headers for every HTMX request (and the page's id, window.easytodo.clientId), toasts
+// (from HX-Trigger, the flash cookie, or a request that failed without one), menus that close
+// themselves, and copy buttons.
 (() => {
   "use strict";
 
-  const CLIENT_ID_KEY = "easytodo.clientId";
   const FLASH_COOKIE = "easytodo_flash";
   const TOAST_MS = 4000; // how long a toast stays
-  let pageClientId = null;
 
   function randomId() {
     if (crypto.randomUUID) return crypto.randomUUID();
@@ -19,20 +18,12 @@
     return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
   }
 
-  // One id per browser tab, so the server can tell this tab's own changes from others'.
+  // One id per page load, so the server can tell this page's own changes from others'. Not kept
+  // in sessionStorage: a duplicated tab copies that, and the two tabs would then hide each
+  // other's changes. The id only has to live as long as the page and its socket.
+  const pageClientId = randomId();
   function clientId() {
-    try {
-      let id = sessionStorage.getItem(CLIENT_ID_KEY);
-      if (!id) {
-        id = randomId();
-        sessionStorage.setItem(CLIENT_ID_KEY, id);
-      }
-      return id;
-    } catch {
-      // Storage blocked by the browser: keep one id for this page.
-      pageClientId = pageClientId || randomId();
-      return pageClientId;
-    }
+    return pageClientId;
   }
 
   document.addEventListener("htmx:configRequest", (event) => {
@@ -63,7 +54,10 @@
 
   // What the user just did did not happen (and board.js has undone a tick): no answer at all, or
   // an error answer that brings no toast of its own (a proxy's 502, an unexpected 500).
-  document.addEventListener("htmx:sendError", () => {
+  // Not for a live update's request (realtime.js marks it), which the user did not start: the
+  // header's connection status covers that.
+  document.addEventListener("htmx:sendError", (event) => {
+    if (event.detail.xhr && event.detail.xhr.easytodoBackground) return;
     showToast("error", "Could not reach the server. Try again.");
   });
   document.addEventListener("htmx:responseError", (event) => {
@@ -87,6 +81,38 @@
     }
   }
   showFlash();
+
+  // Menus (<details> with a <summary>): one open at a time, closed by Esc (back to its summary),
+  // by a click or tap outside it, and when the page goes to the background.
+  function openMenus() {
+    return Array.from(document.querySelectorAll("details[open]"));
+  }
+  document.addEventListener(
+    "toggle",
+    (event) => {
+      const opened = event.target;
+      if (!(opened instanceof HTMLDetailsElement) || !opened.open) return;
+      openMenus().forEach((menu) => {
+        if (menu !== opened && !menu.contains(opened)) menu.open = false;
+      });
+    },
+    true, // toggle does not bubble
+  );
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const menu = openMenus().pop();
+    if (!menu) return;
+    menu.open = false;
+    menu.querySelector("summary").focus();
+  });
+  document.addEventListener("click", (event) => {
+    openMenus().forEach((menu) => {
+      if (!menu.contains(event.target)) menu.open = false;
+    });
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") openMenus().forEach((menu) => (menu.open = false));
+  });
 
   // <button data-copy="field-id">: copies that field's value (an invite link). The Clipboard API
   // exists only in secure contexts, so a plain-http LAN install falls back to execCommand.

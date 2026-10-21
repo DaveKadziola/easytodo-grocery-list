@@ -1,13 +1,14 @@
 """The page shell: base layout, static files, the vendored scripts, and what a phone needs to
 install the app on its home screen and keep clear of the notch and the home indicator."""
 
+import hashlib
 import re
 import struct
 
 import pytest
 
 from easytodo.security.csrf import CSRF_COOKIE
-from easytodo.web import FLASH_COOKIE, FRONTEND_DIR
+from easytodo.web import FLASH_COOKIE, FRONTEND_DIR, static_url
 
 VENDOR_SCRIPTS = {
     "htmx-2.0.4.min.js": "2.0.4",
@@ -20,17 +21,21 @@ async def test_base_layout(client):
     r = await client.get("/login")
     token = client.cookies[CSRF_COOKIE]
     assert f'<meta name="csrf-token" content="{token}">' in r.text
+    # No "style" in attributesToSettle: htmx would copy a style="" (SortableJS leaves one on a
+    # dragged item) onto the new element, which style-src 'self' refuses.
     assert (
         '<meta name="htmx-config" '
-        """content='{"includeIndicatorStyles": false, "defaultSwapStyle": "outerHTML"}'>"""
+        """content='{"includeIndicatorStyles": false, "defaultSwapStyle": "outerHTML", """
+        """"attributesToSettle": ["class", "width", "height"]}'>"""
     ) in r.text
     scripts = re.findall(r"<script([^>]*)>(.*?)</script>", r.text, re.DOTALL)
     assert [attrs for attrs, _ in scripts] == [
         ' src="/static/vendor/htmx-2.0.4.min.js" defer',
         ' src="/static/vendor/alpine-csp-3.14.8.min.js" defer',
         ' src="/static/vendor/sortable-1.15.6.min.js" defer',
-        ' src="/static/js/app.js" defer',
+        f' src="{static_url("js/app.js")}" defer',
     ]
+    assert f'<link rel="stylesheet" href="{static_url("css/app.css")}">' in r.text
     assert all(body == "" for _, body in scripts)  # no inline scripts (CSP script-src 'self')
     assert re.search(r'<div id="toasts" aria-live="polite"[^>]*></div>', r.text)
 
@@ -45,6 +50,29 @@ async def test_static_files_are_served(client, path):
     r = await client.get(path)
     assert r.status_code == 200
     assert r.headers["x-content-type-options"] == "nosniff"
+
+
+def test_the_apps_own_assets_have_a_content_version_in_their_url():
+    for path in ("js/app.js", "js/board.js", "js/realtime.js", "css/app.css"):
+        digest = hashlib.sha256((FRONTEND_DIR / "static" / path).read_bytes()).hexdigest()
+        assert static_url(path) == f"/static/{path}?v={digest[:12]}"
+
+
+async def test_static_files_are_cached_by_version_and_revalidated_otherwise(client):
+    """After an update a phone must not keep running the old realtime.js or board.js: a URL with
+    the file's version can be cached for good (a new version is a new URL), one without it is
+    checked with the server (ETag) on every use."""
+    versioned = await client.get(static_url("js/realtime.js"))
+    assert versioned.status_code == 200
+    assert versioned.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+    plain = await client.get("/static/js/realtime.js")
+    assert plain.headers["cache-control"] == "no-cache"
+    again = await client.get(
+        "/static/js/realtime.js", headers={"If-None-Match": plain.headers["etag"]}
+    )
+    assert again.status_code == 304
+    assert again.headers["cache-control"] == "no-cache"
 
 
 @pytest.mark.parametrize("name,version", VENDOR_SCRIPTS.items())

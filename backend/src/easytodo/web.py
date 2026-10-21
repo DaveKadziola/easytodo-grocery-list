@@ -1,5 +1,6 @@
 """Template rendering shared by every HTML route."""
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from jinja2 import Environment, FileSystemLoader
 from easytodo.config import Settings
 
 FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend"
+STATIC_DIR = FRONTEND_DIR / "static"
 FLASH_COOKIE = "easytodo_flash"  # read and cleared by static/js/app.js
 FLASH_MAX_AGE_S = 60
 
@@ -20,6 +22,28 @@ FLASH_MAX_AGE_S = 60
 templates = Jinja2Templates(
     env=Environment(loader=FileSystemLoader(FRONTEND_DIR / "templates"), autoescape=True)
 )
+
+
+_asset_versions: dict[str, tuple[int, int, str]] = {}  # path -> (mtime_ns, size, version)
+
+
+def static_url(path: str) -> str:
+    """``/static/<path>?v=<version>``, the version taken from the file's content.
+
+    For the app's own scripts and stylesheet, whose names stay the same across releases: a new
+    version is a new URL, so browsers can keep each one for good (see ``CachedStaticFiles``) and
+    still never run an old realtime.js against new pages. Hashed again only when the file changes.
+    """
+    file = STATIC_DIR / path
+    stat = file.stat()
+    known = _asset_versions.get(path)
+    if known is None or known[:2] != (stat.st_mtime_ns, stat.st_size):
+        known = (stat.st_mtime_ns, stat.st_size, hashlib.sha256(file.read_bytes()).hexdigest()[:12])
+        _asset_versions[path] = known
+    return f"/static/{path}?v={known[2]}"
+
+
+templates.env.globals["static_url"] = static_url
 
 
 def is_htmx(request: Request) -> bool:
