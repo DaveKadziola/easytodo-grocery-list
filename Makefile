@@ -19,7 +19,7 @@ test-db:
 test: test-db
 	cd backend && uv run pytest
 
-e2e: test-db
+e2e: test-db css
 	cd backend && uv run pytest -m e2e
 
 bin/tailwindcss:

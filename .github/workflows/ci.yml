@@ -5,9 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+# The jobs only read the repository.
+permissions:
+  contents: read
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned, not -latest: a new image can break the setup steps
     services:
       postgres:
         image: postgres:17-alpine
@@ -30,8 +34,8 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
       - run: uv sync --locked
       - run: uv run ruff check
       - run: uv run alembic upgrade head
@@ -39,7 +43,7 @@ jobs:
       - run: uv run pytest
 
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned, not -latest: a new image can break the setup steps
     services:
       postgres:
         image: postgres:17-alpine
@@ -60,8 +64,8 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
       - run: make css
         working-directory: .
       - run: uv sync --locked
@@ -69,13 +73,17 @@ jobs:
       - run: uv run pytest -m e2e
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned, not -latest: a new image can break the setup steps
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Create .env from the example
         run: |
           cp .env.example .env
           sed -i "s/^EASYTODO_SECRET_KEY=.*/EASYTODO_SECRET_KEY=$(openssl rand -hex 32)/" .env
+      - name: The proxy profile still parses
+        run: |
+          EASYTODO_DOMAIN=todo.example.com ACME_EMAIL=ci@example.com \
+            docker compose --profile proxy config -q
       - run: docker compose build
       - run: docker compose up -d --wait
       - name: Smoke test

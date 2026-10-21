@@ -1,3 +1,15 @@
+# A fixed project name: the volumes (pgdata holds the database) keep their names whatever the
+# checkout directory is called, so a re-clone or a renamed directory finds the same data.
+name: easytodo
+
+# Every service's log is rotated (at most 3 files of 10 MB each), so an always-on server's
+# logs, which include the healthcheck's requests every 10 s, do not grow without bound.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:17-alpine
@@ -13,6 +25,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    logging: *logging
     # No published port: only the app container reaches the database.
 
   app:
@@ -28,6 +41,7 @@ services:
       # with the proxy profile below, so that only Caddy and this machine reach the app).
       - "${EASYTODO_BIND:+${EASYTODO_BIND}:}${EASYTODO_PORT:-8000}:8000"
     restart: unless-stopped
+    logging: *logging
 
   # Optional HTTPS reverse proxy: docker compose --profile proxy up -d (docs/deployment.md).
   # With it, .env also needs EASYTODO_PUBLIC_URL=https://<EASYTODO_DOMAIN>,
@@ -36,7 +50,8 @@ services:
     image: caddy:2-alpine
     profiles: ["proxy"]
     depends_on:
-      - app
+      app:
+        condition: service_healthy  # not before the migrations have run (no 502 meanwhile)
     environment:
       EASYTODO_DOMAIN: ${EASYTODO_DOMAIN:-}
       ACME_EMAIL: ${ACME_EMAIL:-}
@@ -49,6 +64,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     restart: unless-stopped
+    logging: *logging
 
 volumes:
   pgdata:

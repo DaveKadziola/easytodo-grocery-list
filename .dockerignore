@@ -4,6 +4,9 @@
 .superpowers
 .env
 .env.*
+# A developer's backend/.env (README's dev setup) too: the app would read it as a fallback.
+**/.env
+**/.env.*
 docs
 scripts
 bin
