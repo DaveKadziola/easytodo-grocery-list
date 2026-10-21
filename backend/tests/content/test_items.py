@@ -113,6 +113,48 @@ async def test_toggle_sets_and_clears_done_at(editor_client, board, item, db, pu
     assert item_ids_in(r.text) == [item.id, later.id]  # "Milk" before "Yoghurt" again
 
 
+async def test_toggle_with_the_wanted_state_is_idempotent(
+    editor_client, board, item, db, published
+):
+    """Two devices tick the same item, one of them from a stale view: both meant "done", so it
+    stays done (the checkbox sends the state its user wants, not "flip it")."""
+    for _ in range(2):
+        r = await editor_client.post(f"/items/{item.id}/toggle", data={"done": "true"}, headers=HX)
+        assert r.status_code == 200
+        assert re.search(rf'id="item-{item.id}"[^>]*line-through', r.text)
+    is_done, done_at = (
+        await db.execute(select(Item.is_done, Item.done_at).where(Item.id == item.id))
+    ).one()
+    assert is_done is True and done_at is not None
+    events = [events for events, _ in published if events]
+    assert len(events) == 1  # the second tick changed nothing, so nothing to tell
+
+    for _ in range(2):
+        r = await editor_client.post(f"/items/{item.id}/toggle", data={"done": "false"}, headers=HX)
+        assert r.status_code == 200
+    row = (await db.execute(select(Item.is_done, Item.done_at).where(Item.id == item.id))).one()
+    assert tuple(row) == (False, None)
+    assert len([events for events, _ in published if events]) == 2
+
+    r = await editor_client.post(f"/items/{item.id}/toggle", data={"done": "yes"}, headers=HX)
+    assert r.status_code == 422
+
+
+async def test_moving_an_item_to_its_own_category_changes_nothing(
+    editor_client, board, item, db, published
+):
+    """No row lock on the category it is in already, which could deadlock against a delete or
+    "Clear done" of that category, and no event."""
+    r = await editor_client.post(
+        f"/items/{item.id}/move", data={"category_id": item.category_id}, headers=HX
+    )
+
+    assert r.status_code == 200
+    assert f'id="item-{item.id}"' in r.text
+    assert await db.scalar(select(Item.category_id).where(Item.id == item.id)) == item.category_id
+    assert [events for events, _ in published if events] == []
+
+
 async def test_move_item_to_another_category_of_the_board(
     editor_client, board, category, item, db, published
 ):
@@ -135,7 +177,7 @@ async def test_move_item_to_another_category_of_the_board(
     published.clear()
     r = await editor_client.post(f"/items/{item.id}/move", data={"category_id": bakery.id})
     assert r.status_code == 200
-    assert published == [((changed(board.id, bakery.id),), None)]
+    assert [events for events, _ in published if events] == []  # there already: no change
 
 
 async def test_delete_item_returns_the_category_without_it(

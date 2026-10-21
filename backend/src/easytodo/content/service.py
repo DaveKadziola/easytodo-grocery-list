@@ -28,7 +28,9 @@ from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
 
 CATEGORY_GONE = "This category no longer exists."
 ITEM_GONE = "This item no longer exists."
-_UNIQUE_VIOLATION = "23505"  # PostgreSQL SQLSTATE
+_UNIQUE_VIOLATION = "23505"  # PostgreSQL SQLSTATEs
+_FOREIGN_KEY_VIOLATION = "23503"
+BOARD_GONE = "Board not found."
 
 
 async def _load[M: (Category, Item)](
@@ -96,8 +98,11 @@ async def _unique_category_name(db: AsyncSession) -> AsyncIterator[None]:
         async with db.begin_nested():
             yield
     except IntegrityError as exc:
-        if getattr(exc.orig, "sqlstate", None) == _UNIQUE_VIOLATION:
+        sqlstate = getattr(exc.orig, "sqlstate", None)
+        if sqlstate == _UNIQUE_VIOLATION:
             raise Conflict("A category with this name already exists.") from None
+        if sqlstate == _FOREIGN_KEY_VIOLATION:  # the board was deleted meanwhile
+            raise NotFound(BOARD_GONE) from None
         raise
 
 
@@ -138,8 +143,11 @@ async def reorder_categories(
     """Put the board's categories in the order of ``ordered_ids``, which must name each of them
     exactly once (a client that missed a change gets ``ValidationFailed``)."""
     board, _ = await require_board(db, board_id, user, Action.EDIT_CONTENT)
-    categories = await db.scalars(
-        select(Category).where(Category.board_id == board.id).with_for_update()
+    categories = await db.scalars(  # locked in id order: two reorders at once cannot deadlock
+        select(Category)
+        .where(Category.board_id == board.id)
+        .order_by(Category.id)
+        .with_for_update()
     )
     by_id = {category.id: category for category in categories}
     if sorted(ordered_ids) != sorted(by_id):
@@ -186,11 +194,21 @@ async def update_item(
     return item
 
 
-async def toggle_item(db: AsyncSession, item_id: int, user: User) -> Item:
-    """Mark the item done (now) or open again."""
+async def toggle_item(db: AsyncSession, item_id: int, user: User, done: bool | None = None) -> Item:
+    """Mark the item done (now) or open again: as ``done`` says, or the other way round from
+    what it is when ``done`` is None.
+
+    Clients send the state their user wants, so two devices ticking the same item (one of them
+    from a view that is not up to date yet) both leave it done instead of cancelling each other
+    out. When the item is already in that state nothing changes and no event is sent.
+    """
     item, _ = await load_item(db, item_id, user, Action.EDIT_CONTENT)
-    item.is_done = not item.is_done
-    item.done_at = datetime.now(UTC) if item.is_done else None
+    wanted = not item.is_done if done is None else done
+    if wanted == item.is_done:
+        await commit_and_publish(db)  # nothing to change: just ends the transaction (row lock)
+        return item
+    item.is_done = wanted
+    item.done_at = datetime.now(UTC) if wanted else None
     await commit_and_publish(db, _category_changed(item.board_id, item.category_id))
     return item
 
@@ -200,6 +218,11 @@ async def move_item(
 ) -> tuple[Item, int]:
     """Move the item to another category of its own board; returns it and its old category id."""
     item, _ = await load_item(db, item_id, user, Action.EDIT_CONTENT)
+    if target_category_id == item.category_id:
+        # Already there: nothing to change, and no lock on its category, which could deadlock
+        # against a delete or "Clear done" of that category that holds it and waits for the item.
+        await commit_and_publish(db)
+        return item, item.category_id
     target = None
     if is_possible_id(target_category_id):
         target = await db.scalar(

@@ -22,6 +22,7 @@ from easytodo.content.service import (
     toggle_item,
     update_item,
 )
+from easytodo.errors import ValidationFailed
 from easytodo.models import User
 from easytodo.web import render
 
@@ -125,8 +126,19 @@ async def edit_item(
 
 
 @router.post("/items/{item_id}/toggle")
-async def toggle(request: Request, db: DbSession, user: CurrentUser, item_id: int) -> Response:
-    item = await toggle_item(db, item_id, user)
+async def toggle(
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    item_id: int,
+    done: OptionalFormField = None,
+) -> Response:
+    """``done`` ("true" or "false": the checkbox's new state, which board.js sends) sets the
+    state; without it the item flips. (A str, not a bool: FastAPI reads a missing bool form
+    field as False, the way an unticked HTML checkbox is left out.)"""
+    if done not in (None, "true", "false"):
+        raise ValidationFailed("done must be true or false.")
+    item = await toggle_item(db, item_id, user, None if done is None else done == "true")
     return await _current_category(request, db, user, item.category_id)
 
 

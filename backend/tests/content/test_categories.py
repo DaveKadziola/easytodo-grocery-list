@@ -3,7 +3,7 @@ import re
 
 import pytest
 from factories import create_board, create_category, create_item, create_user
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from easytodo.models import Category, Item
 from easytodo.realtime.events import BoardEvent, EventType
@@ -265,3 +265,56 @@ async def test_names_are_rendered_escaped(editor_client, board):  # Review Focus
         assert r.status_code == 200
         assert "<script>alert(1)</script>" not in r.text
         assert r.text.count(escaped) >= 3  # category name, item name and item description
+
+
+async def test_board_deleted_while_a_category_is_created_is_a_404_not_a_500(
+    editor_client, board, db, monkeypatch, _db_engine
+):
+    """The board goes (another device deleted it) between the membership check and the insert:
+    the foreign key refuses the row, which is a 404 like any other vanished board."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from easytodo.content import service
+    from easytodo.models import Board
+
+    check = service.require_board
+
+    async def check_then_delete(session, board_id, user, action):
+        found = await check(session, board_id, user, action)
+        async with AsyncSession(_db_engine) as other:
+            await other.execute(delete(Board).where(Board.id == board_id))
+            await other.commit()
+        return found
+
+    monkeypatch.setattr(service, "require_board", check_then_delete)
+
+    r = await editor_client.post(
+        f"/boards/{board.id}/categories", data={"name": "Bakery"}, headers=HX
+    )
+
+    assert r.status_code == 404
+    assert toast(r) == "Board not found."
+
+
+async def test_reorder_locks_the_categories_in_id_order(editor_client, board, db, monkeypatch):
+    """Two reorders at once take the row locks in the same order, so they cannot deadlock."""
+    from easytodo.content import service
+
+    first = await create_category(db, board, "Dairy", 0)
+    second = await create_category(db, board, "Bakery", 1)
+    statements: list[str] = []
+    execute = service.AsyncSession.scalars
+
+    async def spy(self, statement, *args, **kwargs):
+        statements.append(str(statement))
+        return await execute(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(service.AsyncSession, "scalars", spy)
+
+    r = await editor_client.put(
+        f"/boards/{board.id}/categories/order", data={"ids": [second.id, first.id]}, headers=HX
+    )
+
+    assert r.status_code == 204
+    [locking] = [s for s in statements if "FOR UPDATE" in s]
+    assert "ORDER BY categories.id" in locking
