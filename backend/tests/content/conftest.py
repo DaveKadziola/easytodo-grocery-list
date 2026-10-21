@@ -10,7 +10,15 @@ from helpers import login
 from sqlalchemy import select
 
 from easytodo.content import service
-from easytodo.models import Board, BoardMember, BoardRole, Category, Item
+from easytodo.models import (
+    Attachment,
+    Board,
+    BoardMember,
+    BoardRole,
+    Category,
+    ChecklistEntry,
+    Item,
+)
 from easytodo.realtime.events import BoardEvent, current_origin
 
 SignedInClient = Callable[[str], Awaitable[httpx.AsyncClient]]
@@ -77,14 +85,19 @@ def published(monkeypatch) -> list[tuple[tuple[BoardEvent, ...], str | None]]:
 
 
 @pytest.fixture
-def content_snapshot(db) -> Callable[[], Awaitable[tuple[list, list]]]:
-    """``await content_snapshot()`` -> every category and item row, to show nothing changed."""
+def content_snapshot(db) -> Callable[[], Awaitable[tuple[list, list, list, list]]]:
+    """``await content_snapshot()`` -> every category, item, checklist entry and attachment row,
+    to show nothing changed."""
 
-    async def take() -> tuple[list, list]:
+    async def take() -> tuple[list, list, list, list]:
         categories = await db.execute(
-            select(Category.id, Category.board_id, Category.name, Category.position).order_by(
-                Category.id
-            )
+            select(
+                Category.id,
+                Category.board_id,
+                Category.name,
+                Category.position,
+                Category.archived_at,
+            ).order_by(Category.id)
         )
         items = await db.execute(
             select(
@@ -95,8 +108,23 @@ def content_snapshot(db) -> Callable[[], Awaitable[tuple[list, list]]]:
                 Item.description,
                 Item.is_done,
                 Item.done_at,
+                Item.deleted_at,
             ).order_by(Item.id)
         )
-        return categories.all(), items.all()
+        entries = await db.execute(
+            select(
+                ChecklistEntry.id,
+                ChecklistEntry.item_id,
+                ChecklistEntry.text,
+                ChecklistEntry.is_done,
+                ChecklistEntry.position,
+            ).order_by(ChecklistEntry.id)
+        )
+        attachments = await db.execute(
+            select(
+                Attachment.id, Attachment.item_id, Attachment.filename, Attachment.storage_key
+            ).order_by(Attachment.id)
+        )
+        return categories.all(), items.all(), entries.all(), attachments.all()
 
     return take

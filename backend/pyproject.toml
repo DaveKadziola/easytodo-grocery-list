@@ -47,5 +47,9 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 
+[tool.ruff.format]
+# Alembic writes the migrations (single quotes, its own layout); they are linted, not formatted.
+exclude = ["migrations/versions/*"]
+
 [tool.ruff.lint]
 extend-select = ["I", "UP"]

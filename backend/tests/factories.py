@@ -4,7 +4,18 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from easytodo.models import Board, BoardMember, BoardRole, Category, Item, User, UserStatus
+from easytodo.models import (
+    Board,
+    BoardMember,
+    BoardRole,
+    Category,
+    ChecklistEntry,
+    Item,
+    Notification,
+    NotificationKind,
+    User,
+    UserStatus,
+)
 from easytodo.security.passwords import hash_password
 
 DEFAULT_PASSWORD = "correct-horse-battery-staple"
@@ -18,6 +29,7 @@ async def create_user(
     is_admin: bool = False,
     must_change_password: bool = False,
     status: UserStatus = UserStatus.ACTIVE,
+    display_name: str | None = None,
 ) -> User:
     user = User(
         email=email,
@@ -25,6 +37,7 @@ async def create_user(
         is_admin=is_admin,
         must_change_password=must_change_password,
         status=status,
+        display_name=display_name,
     )
     db.add(user)
     await db.commit()
@@ -59,7 +72,13 @@ async def create_category(
 
 
 async def create_item(
-    db: AsyncSession, category: Category, name: str = "Milk", is_done: bool = False
+    db: AsyncSession,
+    category: Category,
+    name: str = "Milk",
+    is_done: bool = False,
+    *,
+    created_by: User | None = None,
+    description: str | None = None,
 ) -> Item:
     item = Item(
         board_id=category.board_id,
@@ -67,7 +86,38 @@ async def create_item(
         name=name,
         is_done=is_done,
         done_at=datetime.now(UTC) if is_done else None,
+        created_by=created_by.id if created_by else None,
+        description=description,
     )
     db.add(item)
     await db.commit()
     return item
+
+
+async def create_checklist_entry(
+    db: AsyncSession, item: Item, text: str = "Eggs", is_done: bool = False, position: int = 0
+) -> ChecklistEntry:
+    entry = ChecklistEntry(item_id=item.id, text=text, is_done=is_done, position=position)
+    db.add(entry)
+    await db.commit()
+    return entry
+
+
+async def create_notification(
+    db: AsyncSession,
+    user: User,
+    kind: NotificationKind = NotificationKind.MEMBER_JOINED,
+    message: str = "x joined “Groceries”.",
+    board: Board | None = None,
+    read: bool = False,
+) -> Notification:
+    notification = Notification(
+        user_id=user.id,
+        kind=kind,
+        message=message,
+        board_id=board.id if board else None,
+        read_at=datetime.now(UTC) if read else None,
+    )
+    db.add(notification)
+    await db.commit()
+    return notification

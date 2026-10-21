@@ -278,8 +278,9 @@ uv run alembic check                 # "No new upgrade operations detected."
 ```
 
 Read the generated file in `backend/migrations/versions/` before committing it: autogenerate
-does not see everything (renames, for one). CI runs `alembic upgrade head` and `alembic check`,
-and the test suite fails when the models and the migrations differ.
+does not see everything (renames, CHECK constraints on existing tables, a partial index's
+`WHERE`). CI runs `alembic upgrade head` and `alembic check`, and the test suite fails when the
+models and the migrations differ, server defaults included.
 
 The container applies the migrations itself: every time it starts, `deploy/entrypoint.sh` runs
 `alembic upgrade head` before starting the app (retrying while the database starts up). An update
