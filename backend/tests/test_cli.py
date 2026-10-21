@@ -13,21 +13,10 @@ from helpers import signed_in
 from sqlalchemy import func, select, update
 
 from easytodo.cli import main
-from easytodo.config import get_settings
 from easytodo.models import User, UserSession
 from easytodo.security.passwords import verify_password
 
 PASSWORD = "secret-password-1"
-
-
-@pytest.fixture
-def cli_env(monkeypatch, settings):
-    """The environment the CLI reads its settings from, pointing at the test database."""
-    monkeypatch.setenv("EASYTODO_DATABASE_URL", settings.database_url)
-    monkeypatch.setenv("EASYTODO_SECRET_KEY", settings.secret_key.get_secret_value())
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
 
 
 def stdin(monkeypatch, text: str) -> None:

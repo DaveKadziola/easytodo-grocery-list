@@ -1,6 +1,6 @@
 import asyncio
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack
 from pathlib import Path
 
@@ -17,7 +17,7 @@ from starlette.types import ASGIApp
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 import easytodo.models  # noqa: F401  (registers every table on Base.metadata)
-from easytodo.config import Settings
+from easytodo.config import Settings, get_settings
 from easytodo.db import Base
 from easytodo.mail.mailer import SentMail
 from easytodo.main import create_app
@@ -85,6 +85,16 @@ def _test_settings(**overrides: object) -> Settings:
 @pytest.fixture
 def settings() -> Settings:
     return _test_settings()
+
+
+@pytest.fixture
+def cli_env(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> Iterator[None]:
+    """The environment the CLI reads its settings from, pointing at the test database."""
+    monkeypatch.setenv("EASYTODO_DATABASE_URL", settings.database_url)
+    monkeypatch.setenv("EASYTODO_SECRET_KEY", settings.secret_key.get_secret_value())
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.fixture

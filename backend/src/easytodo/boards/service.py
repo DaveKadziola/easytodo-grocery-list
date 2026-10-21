@@ -58,12 +58,19 @@ def _clean_name(name: str) -> str:
     return name
 
 
-async def create_board(db: AsyncSession, owner: User, name: str) -> Board:
-    """A new board with ``owner`` as its owner member (committed with anything pending)."""
+async def add_board(db: AsyncSession, owner: User, name: str) -> Board:
+    """A new board with ``owner`` as its owner member, in ``db``'s open transaction (not
+    committed: for callers that fill the board before they commit)."""
     board = Board(name=_clean_name(name), owner_id=owner.id)
     db.add(board)
     await db.flush()
     db.add(BoardMember(board_id=board.id, user_id=owner.id, role=BoardRole.OWNER))
+    return board
+
+
+async def create_board(db: AsyncSession, owner: User, name: str) -> Board:
+    """A new board with ``owner`` as its owner member (committed with anything pending)."""
+    board = await add_board(db, owner, name)
     await commit_and_publish(db)  # nobody can be watching a board that did not exist
     return board
 
