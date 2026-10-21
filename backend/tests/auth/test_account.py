@@ -276,6 +276,16 @@ async def test_must_change_password_flag_cleared_after_change(client, db):
     assert (await client.get("/account")).status_code == 200
 
 
+async def test_only_a_forced_change_refuses_the_current_password(client, db):
+    # The temporary-password check (Task 15) applies to forced changes only.
+    await create_user(db, EMAIL)
+    await sign_in(client)
+
+    r = await client.post("/account/password", data=change_form(new=DEFAULT_PASSWORD))
+
+    assert r.status_code == 303 and r.headers["location"] == "/account"
+
+
 async def test_change_password_form_is_plain_when_not_forced(client, db):
     await create_user(db, EMAIL)
     await sign_in(client)

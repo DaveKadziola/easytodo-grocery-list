@@ -95,6 +95,9 @@ async def change_password(
         if new_password != new_password_confirm:
             raise ValidationFailed("Passwords do not match.")
         validate_password(new_password)
+        # A forced change replaces a password someone else knows (an admin's temporary one).
+        if user.must_change_password and verify_password(user.password_hash, new_password):
+            raise ValidationFailed("Choose a new password, not the temporary one.")
     except AppError as exc:
         return render(request, "account/password.html", {"error": exc.message}, status_code=400)
     user.password_hash = hash_password(new_password)

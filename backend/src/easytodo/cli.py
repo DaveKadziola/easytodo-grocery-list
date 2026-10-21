@@ -10,15 +10,16 @@ import argparse
 import asyncio
 import getpass
 import sys
+from datetime import UTC
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.auth.service import normalize_email
 from easytodo.config import get_settings
 from easytodo.db import create_engine
 from easytodo.errors import ValidationFailed
-from easytodo.models import User
+from easytodo.models import User, UserSession
 from easytodo.security.passwords import hash_password, validate_password
 
 
@@ -58,8 +59,10 @@ async def _create_admin(email: str, *, password_stdin: bool) -> str:
             if user is not None and user.is_admin:
                 return f"{email} is already an admin."
             if user is not None:
+                warning = await _promotion_warning(db, user, password_stdin=password_stdin)
                 user.is_admin = True
                 await db.commit()
+                print(warning, file=sys.stderr)
                 return f"{email} is now an admin. Their password is unchanged."
             password = _read_password(from_stdin=password_stdin)
             validate_password(password)
@@ -68,6 +71,24 @@ async def _create_admin(email: str, *, password_stdin: bool) -> str:
             return f"Created the admin account {email}."
     finally:
         await engine.dispose()
+
+
+async def _promotion_warning(db: AsyncSession, user: User, *, password_stdin: bool) -> str:
+    """What to tell the operator when an existing account is promoted: registration is open by
+    default, so someone else may have registered the address first."""
+    sessions = await db.scalar(
+        select(func.count())
+        .select_from(UserSession)
+        .where(UserSession.user_id == user.id, UserSession.expires_at > func.now())
+    )
+    warning = (
+        f"warning: {user.email} already existed (registered "
+        f"{user.created_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC, {sessions} active session(s)); "
+        "it was promoted with its existing password."
+    )
+    if password_stdin:
+        warning += " The password from standard input was not used."
+    return warning
 
 
 def _read_password(*, from_stdin: bool) -> str:

@@ -257,6 +257,31 @@ async def test_created_user_must_change_password(admin_client, client_factory, d
     assert r.headers["location"] == "/account/password"
 
 
+async def test_forced_change_refuses_the_temporary_password(client_factory, db):
+    user, password = await service.create_user_with_temp_password(db, "new@example.com")
+    newcomer = await client_factory()
+    await login(newcomer, "new@example.com", password)
+
+    def change(new: str) -> dict[str, str]:
+        return {"current_password": password, "new_password": new, "new_password_confirm": new}
+
+    r = await newcomer.post("/account/password", data=change(password))
+
+    assert r.status_code == 400
+    assert "Choose a new password, not the temporary one." in r.text
+    await db.refresh(user)
+    assert user.must_change_password is True
+    assert verify_password(user.password_hash, password)
+
+    r = await newcomer.post("/account/password", data=change("a-password-of-my-own"))
+
+    assert r.status_code == 303
+    assert r.headers["location"] == "/account"
+    await db.refresh(user)
+    assert user.must_change_password is False
+    assert verify_password(user.password_hash, "a-password-of-my-own")
+
+
 async def test_created_account_can_be_an_admin(admin_client, db):
     r = await admin_client.post(
         "/admin/users", data={"email": "boss@example.com", "is_admin": "true"}
