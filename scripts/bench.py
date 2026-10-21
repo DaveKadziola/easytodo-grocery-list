@@ -7,6 +7,12 @@ a Markdown table of p50/p95 latencies in milliseconds:
     add_item      legacy: POST /v1/add_task/          v2: POST /categories/{id}/items
     toggle_item   legacy: PUT /v1/toggle_task/{id}    v2: POST /items/{id}/toggle
 
+v2 gets two more rows. view_board_content is GET /boards/{id}/content, the board fragment the
+page fetches again once its WebSocket is open (so a board view in the browser makes both
+requests); it runs right after view_board, on the same board. ws_event is the time from sending a
+toggle until a second client (another login, with the board's WebSocket open) receives the event,
+over 100 changes.
+
 Every scenario discards 10 warm-up requests before the measured ones. The scenarios run in the
 order above on the same seed, so add_item grows the board before toggle_item runs.
 
@@ -20,21 +26,29 @@ For --target v2, --base-url must be the app's EASYTODO_PUBLIC_URL (CSRF checks t
 import argparse
 import asyncio
 import itertools
+import json
 import math
 import re
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
+from websockets.asyncio.client import ClientConnection, connect
 
 WARMUP_REQUESTS = 10
+EVENT_TRIALS = 100
+EVENT_TIMEOUT_S = 5
 LEGACY_HEADERS = {"Accept": "application/vnd.myapi.v1+json", "Content-Type": "application/json"}
 CSRF_COOKIE = "easytodo_csrf"
 CSRF_HEADER = "X-CSRF-Token"
 CSRF_FIELD = "csrf_token"
+SESSION_COOKIE = "easytodo_session"
+CLIENT_ID_HEADER = "X-Client-Id"
+CLIENT_ID = "bench"  # the browser tab making the changes
+SECOND_CLIENT_ID = "bench-second-client"  # the tab whose socket waits for them
 
 
 def percentile(values: list[float], p: float) -> float:
@@ -123,27 +137,53 @@ class LegacyTarget:
         await self._api("PUT", f"/v1/toggle_task/{item_id}", {"is_done": done})
 
 
-class V2Target:
-    """v2: FastAPI + HTMX app; logs in through the form and uses the fragment routes."""
+def origin_of(client: httpx.AsyncClient) -> str:
+    base = client.base_url
+    return f"{base.scheme}://{base.netloc.decode()}"
 
-    def __init__(self, client: httpx.AsyncClient, *, email: str, password: str) -> None:
+
+async def log_in(client: httpx.AsyncClient, email: str, password: str) -> None:
+    """Sign ``client`` in through the v2 login form; it then sends what the browser sends on
+    every change (the CSRF header and the Origin)."""
+    client.headers["Origin"] = origin_of(client)
+    (await client.get("/login")).raise_for_status()
+    token = client.cookies.get(CSRF_COOKIE)
+    if token is None:
+        raise RuntimeError(f"GET /login did not set the {CSRF_COOKIE} cookie")
+    form = {"email": email, "password": password, CSRF_FIELD: token}
+    response = await client.post("/login", data=form)
+    if response.status_code != 303:
+        raise RuntimeError(f"Login failed: HTTP {response.status_code}")
+    client.headers[CSRF_HEADER] = token
+
+
+async def _received(socket: ClientConnection) -> tuple[float, str]:
+    """The next message on ``socket``, with the ``perf_counter`` time it arrived at."""
+    message = await socket.recv()
+    return time.perf_counter(), message
+
+
+class V2Target:
+    """v2: FastAPI + HTMX app; logs in through the form and uses the fragment routes.
+    ``second_client`` is only used to sign in a second time, for the board socket of ws_event."""
+
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        second_client: httpx.AsyncClient,
+        *,
+        email: str,
+        password: str,
+    ) -> None:
         self.client = client
+        self.second_client = second_client
         self.email = email
         self.password = password
         self.board_id: int | None = None
 
     async def _login(self) -> None:
-        base = self.client.base_url
-        self.client.headers["Origin"] = f"{base.scheme}://{base.netloc.decode()}"
-        (await self.client.get("/login")).raise_for_status()
-        token = self.client.cookies.get(CSRF_COOKIE)
-        if token is None:
-            raise RuntimeError(f"GET /login did not set the {CSRF_COOKIE} cookie")
-        form = {"email": self.email, "password": self.password, CSRF_FIELD: token}
-        response = await self.client.post("/login", data=form)
-        if response.status_code != 303:
-            raise RuntimeError(f"Login failed: HTTP {response.status_code}")
-        self.client.headers[CSRF_HEADER] = token
+        await log_in(self.client, self.email, self.password)
+        self.client.headers[CLIENT_ID_HEADER] = CLIENT_ID  # as app.js sends it from each tab
 
     async def _post(self, path: str, **form: str) -> httpx.Response:
         response = await self.client.post(path, data=form)
@@ -161,8 +201,12 @@ class V2Target:
 
         category_ids = []
         for c in range(categories):
-            response = await self._post(f"/boards/{self.board_id}/categories", name=f"cat {c}")
-            category_id = int(re.search(r'id="category-(\d+)"', response.text)[1])
+            path = f"/boards/{self.board_id}/categories"
+            response = await self._post(path, name=f"cat {c}")
+            match = re.search(r'id="category-(\d+)"', response.text)
+            if match is None:
+                raise RuntimeError(f'POST {path} returned no id="category-N" fragment')
+            category_id = int(match[1])
             category_ids.append(category_id)
             for i in range(items):
                 await self._post(f"/categories/{category_id}/items", name=f"item {c}-{i}")
@@ -179,15 +223,43 @@ class V2Target:
     async def view_board(self) -> None:
         (await self.client.get(f"/boards/{self.board_id}")).raise_for_status()
 
+    async def view_board_content(self) -> None:
+        (await self.client.get(f"/boards/{self.board_id}/content")).raise_for_status()
+
     async def add_item(self, category_id: int, name: str) -> None:
         await self._post(f"/categories/{category_id}/items", name=name)
 
     async def toggle_item(self, item_id: int) -> None:
         await self._post(f"/items/{item_id}/toggle")
 
+    async def event_latencies(self, item_ids: Iterator[int], trials: int) -> list[float]:
+        """ms from sending a toggle until the board socket of a second client (another login
+        of the same account, as on a second phone) has its event; after 10 warm-up changes."""
+        await log_in(self.second_client, self.email, self.password)
+        origin = origin_of(self.second_client)
+        url = f"ws{origin.removeprefix('http')}/ws/boards/{self.board_id}"
+        cookie = {"Cookie": f"{SESSION_COOKIE}={self.second_client.cookies[SESSION_COOKIE]}"}
+        samples = []
+        async with connect(
+            f"{url}?client_id={SECOND_CLIENT_ID}", origin=origin, additional_headers=cookie
+        ) as socket:
+            for trial in range(WARMUP_REQUESTS + trials):
+                receiving = asyncio.create_task(_received(socket))
+                try:
+                    started = time.perf_counter()
+                    await self.toggle_item(next(item_ids))
+                    received_at, message = await asyncio.wait_for(receiving, EVENT_TIMEOUT_S)
+                finally:
+                    receiving.cancel()  # when the toggle failed
+                if json.loads(message).get("board_id") != self.board_id:
+                    raise RuntimeError(f"Expected an event of board {self.board_id}: {message}")
+                if trial >= WARMUP_REQUESTS:
+                    samples.append((received_at - started) * 1000)
+        return samples
+
 
 async def run_scenarios(
-    target: Target, *, requests: int, categories: int, items: int
+    target: Target, *, requests: int, categories: int, items: int, events: int = EVENT_TRIALS
 ) -> dict[str, list[float]]:
     seeded = await target.seed(categories, items)
     category_ids = itertools.cycle(seeded.category_ids)
@@ -200,8 +272,14 @@ async def run_scenarios(
     async def toggle_item() -> None:
         await target.toggle_item(next(item_ids))
 
-    actions = {"view_board": target.view_board, "add_item": add_item, "toggle_item": toggle_item}
-    return {name: await measure(action, requests) for name, action in actions.items()}
+    actions: dict[str, Callable[[], Awaitable[None]]] = {"view_board": target.view_board}
+    if isinstance(target, V2Target):
+        actions["view_board_content"] = target.view_board_content
+    actions |= {"add_item": add_item, "toggle_item": toggle_item}
+    results = {name: await measure(action, requests) for name, action in actions.items()}
+    if isinstance(target, V2Target):
+        results["ws_event"] = await target.event_latencies(item_ids, events)
+    return results
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -221,12 +299,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 async def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
-    async with httpx.AsyncClient(base_url=args.base_url, timeout=30) as client:
+    async with (
+        httpx.AsyncClient(base_url=args.base_url, timeout=30) as client,
+        httpx.AsyncClient(base_url=args.base_url, timeout=30) as second_client,
+    ):
         target: Target
         if args.target == "legacy":
             target = LegacyTarget(client)
         else:
-            target = V2Target(client, email=args.email, password=args.password)
+            target = V2Target(client, second_client, email=args.email, password=args.password)
         results = await run_scenarios(
             target, requests=args.requests, categories=args.categories, items=args.items
         )

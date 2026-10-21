@@ -4,7 +4,6 @@
 .superpowers
 .env
 .env.*
-legacy
 docs
 scripts
 bin

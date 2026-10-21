@@ -20,8 +20,8 @@ from easytodo.models import Board, BoardMember, BoardRole, Category, Item
 
 SCHEMA = "legacy_t"
 
-# The v1 tables as in legacy/v1/ddl/3_3-ddl_prod.sql (columns, defaults, constraints), without the
-# triggers, in a schema of the test database.
+# The v1 tables as in ddl/3_3-ddl_prod.sql of the git tag legacy-v1 (columns, defaults,
+# constraints), without the triggers, in a schema of the test database.
 LEGACY_DDL = f"""
 CREATE SCHEMA {SCHEMA};
 CREATE TABLE {SCHEMA}.categories (

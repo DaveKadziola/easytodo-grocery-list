@@ -1,11 +1,13 @@
 """Administration from the command line, with the app's settings (``EASYTODO_*``)::
 
     python -m easytodo.cli create-admin --email you@example.com [--password-stdin]
-    python -m easytodo.cli import-legacy --legacy-dsn postgresql://user:pass@host:5432/todo_grocery
+    python -m easytodo.cli import-legacy --legacy-dsn postgresql://user@host:5432/todo_grocery
         --schema prod --owner-email you@example.com [--board-name NAME] [--legacy-tz ZONE]
 
 In the compose setup: ``docker compose exec app python -m easytodo.cli create-admin --email
-you@example.com``.
+you@example.com``. Keep the v1 database's password out of ``--legacy-dsn`` (shell history, the
+process list): pass it in ``PGPASSWORD`` (``docker compose exec -e PGPASSWORD app ...``) or
+``~/.pgpass``. docs/migration-from-v1.md walks through the import.
 """
 
 import argparse
@@ -55,7 +57,11 @@ def main(argv: list[str] | None = None) -> int:
         description="Copy the categories and tasks of a v1 database into a new board of an "
         "existing account. Every run makes another board.",
     )
-    import_cmd.add_argument("--legacy-dsn", required=True, help="the v1 database's DSN")
+    import_cmd.add_argument(
+        "--legacy-dsn",
+        required=True,
+        help="the v1 database's DSN, without the password (pass it in PGPASSWORD)",
+    )
     import_cmd.add_argument("--schema", required=True, help="the v1 schema to read, e.g. prod")
     import_cmd.add_argument(
         "--owner-email", required=True, help="the account that gets the board (it must exist)"
