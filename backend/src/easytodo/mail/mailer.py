@@ -20,6 +20,7 @@ from easytodo.config import Settings
 logger = logging.getLogger(__name__)
 
 SMTP_TIMEOUT_S = 10
+OUTBOX_SIZE = 100  # mails the console backend keeps
 _SUBJECT_PREFIX = "Subject: "
 
 # Plain text, not HTML, so nothing is escaped.
@@ -43,7 +44,8 @@ class SentMail:
 
 
 class ConsoleMailer:
-    """Sends nothing: logs each mail and keeps it in ``outbox`` (development and tests)."""
+    """Sends nothing: logs each mail and keeps the newest ``OUTBOX_SIZE`` in ``outbox``
+    (development and tests). Bounded, as a server left on this default backend runs for long."""
 
     def __init__(self) -> None:
         self.outbox: list[SentMail] = []
@@ -54,6 +56,7 @@ class ConsoleMailer:
             "Mail not sent (console backend)\nTo: %s\nSubject: %s\n\n%s", to, subject, body
         )
         self.outbox.append(SentMail(to, subject, body))
+        del self.outbox[:-OUTBOX_SIZE]  # drop the oldest beyond the limit
 
 
 class SmtpMailer:

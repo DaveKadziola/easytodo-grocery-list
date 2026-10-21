@@ -25,9 +25,15 @@ from easytodo.boards.permissions import Action, can, require_board
 from easytodo.boards.service import change_role, leave_board, list_members, remove_member
 from easytodo.errors import ValidationFailed
 from easytodo.models import BoardRole, User
+from easytodo.security.ratelimit import limit_user
 from easytodo.web import is_htmx, render
 
 router = APIRouter()
+
+# Each e-mail invite sends a mail, and anyone who signs up owns a board, so one inviter may send
+# at most this many per window (on any of their boards).
+EMAIL_INVITE_LIMIT = 20
+EMAIL_INVITE_WINDOW_S = 3600
 
 
 def _role(value: str) -> BoardRole:
@@ -77,6 +83,7 @@ async def invite(
 ) -> Response:
     """An e-mail invite when ``email`` is given, otherwise a link to share."""
     if email.strip():
+        limit_user(request, "invite-email", user.id, EMAIL_INVITE_LIMIT, EMAIL_INVITE_WINDOW_S)
         state = request.app.state
         sent = await create_email_invite(
             db, board_id, user, email, _role(role), state.mailer, state.settings

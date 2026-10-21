@@ -13,7 +13,14 @@ from jinja2 import DictLoader
 
 from easytodo.config import Settings
 from easytodo.mail import mailer
-from easytodo.mail.mailer import ConsoleMailer, SentMail, SmtpMailer, get_mailer, render_mail
+from easytodo.mail.mailer import (
+    OUTBOX_SIZE,
+    ConsoleMailer,
+    SentMail,
+    SmtpMailer,
+    get_mailer,
+    render_mail,
+)
 
 
 def smtp_settings(settings: Settings, **overrides: object) -> Settings:
@@ -32,6 +39,18 @@ async def test_console_mailer_logs_and_keeps_the_mail(caplog):
     [record] = caplog.records
     for text in ("friend@example.com", "Hello", "Line one\nLine two"):
         assert text in record.getMessage()
+
+
+async def test_console_outbox_keeps_only_the_newest_mails():
+    console = ConsoleMailer()
+
+    for n in range(OUTBOX_SIZE + 5):
+        await console.send(f"user{n}@example.com", "Hello", "Body\n")
+
+    # Bounded, so a server left on the console backend does not keep every mail in memory.
+    assert len(console.outbox) == OUTBOX_SIZE
+    assert console.outbox[0].to == "user5@example.com"
+    assert console.outbox[-1].to == f"user{OUTBOX_SIZE + 4}@example.com"
 
 
 def test_get_mailer_picks_the_configured_backend(settings):

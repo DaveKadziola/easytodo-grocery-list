@@ -5,7 +5,10 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import HTTPException, Request
 
+from easytodo.errors import TooManyRequests
+
 _SWEEP_INTERVAL_S = 60.0
+TOO_MANY_REQUESTS = "Too many requests. Try again later."
 
 
 class RateLimiter:
@@ -36,6 +39,17 @@ def rate_limit(scope: str, limit: int, window_s: int) -> Callable[[Request], Awa
     async def dependency(request: Request) -> None:
         client_ip = request.client.host if request.client else "unknown"
         if not request.app.state.rate_limiter.hit(f"{scope}:{client_ip}", limit, window_s):
-            raise HTTPException(429, "Too many requests. Try again later.")
+            raise HTTPException(429, TOO_MANY_REQUESTS)
 
     return dependency
+
+
+def limit_user(request: Request, scope: str, user_id: int, limit: int, window_s: int) -> None:
+    """Count one hit for ``user_id`` in ``scope``; ``TooManyRequests`` (429) once it exceeds
+    ``limit`` hits per ``window_s`` seconds.
+
+    For a signed-in action, called in the route when only some of its requests count. Keyed by
+    user, not IP, so people behind one address (a household, a proxy) do not share a budget.
+    """
+    if not request.app.state.rate_limiter.hit(f"{scope}:user:{user_id}", limit, window_s):
+        raise TooManyRequests(TOO_MANY_REQUESTS)

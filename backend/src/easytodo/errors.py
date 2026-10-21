@@ -43,6 +43,10 @@ class ValidationFailed(AppError):
     status_code = 422
 
 
+class TooManyRequests(AppError):
+    status_code = 429
+
+
 class NotAuthenticated(AppError):
     status_code = 401
 

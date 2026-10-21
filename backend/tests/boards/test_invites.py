@@ -12,6 +12,7 @@ from factories import DEFAULT_PASSWORD, create_board, create_user
 from helpers import login, signed_in, toast_message
 from sqlalchemy import func, select, update
 
+from easytodo.boards.invite_routes import EMAIL_INVITE_LIMIT
 from easytodo.boards.invites import INVITE_TTL, create_email_invite, create_link_invite
 from easytodo.mail.mailer import ConsoleMailer
 from easytodo.models import BoardInvite, BoardMember, BoardRole
@@ -22,6 +23,7 @@ from easytodo.security.tokens import hash_token
 INVALID = "This invite is no longer valid."
 OTHER_ADDRESS = "This invite was sent to a different email address."
 NO_PERMISSION = "You don't have permission to do that."
+TOO_MANY = "Too many requests. Try again later."
 HX = {"HX-Request": "true"}
 LINK = re.compile(r"http://testserver/invite/([A-Za-z0-9_-]+)")
 
@@ -249,6 +251,33 @@ async def test_email_invite_is_single_use(client_factory, db, mail_outbox):
     assert await role_of(db, board.id, friend.id) is None
     page = await owner_client.get(f"/boards/{board.id}/members")
     assert "friend@example.com" not in page.text  # no longer pending
+
+
+async def test_email_invites_are_rate_limited_per_inviter(client_factory, db, mail_outbox):
+    owner = await create_user(db, "owner@example.com")
+    other = await create_user(db, "other@example.com")
+    board = await create_board(db, owner, "Groceries")
+    second_board = await create_board(db, owner, "Hardware")
+    other_board = await create_board(db, other, "Garden")
+    owner_client = await signed_in(client_factory, "owner@example.com")
+    for n in range(EMAIL_INVITE_LIMIT):
+        await invite_by_email(owner_client, board.id, f"friend{n}@example.com")
+    over_limit = {"role": "editor", "email": "one-more@example.com"}
+
+    r = await owner_client.post(f"/boards/{board.id}/invites", data=over_limit, headers=HX)
+
+    assert r.status_code == 429
+    assert toast_message(r) == TOO_MANY
+    r = await owner_client.post(f"/boards/{second_board.id}/invites", data=over_limit)
+    assert r.status_code == 429  # the limit is the inviter's, on every board
+    assert TOO_MANY in r.text
+    assert len(mail_outbox) == EMAIL_INVITE_LIMIT  # the refused requests sent no mail
+    assert await count_invites(db) == EMAIL_INVITE_LIMIT  # and stored no invite
+    await invite_by_link(owner_client, board.id)  # a link invite sends no mail: not limited
+    # Another user (the test clients share one IP) has a limit of their own.
+    other_client = await signed_in(client_factory, "other@example.com")
+    await invite_by_email(other_client, other_board.id, "friend@example.com")
+    assert len(mail_outbox) == EMAIL_INVITE_LIMIT + 1
 
 
 async def test_email_invite_survives_a_mail_server_failure(client_factory, db, caplog):
