@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.auth.deps import CurrentUser, DbSession, FormField, require_user
+from easytodo.auth.reset import invalidate_reset_tokens
 from easytodo.auth.sessions import revoke_all_sessions, revoke_session, sessions_revoked
 from easytodo.auth.twofa import (
     ALREADY_ON,
@@ -98,6 +99,7 @@ async def change_password(
         return render(request, "account/password.html", {"error": exc.message}, status_code=400)
     user.password_hash = hash_password(new_password)
     user.must_change_password = False
+    await invalidate_reset_tokens(db, user.id)  # a reset link in the mailbox would override it
     revoked = await revoke_all_sessions(db, user.id, except_session_id=request.state.session.id)
     await commit_and_publish(db, *sessions_revoked(user.id, revoked))  # with the new hash
     response = RedirectResponse("/account", status_code=303)

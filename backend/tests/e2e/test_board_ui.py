@@ -170,7 +170,7 @@ def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, ope
     anonymous = browser.new_context(base_url=live_server.url)
     page = anonymous.new_page()
     problems = watch_console(page)
-    for path in ("/register", "/login"):
+    for path in ("/register", "/login", "/password/forgot"):
         page.goto(path)
         expect(page.get_by_role("heading", level=1)).to_be_visible()
     anonymous.close()

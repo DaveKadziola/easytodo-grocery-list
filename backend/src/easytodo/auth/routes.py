@@ -1,5 +1,5 @@
-"""Registration, login (password, then the code when 2FA is on) and logout pages, and the
-landing page (``/``)."""
+"""Registration, login (password, then the code when 2FA is on), password reset and logout
+pages, and the landing page (``/``)."""
 
 import re
 from typing import Annotated
@@ -17,6 +17,7 @@ from easytodo.auth.deps import (
     current_session,
     require_user,
 )
+from easytodo.auth.reset import get_valid_reset_token, request_password_reset, reset_password
 from easytodo.auth.service import authenticate, register_user
 from easytodo.auth.sessions import (
     clear_session_cookie,
@@ -33,7 +34,7 @@ from easytodo.auth.twofa import (
     count_failed_code,
     verify_second_factor,
 )
-from easytodo.errors import AppError, NotFound, TooManyRequests
+from easytodo.errors import AppError, NotFound, TooManyRequests, ValidationFailed
 from easytodo.models import User, UserSession
 from easytodo.realtime.events import commit_and_publish
 from easytodo.security.ratelimit import limit_user, rate_limit
@@ -180,6 +181,46 @@ async def second_factor(
     response = RedirectResponse("/login", status_code=303)
     clear_session_cookie(response)
     flash(response, "Too many invalid codes. Sign in again.", settings, level="error")
+    return response
+
+
+@router.get("/password/forgot")
+async def forgot_password_page(request: Request) -> Response:
+    return render(request, "auth/forgot.html", {})
+
+
+@router.post("/password/forgot", dependencies=[Depends(rate_limit("password-forgot", 5, 3600))])
+async def forgot_password(request: Request, db: DbSession, email: FormField = "") -> Response:
+    """The same answer whether or not the address has an account."""
+    state = request.app.state
+    await request_password_reset(db, email, state.mailer, state.settings)
+    notice = "If an account exists for that email, we've sent a reset link."
+    return render(request, "auth/forgot.html", {"notice": notice})
+
+
+@router.get("/password/reset/{token}")
+async def reset_password_page(request: Request, db: DbSession, token: str) -> Response:
+    await get_valid_reset_token(db, token)
+    return render(request, "auth/reset.html", {})
+
+
+@router.post("/password/reset/{token}")
+async def reset_password_form(
+    request: Request,
+    db: DbSession,
+    token: str,
+    new_password: FormField = "",
+    new_password_confirm: FormField = "",
+) -> Response:
+    await get_valid_reset_token(db, token)  # a dead link says so, whatever was typed
+    try:
+        if new_password != new_password_confirm:
+            raise ValidationFailed("Passwords do not match.")
+        await reset_password(db, token, new_password)
+    except ValidationFailed as exc:
+        return render(request, "auth/reset.html", {"error": exc.message}, status_code=400)
+    response = RedirectResponse("/login", status_code=303)
+    flash(response, "Password updated. Sign in with your new password.", request.app.state.settings)
     return response
 
 
