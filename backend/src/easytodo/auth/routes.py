@@ -1,13 +1,22 @@
-"""Registration, login and logout pages, and the landing page (``/``)."""
+"""Registration, login (password, then the code when 2FA is on) and logout pages, and the
+landing page (``/``)."""
 
 import re
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from easytodo.auth.deps import DbSession, FormField, current_session, require_user
+from easytodo.auth.deps import (
+    SECOND_FACTOR_PATH,
+    DbSession,
+    FormField,
+    PendingSignIn,
+    current_session,
+    require_user,
+)
 from easytodo.auth.service import authenticate, register_user
 from easytodo.auth.sessions import (
     clear_session_cookie,
@@ -16,11 +25,17 @@ from easytodo.auth.sessions import (
     sessions_revoked,
     set_session_cookie,
 )
+from easytodo.auth.twofa import (
+    INVALID_CODE,
+    MAX_CODE_FAILURES,
+    count_failed_code,
+    verify_second_factor,
+)
 from easytodo.errors import AppError, NotFound
 from easytodo.models import User, UserSession
 from easytodo.realtime.events import commit_and_publish
 from easytodo.security.ratelimit import rate_limit
-from easytodo.web import render
+from easytodo.web import flash, render
 
 router = APIRouter()
 
@@ -50,14 +65,14 @@ async def require_registration_open(request: Request) -> None:
 
 
 async def _signed_in_redirect(
-    request: Request, db: AsyncSession, user: User, target: str
+    request: Request, db: AsyncSession, user: User, target: str, *, mfa_pending: bool = False
 ) -> Response:
     """A 303 to ``target`` that carries the cookie of a new session (a new token each time)."""
     settings = request.app.state.settings
     raw_token, _ = await create_session(
         db,
         user,
-        mfa_pending=False,
+        mfa_pending=mfa_pending,
         user_agent=request.headers.get("user-agent"),
         ip=request.client.host if request.client else None,
         settings=settings,
@@ -115,7 +130,48 @@ async def login(
     except AppError as exc:
         context = {"email": email, "error": exc.message, "next_path": _kept_next(next_)}
         return render(request, "auth/login.html", context, status_code=400)
+    if user.totp_enabled:  # a session that only reaches the second step, which keeps next
+        kept = _kept_next(next_)
+        target = SECOND_FACTOR_PATH + (f"?next={quote(kept, safe='')}" if kept else "")
+        return await _signed_in_redirect(request, db, user, target, mfa_pending=True)
     return await _signed_in_redirect(request, db, user, safe_next(next_))
+
+
+@router.get(SECOND_FACTOR_PATH)
+async def second_factor_page(request: Request, pending: PendingSignIn) -> Response:
+    if pending is None:
+        return RedirectResponse("/login", status_code=303)
+    return render(request, "auth/login_2fa.html", {})
+
+
+@router.post(SECOND_FACTOR_PATH, dependencies=[Depends(rate_limit("login-2fa", 10, 300))])
+async def second_factor(
+    request: Request,
+    db: DbSession,
+    pending: PendingSignIn,
+    code: FormField = "",
+    next_: NextParam = None,
+) -> Response:
+    """A right code swaps the pending session for a full one (a new token); the fifth wrong one
+    ends the pending session, so the password has to be entered again."""
+    if pending is None:
+        return RedirectResponse("/login", status_code=303)
+    user, session = pending
+    settings = request.app.state.settings
+    if await verify_second_factor(db, user, code, settings):
+        await revoke_session(db, session.id)
+        await commit_and_publish(db, *sessions_revoked(user.id, [session.id]))
+        return await _signed_in_redirect(request, db, user, _kept_next(next_) or "/boards")
+    failures = await count_failed_code(db, session.id)  # None: signed out from elsewhere meanwhile
+    if failures is not None and failures < MAX_CODE_FAILURES:
+        await db.commit()
+        return render(request, "auth/login_2fa.html", {"error": INVALID_CODE}, status_code=400)
+    await revoke_session(db, session.id)
+    await commit_and_publish(db, *sessions_revoked(user.id, [session.id]))
+    response = RedirectResponse("/login", status_code=303)
+    clear_session_cookie(response)
+    flash(response, "Too many invalid codes. Sign in again.", settings, level="error")
+    return response
 
 
 @router.post("/logout")

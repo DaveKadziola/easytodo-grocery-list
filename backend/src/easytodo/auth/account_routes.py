@@ -1,17 +1,27 @@
-"""The account pages: changing the password and managing the signed-in devices."""
+"""The account pages: changing the password, two-factor authentication and managing the
+signed-in devices."""
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from markupsafe import Markup
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.auth.deps import CurrentUser, DbSession, FormField, require_user
 from easytodo.auth.sessions import revoke_all_sessions, revoke_session, sessions_revoked
+from easytodo.auth.twofa import (
+    begin_setup,
+    confirm_setup,
+    disable_2fa,
+    regenerate_recovery_codes,
+)
 from easytodo.errors import AppError, NotFound, ValidationFailed
-from easytodo.models import UserSession
+from easytodo.models import User, UserSession
 from easytodo.realtime.events import commit_and_publish
+from easytodo.security.crypto import decrypt
 from easytodo.security.passwords import (
     MAX_PASSWORD_LENGTH,
     hash_password,
@@ -19,22 +29,44 @@ from easytodo.security.passwords import (
     verify_password,
 )
 from easytodo.security.ratelimit import rate_limit
+from easytodo.security.totp import provisioning_uri, qr_svg
 from easytodo.web import flash, render
 
 router = APIRouter(prefix="/account")
 
 _MAX_SESSION_ID = 2**63 - 1  # user_sessions.id is a BigInteger; a larger id cannot exist
 
+# Every form that checks the current password shares this budget. The limiter comes after
+# require_user, so only signed-in requests use it up: a wrong password is a password guess for
+# whoever holds a stolen session.
+PasswordGuesses = Annotated[None, Depends(rate_limit("password-change", 10, 900))]
 
-@router.get("")
-async def account_page(request: Request, db: DbSession, user: CurrentUser) -> Response:
+
+async def _account_page(
+    request: Request,
+    db: AsyncSession,
+    user: User,
+    context: dict[str, Any],
+    status_code: int = 200,
+) -> HTMLResponse:
     sessions = await db.scalars(
         select(UserSession)
         .where(UserSession.user_id == user.id, UserSession.expires_at > datetime.now(UTC))
         .order_by(UserSession.last_seen_at.desc(), UserSession.id.desc())
     )
-    context = {"sessions": list(sessions), "current_session_id": request.state.session.id}
-    return render(request, "account/index.html", context)
+    context = {"sessions": list(sessions), "current_session_id": request.state.session.id} | context
+    return render(request, "account/index.html", context, status_code=status_code)
+
+
+def _no_store(response: HTMLResponse) -> HTMLResponse:
+    """For a page with a TOTP secret or recovery codes: no copy is kept in any cache."""
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.get("")
+async def account_page(request: Request, db: DbSession, user: CurrentUser) -> Response:
+    return await _account_page(request, db, user, {})
 
 
 @router.get("/password", dependencies=[Depends(require_user)])
@@ -42,14 +74,12 @@ async def password_page(request: Request) -> Response:
     return render(request, "account/password.html", {})
 
 
-# The limiter comes after require_user, so only signed-in requests use up the budget: a wrong
-# "current password" is a password guess for whoever holds a stolen session.
 @router.post("/password")
 async def change_password(
     request: Request,
     db: DbSession,
     user: CurrentUser,
-    _: Annotated[None, Depends(rate_limit("password-change", 10, 900))],
+    _: PasswordGuesses,
     current_password: FormField = "",
     new_password: FormField = "",
     new_password_confirm: FormField = "",
@@ -71,6 +101,73 @@ async def change_password(
     response = RedirectResponse("/account", status_code=303)
     flash(response, "Password changed.", request.app.state.settings)
     return response
+
+
+def _setup_page(
+    request: Request, user: User, secret: str, error: str | None = None, status_code: int = 200
+) -> HTMLResponse:
+    # segno's SVG holds only the QR code's paths (the URI is encoded in them), so it goes in as is.
+    qr_code = Markup(qr_svg(provisioning_uri(secret, user.email)))
+    context = {"secret": secret, "qr_code": qr_code, "error": error}
+    return _no_store(render(request, "account/2fa_setup.html", context, status_code=status_code))
+
+
+@router.get("/2fa/setup")
+async def two_factor_setup_page(request: Request, db: DbSession, user: CurrentUser) -> Response:
+    """A new secret each time: the QR code to scan, and the key to type in instead."""
+    return _setup_page(request, user, await begin_setup(db, user, request.app.state.settings))
+
+
+@router.post("/2fa/setup")
+async def confirm_two_factor_setup(
+    request: Request, db: DbSession, user: CurrentUser, code: FormField = ""
+) -> Response:
+    settings = request.app.state.settings
+    try:
+        codes = await confirm_setup(db, user, code, settings)
+    except ValidationFailed as exc:
+        # The secret already scanned stays, so another try needs no new scan.
+        secret = (
+            decrypt(user.totp_secret_enc, settings)
+            if user.totp_secret_enc
+            else await begin_setup(db, user, settings)
+        )
+        return _setup_page(request, user, secret, error=exc.message, status_code=400)
+    return _no_store(render(request, "account/2fa_recovery.html", {"codes": codes}))
+
+
+@router.post("/2fa/disable")
+async def disable_two_factor(
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    _: PasswordGuesses,
+    password: FormField = "",
+    code: FormField = "",
+) -> Response:
+    settings = request.app.state.settings
+    try:
+        await disable_2fa(db, user, password, code, settings)
+    except ValidationFailed as exc:
+        return await _account_page(request, db, user, {"twofa_error": exc.message}, 400)
+    response = RedirectResponse("/account", status_code=303)
+    flash(response, "Two-factor authentication is off.", settings)
+    return response
+
+
+@router.post("/2fa/recovery-codes")
+async def new_recovery_codes(
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    _: PasswordGuesses,
+    password: FormField = "",
+) -> Response:
+    try:
+        codes = await regenerate_recovery_codes(db, user, password)
+    except ValidationFailed as exc:
+        return await _account_page(request, db, user, {"twofa_error": exc.message}, 400)
+    return _no_store(render(request, "account/2fa_recovery.html", {"codes": codes}))
 
 
 @router.post("/sessions/revoke-others")

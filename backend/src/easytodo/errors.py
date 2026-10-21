@@ -3,7 +3,7 @@
 HTMX requests get an empty body with ``HX-Reswap: none`` and an ``HX-Trigger`` toast (plus
 ``resync`` for ``NotFound``, so the client reloads a board that changed elsewhere); other
 requests get the error page, or a redirect to the login page for ``NotAuthenticated`` (and to
-the password form for ``PasswordChangeRequired``).
+the location of a ``RedirectRequired``: the password form, or the second sign-in step).
 """
 
 import json
@@ -54,14 +54,28 @@ class NotAuthenticated(AppError):
         super().__init__(message)
 
 
-class PasswordChangeRequired(AppError):
-    """A signed-in user who must pick a new password asked for a page; they go to ``location``."""
+class RedirectRequired(AppError):
+    """A page the user cannot have yet: they go to ``location`` first."""
 
     status_code = 303
 
-    def __init__(self, location: str) -> None:
-        super().__init__("You must change your password first.")
+    def __init__(self, message: str, location: str) -> None:
+        super().__init__(message)
         self.location = location
+
+
+class PasswordChangeRequired(RedirectRequired):
+    """A signed-in user who must pick a new password asked for a page; they go to ``location``."""
+
+    def __init__(self, location: str) -> None:
+        super().__init__("You must change your password first.", location)
+
+
+class SecondFactorRequired(RedirectRequired):
+    """A sign-in still waiting for its second factor asked for a page; it goes to ``location``."""
+
+    def __init__(self, location: str) -> None:
+        super().__init__("Enter your two-factor code first.", location)
 
 
 async def app_error_handler(request: Request, exc: AppError) -> Response:
@@ -70,7 +84,7 @@ async def app_error_handler(request: Request, exc: AppError) -> Response:
             return Response(status_code=401, headers={"HX-Redirect": "/login"})
         target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
         return RedirectResponse(f"/login?next={quote(target, safe='')}", status_code=303)
-    if isinstance(exc, PasswordChangeRequired):
+    if isinstance(exc, RedirectRequired):
         if is_htmx(request):
             return Response(headers={"HX-Redirect": exc.location})
         return RedirectResponse(exc.location, status_code=303)
