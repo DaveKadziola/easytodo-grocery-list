@@ -18,7 +18,7 @@ from easytodo.auth.deps import (
     require_user,
 )
 from easytodo.auth.reset import get_valid_reset_token, request_password_reset, reset_password
-from easytodo.auth.service import authenticate, register_user
+from easytodo.auth.service import authenticate, normalize_email, register_user
 from easytodo.auth.sessions import (
     clear_session_cookie,
     create_session,
@@ -34,10 +34,11 @@ from easytodo.auth.twofa import (
     count_failed_code,
     verify_second_factor,
 )
+from easytodo.boards.invites import INVITE_OTHER_EMAIL, get_valid_invite
 from easytodo.boards.routes import LAST_BOARD_COOKIE
 from easytodo.boards.service import landing_board_id
 from easytodo.errors import AppError, NotFound, TooManyRequests, ValidationFailed
-from easytodo.models import User, UserSession
+from easytodo.models import BoardInvite, User, UserSession
 from easytodo.realtime.events import commit_and_publish
 from easytodo.security.ratelimit import limit_user, rate_limit
 from easytodo.web import flash, render
@@ -64,9 +65,26 @@ def safe_next(value: str | None) -> str:
     return "/"
 
 
-async def require_registration_open(request: Request) -> None:
-    if not request.app.state.settings.registration_open:
+# An invite's page, as a ``next`` that may open a closed registration (new_token's alphabet).
+_INVITE_PAGE = re.compile(r"/invite/([A-Za-z0-9_-]+)")
+
+
+async def require_registration_allowed(
+    request: Request, db: DbSession, next_: NextParam = None
+) -> BoardInvite | None:
+    """Registration is open (``None``), or it is closed and ``next`` is the page of an invite
+    that is still valid: that invite, so that the person it invites can sign up. Otherwise
+    ``NotFound``, which for a dead invite says so. Checked on the submit too: the invite may have
+    been revoked since the page was shown."""
+    if request.app.state.settings.registration_open:
+        return None
+    page = _INVITE_PAGE.fullmatch(safe_next(next_))
+    if page is None:
         raise NotFound()
+    return await get_valid_invite(db, page[1])
+
+
+RegistrationInvite = Annotated[BoardInvite | None, Depends(require_registration_allowed)]
 
 
 async def _signed_in_redirect(
@@ -93,23 +111,31 @@ def _kept_next(next_: str | None) -> str | None:
     return None if target == "/" else target
 
 
-@router.get("/register", dependencies=[Depends(require_registration_open)])
-async def register_page(request: Request, next_: NextParam = None) -> Response:
-    return render(request, "auth/register.html", {"email": "", "next_path": _kept_next(next_)})
+@router.get("/register")
+async def register_page(
+    request: Request, invite: RegistrationInvite, next_: NextParam = None
+) -> Response:
+    # An e-mail invite's page: its address, which the account must have.
+    email = invite.email if invite is not None and invite.email is not None else ""
+    return render(request, "auth/register.html", {"email": email, "next_path": _kept_next(next_)})
 
 
-@router.post(
-    "/register",
-    dependencies=[Depends(require_registration_open), Depends(rate_limit("register", 10, 3600))],
-)
+@router.post("/register", dependencies=[Depends(rate_limit("register", 10, 3600))])
 async def register(
     request: Request,
     db: DbSession,
+    invite: RegistrationInvite,
     email: FormField = "",
     password: FormField = "",
     next_: NextParam = None,
 ) -> Response:
     try:
+        if (  # an e-mail invite opens sign-up for its own address only
+            invite is not None
+            and invite.email is not None
+            and normalize_email(email) != invite.email
+        ):
+            raise ValidationFailed(INVITE_OTHER_EMAIL)
         user = await register_user(db, email, password)
     except AppError as exc:
         context = {"email": email, "error": exc.message, "next_path": _kept_next(next_)}

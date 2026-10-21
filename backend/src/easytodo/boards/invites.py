@@ -23,6 +23,7 @@ from easytodo.security.tokens import hash_token, new_token
 
 INVITE_TTL = timedelta(days=7)
 INVITE_INVALID = "This invite is no longer valid."
+INVITE_OTHER_EMAIL = "This invite was sent to a different email address."
 ROLE_CHOICE = "Choose editor or viewer."
 
 
@@ -144,7 +145,7 @@ async def accept_invite(db: AsyncSession, raw_token: str, user: User) -> Board:
     invite = await get_valid_invite(db, raw_token)
     if invite.email is not None:
         if normalize_email(user.email) != invite.email:
-            raise Forbidden("This invite was sent to a different email address.")
+            raise Forbidden(INVITE_OTHER_EMAIL)
         # Conditional, so two concurrent accepts cannot both use it.
         used = await db.scalar(
             update(BoardInvite)

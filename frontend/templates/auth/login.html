@@ -6,12 +6,9 @@
   {% set for_invite = next_path and next_path.startswith("/invite/") %}
   {% if for_invite %}
   {#- Someone followed an invite link while signed out: say what this page is for, with the
-      sign-up link right here (not at the foot of the page). -#}
-  {% if settings.registration_open %}
+      sign-up link right here (not at the foot of the page). A valid invite opens sign-up even
+      while registration is closed. -#}
   <p class="mt-2 text-slate-600 dark:text-slate-400">Sign in or create an account to join the board. <a href="/register?next={{ next_path|urlencode }}" class="link">Create an account</a></p>
-  {% else %}
-  <p class="mt-2 text-slate-600 dark:text-slate-400">Sign in to join the board.</p>
-  {% endif %}
   {% endif %}
   {# No action: the form posts back to this URL, so a ?next= target survives. -#}
   <form method="post" class="card mt-6 space-y-4">
