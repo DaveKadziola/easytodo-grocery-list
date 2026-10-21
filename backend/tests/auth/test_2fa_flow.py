@@ -19,7 +19,11 @@ from websockets.exceptions import ConnectionClosed
 
 from easytodo.auth import routes
 from easytodo.auth.sessions import SESSION_COOKIE, create_session
-from easytodo.auth.twofa import verify_second_factor
+from easytodo.auth.twofa import (
+    recovery_code_matches,
+    regenerate_recovery_codes,
+    verify_second_factor,
+)
 from easytodo.models import RecoveryCode, User, UserSession
 from easytodo.security.crypto import decrypt
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
@@ -107,6 +111,14 @@ async def recovery_code_hashes(db) -> set[str]:
     return set(await db.scalars(select(RecoveryCode.code_hash)))
 
 
+async def stored_codes_are(db, codes: list[str]) -> bool:
+    """Whether the stored recovery-code hashes are exactly those of ``codes``."""
+    stored = await recovery_code_hashes(db)
+    return len(stored) == len(codes) and all(
+        any(recovery_code_matches(code, h) for h in stored) for code in codes
+    )
+
+
 async def unused_recovery_codes(db) -> int:
     query = select(func.count()).select_from(RecoveryCode).where(RecoveryCode.used_at.is_(None))
     return await db.scalar(query)
@@ -133,7 +145,7 @@ async def test_enable_2fa_and_login_requires_code(client_factory, db):
     assert len(set(codes)) == 10
     half = f"[{RECOVERY_ALPHABET}]{{4}}"
     assert all(re.fullmatch(f"{half}-{half}", code) for code in codes), codes
-    assert await recovery_code_hashes(db) == {hash_token(code) for code in codes}
+    assert await stored_codes_are(db, codes)
     assert (await dave(db)).totp_enabled is True
     assert 'action="/account/2fa/disable"' in (await owner.get("/account")).text
 
@@ -200,8 +212,9 @@ async def test_recovery_code_works_once(client_factory, db):
     await password_step(first)
     r = await code_step(first, codes[0])
     assert r.status_code == 303 and r.headers["location"] == "/boards"
-    used_at = select(RecoveryCode.used_at).where(RecoveryCode.code_hash == hash_token(codes[0]))
-    assert await db.scalar(used_at) is not None
+    rows = await db.execute(select(RecoveryCode.code_hash, RecoveryCode.used_at))
+    used = [code_hash for code_hash, used_at in rows if used_at is not None]
+    assert len(used) == 1 and recovery_code_matches(codes[0], used[0])
 
     second = await client_factory()
     await password_step(second)
@@ -356,10 +369,17 @@ async def test_totp_secret_is_encrypted_at_rest(db, settings, user_with_2fa):
     stored = await db.scalar(select(User.totp_secret_enc).where(User.id == user_with_2fa.user.id))
     assert stored != user_with_2fa.secret and user_with_2fa.secret not in stored
     assert decrypt(stored, settings) == user_with_2fa.secret
-    # Recovery codes are stored only as hashes.
-    assert await recovery_code_hashes(db) == {
-        hash_token(code) for code in user_with_2fa.recovery_codes
-    }
+    # Recovery codes are stored only as hashes: salted and slow (scrypt), not a plain SHA-256,
+    # which one GPU pass over their ~2^40 values would undo for every user of a stolen dump.
+    stored = await recovery_code_hashes(db)
+    assert await stored_codes_are(db, user_with_2fa.recovery_codes)
+    for code in user_with_2fa.recovery_codes:
+        assert hash_token(code) not in stored
+        assert code not in "".join(stored)
+    salts = {h[:32] for h in stored}
+    assert len(salts) == 1  # one salt per set of codes: a sign-in works out one hash, not ten
+    await regenerate_recovery_codes(db, user_with_2fa.user, DEFAULT_PASSWORD)
+    assert {h[:32] for h in await recovery_code_hashes(db)}.isdisjoint(salts)  # a new one each time
 
 
 async def test_wrong_setup_code_keeps_2fa_off(client, db):
@@ -488,7 +508,7 @@ async def test_new_recovery_codes_require_the_password(client, db, user_with_2fa
     assert r.headers["cache-control"] == "no-store"
     codes = RECOVERY_CODES_ON_PAGE.findall(r.text)
     assert len(set(codes)) == 10
-    assert await recovery_code_hashes(db) == {hash_token(code) for code in codes}  # old ones gone
+    assert await stored_codes_are(db, codes)  # old ones gone
 
 
 async def test_pending_session_reaches_only_the_second_step_and_logout(
@@ -557,3 +577,35 @@ async def test_pending_session_cannot_open_websocket(live_server, db, user_with_
             with pytest.raises(ConnectionClosed):
                 await asyncio.wait_for(ws.recv(), 1.0)
             assert ws.close_code == 4401
+
+
+async def test_reloading_the_setup_page_keeps_the_secret_just_scanned(client, db):
+    """A reload, a second tab or the back button (the page is no-store, so it is fetched again)
+    must not replace the key the user has just put in their authenticator app."""
+    await create_user(db, EMAIL)
+    await login(client, EMAIL)
+    first = SECRET_ON_PAGE.search((await client.get("/account/2fa/setup")).text)[1]
+
+    again = SECRET_ON_PAGE.search((await client.get("/account/2fa/setup")).text)[1]
+
+    assert again == first
+    form = {"password": DEFAULT_PASSWORD, "code": current_code(first)}
+    assert (await client.post("/account/2fa/setup", data=form)).status_code == 200
+
+
+async def test_setup_after_the_secret_key_changed_starts_over_without_a_500(
+    client, client_factory, db
+):
+    await create_user(db, EMAIL)
+    await login(client, EMAIL)
+    old = SECRET_ON_PAGE.search((await client.get("/account/2fa/setup")).text)[1]
+    device = await client_factory(secret_key="another-secret-key-" + "y" * 30)
+    await login(device, EMAIL)
+
+    form = {"password": DEFAULT_PASSWORD, "code": current_code(old)}
+    r = await device.post("/account/2fa/setup", data=form)  # the old secret cannot be decrypted
+    assert r.status_code == 400 and INVALID_CODE in r.text
+    new = SECRET_ON_PAGE.search(r.text)[1]
+    assert new != old
+    page = await device.get("/account/2fa/setup")
+    assert page.status_code == 200 and SECRET_ON_PAGE.search(page.text)[1] == new

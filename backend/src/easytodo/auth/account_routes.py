@@ -24,7 +24,6 @@ from easytodo.auth.twofa import (
 from easytodo.errors import AppError, Conflict, NotFound, ValidationFailed
 from easytodo.models import User, UserSession
 from easytodo.realtime.events import commit_and_publish
-from easytodo.security.crypto import decrypt
 from easytodo.security.passwords import (
     MAX_PASSWORD_LENGTH,
     hash_password,
@@ -121,7 +120,8 @@ def _setup_page(
 
 @router.get("/2fa/setup")
 async def two_factor_setup_page(request: Request, db: DbSession, user: CurrentUser) -> Response:
-    """A new secret each time: the QR code to scan, and the key to type in instead."""
+    """The QR code to scan, and the key to type in instead: the secret of an earlier visit while
+    it is not confirmed yet, so a reload does not undo a scan."""
     return _setup_page(request, user, await begin_setup(db, user, request.app.state.settings))
 
 
@@ -143,12 +143,9 @@ async def confirm_two_factor_setup(
         check_password(user, password)
         codes = await confirm_setup(db, user, code, settings)
     except ValidationFailed as exc:
-        # The secret already scanned stays, so another try needs no new scan.
-        secret = (
-            decrypt(user.totp_secret_enc, settings)
-            if user.totp_secret_enc
-            else await begin_setup(db, user, settings)
-        )
+        # The secret already scanned stays, so another try needs no new scan (a new one only
+        # when there is none, or it cannot be decrypted since EASYTODO_SECRET_KEY changed).
+        secret = await begin_setup(db, user, settings)
         return _setup_page(request, user, secret, error=exc.message, status_code=400)
     return _no_store(render(request, "account/2fa_recovery.html", {"codes": codes}))
 
