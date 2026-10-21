@@ -3,7 +3,7 @@
 import time
 from collections.abc import Awaitable, Callable
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 
 from easytodo.errors import TooManyRequests
 
@@ -39,7 +39,7 @@ def rate_limit(scope: str, limit: int, window_s: int) -> Callable[[Request], Awa
     async def dependency(request: Request) -> None:
         client_ip = request.client.host if request.client else "unknown"
         if not request.app.state.rate_limiter.hit(f"{scope}:{client_ip}", limit, window_s):
-            raise HTTPException(429, TOO_MANY_REQUESTS)
+            raise TooManyRequests(TOO_MANY_REQUESTS)  # the error page or a toast, not JSON
 
     return dependency
 

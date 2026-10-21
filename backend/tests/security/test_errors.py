@@ -2,7 +2,9 @@ import json
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from factories import create_user
 from fastapi import FastAPI
+from helpers import login
 from starlette.requests import Request
 
 from easytodo.errors import (
@@ -152,3 +154,49 @@ def test_is_htmx(mini_app):
     assert is_htmx(_request(mini_app, {}, ((b"hx-request", b"true"),))) is True
     assert is_htmx(_request(mini_app, {}, ((b"hx-request", b"false"),))) is False
     assert is_htmx(_request(mini_app, {})) is False
+
+
+async def test_unknown_page_renders_the_error_page_not_json(client):
+    """A mistyped URL or an old v1 bookmark gets a page (or, for htmx, a toast), never FastAPI's
+    {"detail": "Not Found"}."""
+    for path in ("/nope", "/v1/get_categories", "/apidocs", "/static/nope.js"):
+        r = await client.get(path)
+        assert r.status_code == 404, path
+        assert r.headers["content-type"].startswith("text/html"), path
+        assert "Page not found." in r.text
+
+    r = await client.get("/nope", headers=HX)
+    assert r.status_code == 404 and r.headers["hx-reswap"] == "none"
+    assert json.loads(r.headers["hx-trigger"]) == {
+        "toast": {"level": "error", "message": "Page not found."}  # no resync: not board data
+    }
+
+
+async def test_wrong_method_renders_the_error_page_not_json(client):
+    r = await client.put("/login")
+    assert r.status_code == 405
+    assert r.headers["content-type"].startswith("text/html")
+    assert "allow" in r.headers
+    assert "This page does not accept that request." in r.text
+
+
+async def test_bad_path_parameter_is_a_404_not_pydantic_text(client, db):
+    await create_user(db, "dave@example.com")
+    await login(client, "dave@example.com")
+    for path in ("/boards/abc", "/categories/1.5", "/boards/abc/members"):
+        r = await client.get(path)
+        assert r.status_code == 404, path
+        assert "Input should be" not in r.text
+        assert "Not found." in r.text
+
+
+async def test_htmx_not_authenticated_comes_back_to_the_page_after_sign_in(err_app_client):
+    """The session ended on an open board: signing in again leads back to that board."""
+    current = {"HX-Current-URL": "http://testserver/boards/7?x=1"}
+    r = await err_app_client.get("/raise-401", headers=HX | current)
+    assert r.status_code == 401
+    assert r.headers["hx-redirect"] == "/login?next=%2Fboards%2F7%3Fx%3D1"
+
+    for elsewhere in ("https://evil.example/boards/7", "not a url", "http://testserver//evil"):
+        r = await err_app_client.get("/raise-401", headers=HX | {"HX-Current-URL": elsewhere})
+        assert r.headers["hx-redirect"] == "/login", elsewhere

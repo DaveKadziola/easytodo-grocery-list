@@ -1,3 +1,5 @@
+import json
+
 import httpx
 
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
@@ -57,7 +59,15 @@ async def test_rate_limit_dependency_returns_429_per_client_ip(mini_app):
     async with _client(mini_app, "10.0.0.1") as a, _client(mini_app, "10.0.0.2") as b:
         assert [(await _post_limited(a)).status_code for _ in range(2)] == [200, 200]
         r = await _post_limited(a)
-        assert r.status_code == 429
-        assert r.json() == {"detail": "Too many requests. Try again later."}
+        assert r.status_code == 429  # the error page, as for any other error (not JSON)
+        assert r.headers["content-type"].startswith("text/html")
+        assert "Too many requests. Try again later." in r.text
+        r = await a.post(
+            "/limited", headers={CSRF_HEADER: a.cookies[CSRF_COOKIE], "HX-Request": "true"}
+        )
+        assert r.status_code == 429 and r.headers["hx-reswap"] == "none"
+        assert json.loads(r.headers["hx-trigger"]) == {
+            "toast": {"level": "error", "message": "Too many requests. Try again later."}
+        }
         assert (await _post_limited(b)).status_code == 200  # another IP has its own counter
     assert set(mini_app.state.rate_limiter._windows) == {"test:10.0.0.1", "test:10.0.0.2"}
