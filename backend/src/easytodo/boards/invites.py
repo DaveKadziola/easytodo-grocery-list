@@ -12,7 +12,13 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.auth.service import normalize_email
-from easytodo.boards.permissions import Action, check_permission, is_possible_id, require_board
+from easytodo.boards.permissions import (
+    BOARD_GONE,
+    Action,
+    check_permission,
+    is_possible_id,
+    require_board,
+)
 from easytodo.config import Settings
 from easytodo.errors import Forbidden, NotFound, ValidationFailed
 from easytodo.mail.mailer import Mailer, render_mail
@@ -150,6 +156,17 @@ async def accept_invite(db: AsyncSession, raw_token: str, user: User) -> Board:
     another device may have deleted it already.
     """
     invite = await get_valid_invite(db, raw_token)
+    # FOR KEY SHARE: the board cannot be deleted before the commit (the new member's foreign
+    # key holds the same lock), and changes to it do not wait. Taken before the invite's row,
+    # in the order a delete of the board locks them (the board, then its invites by cascade),
+    # so the two cannot deadlock.
+    board = await db.scalar(
+        select(Board)
+        .where(Board.id == invite.board_id, Board.archived_at.is_(None))
+        .with_for_update(read=True, key_share=True)
+    )
+    if board is None:  # deleted or archived since the invite was read
+        raise NotFound(BOARD_GONE)
     if invite.email is not None:
         if normalize_email(user.email) != invite.email:
             raise Forbidden(INVITE_OTHER_EMAIL)
@@ -162,15 +179,6 @@ async def accept_invite(db: AsyncSession, raw_token: str, user: User) -> Board:
         )
         if used is None:
             raise NotFound(INVITE_INVALID)
-    # FOR KEY SHARE: the board cannot be deleted before the commit (the new member's foreign
-    # key holds the same lock), and changes to it do not wait.
-    board = await db.scalar(
-        select(Board)
-        .where(Board.id == invite.board_id, Board.archived_at.is_(None))
-        .with_for_update(read=True, key_share=True)
-    )
-    if board is None:  # deleted or archived since the invite was read
-        raise NotFound("Board not found.")
     joined = await db.scalar(  # None: a member already, who keeps their role
         insert(BoardMember)
         .values(board_id=board.id, user_id=user.id, role=invite.role)

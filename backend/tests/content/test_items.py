@@ -304,29 +304,39 @@ async def test_change_racing_a_delete_on_another_device_is_404_not_500(  # Revie
 
 
 @pytest.mark.parametrize(
-    "table,held,method,path,data",
+    "held_row,held,method,path,data",
     [
-        # The category is only the parent of a new item, or of the done items "Clear done" deletes.
-        ("categories", "FOR SHARE", "POST", "/categories/{category}/items", {"name": "Eggs"}),
-        ("categories", "FOR SHARE", "POST", "/categories/{category}/clear-done", None),
+        # The category is only the parent of a new item, of the done items "Clear done" deletes,
+        # or of an item moved into it.
+        ("category", "FOR SHARE", "POST", "/categories/{category}/items", {"name": "Eggs"}),
+        ("category", "FOR SHARE", "POST", "/categories/{category}/clear-done", None),
+        (
+            "other_category",
+            "FOR SHARE",
+            "POST",
+            "/items/{item}/move",
+            {"category_id": "{other_category}"},
+        ),
         # A rename or a tick changes no key: a row a new child row points to (its foreign key
         # check holds FOR KEY SHARE) can still change.
-        ("categories", "FOR KEY SHARE", "PATCH", "/categories/{category}", {"name": "Fridge"}),
-        ("items", "FOR KEY SHARE", "POST", "/items/{item}/toggle", None),
+        ("category", "FOR KEY SHARE", "PATCH", "/categories/{category}", {"name": "Fridge"}),
+        ("item", "FOR KEY SHARE", "POST", "/items/{item}/toggle", None),
     ],
 )
 async def test_writes_take_only_the_row_lock_they_need(
-    editor_client, category, item, db, table, held, method, path, data
+    editor_client, board, category, item, db, held_row, held, method, path, data
 ):
     """Another device holds a lock on the row that does not conflict: the write does not wait."""
+    other_category = await create_category(db, board, "Bakery", position=1)
+    ids = {"category": category.id, "item": item.id, "other_category": other_category.id}
+    table = "items" if held_row == "item" else "categories"
+    if data is not None:
+        data = {key: value.format(**ids) for key, value in data.items()}
     async with db.bind.connect() as other_device, other_device.begin():
-        row_id = category.id if table == "categories" else item.id
         await other_device.execute(
-            text(f"SELECT 1 FROM {table} WHERE id = :id {held}"), {"id": row_id}
+            text(f"SELECT 1 FROM {table} WHERE id = :id {held}"), {"id": ids[held_row]}
         )
-        request = editor_client.request(
-            method, path.format(category=category.id, item=item.id), data=data, headers=HX
-        )
+        request = editor_client.request(method, path.format(**ids), data=data, headers=HX)
         r = await asyncio.wait_for(request, 2)
 
     assert r.status_code == 200, r.headers.get("hx-trigger")

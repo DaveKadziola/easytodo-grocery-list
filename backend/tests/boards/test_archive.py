@@ -5,7 +5,7 @@ import asyncio
 import json
 import re
 from datetime import UTC, datetime, timedelta
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 
 import pytest
 from content.test_isolation import ROUTES, fill
@@ -13,11 +13,12 @@ from factories import create_board, create_category, create_item, create_user
 from helpers import (
     NASTY,
     NASTY_ESCAPED,
+    flash_of,
     signed_in,
     toast_message,
     wait_until_a_query_waits_for_a_lock,
 )
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, text, update
 
 from easytodo.boards import routes as board_routes
 from easytodo.boards.invite_routes import router as invite_router
@@ -31,7 +32,6 @@ from easytodo.boards.service import (
 )
 from easytodo.models import Board, BoardInvite, BoardMember, BoardRole, Category, Item, User
 from easytodo.realtime.events import BoardEvent, EventType
-from easytodo.web import FLASH_COOKIE
 
 HX = {"HX-Request": "true"}
 NO_PERMISSION = "You don't have permission to do that."
@@ -67,10 +67,6 @@ async def archive(db, board: Board, when: datetime = ARCHIVED_AT) -> None:
 
 async def user_named(db, email: str) -> User:
     return await db.scalar(select(User).where(User.email == email))
-
-
-def flash_of(response) -> dict:
-    return json.loads(unquote(response.cookies[FLASH_COOKIE]))
 
 
 def text_of(html: str) -> str:
@@ -346,6 +342,35 @@ async def test_board_write_racing_a_delete_is_404_not_500(
         "toast": {"level": "error", "message": BOARD_GONE},
         "resync": True,
     }
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "archived"),
+    [
+        ("PATCH", "/boards/{id}", False),
+        ("POST", "/boards/{id}/archive", False),
+        ("POST", "/boards/{id}/restore", True),
+    ],
+)
+async def test_board_changes_do_not_wait_for_a_key_share_lock(
+    owner, board, client_factory, db, method, path, archived
+):
+    """An item being added on another device holds the board FOR KEY SHARE (its foreign key
+    check) until it commits: renaming, archiving or restoring the board changes no key, so it
+    does not wait."""
+    if archived:
+        await archive(db, board)
+    owner_client = await signed_in(client_factory, "owner@example.com")
+    data = {"name": "Weekend"} if method == "PATCH" else None
+
+    async with db.bind.connect() as other_device, other_device.begin():
+        await other_device.execute(
+            text("SELECT 1 FROM boards WHERE id = :id FOR KEY SHARE"), {"id": board.id}
+        )
+        request = owner_client.request(method, path.format(id=board.id), data=data, headers=HX)
+        r = await asyncio.wait_for(request, 2)
+
+    assert r.status_code == 200, r.headers.get("hx-trigger")
 
 
 async def test_archived_page_lists_own_archived_boards_with_purge_dates(

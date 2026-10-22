@@ -57,13 +57,15 @@ async def load_for_member(
     gone: str,
     *,
     lock: RowLock | None = None,
-    of: Any = None,
+    of: Any,
 ) -> Row[Any]:
     """The one row of ``query``: a select of what was asked for and ``BoardMember.role``, joined
     with the user's own membership. ``NotFound(gone)`` when there is none, ``Forbidden`` when the
     role does not allow ``action``.
 
-    With ``lock``, the rows of ``of`` stay locked in that mode until the commit, and the query
+    ``of`` is the table (model) whose row ``lock`` is for, and must always be given: a lock
+    without it would take a row of every table in the join, the memberships and the board too.
+    With ``lock``, that row stays locked in that mode until the commit, and the query
     takes only a role that allows ``action``: a member who may not do it neither takes the lock
     nor waits for anyone else's. Only when that finds nothing does the query run again without
     lock and role, to tell a missing row (404) from a missing permission (403); if the role

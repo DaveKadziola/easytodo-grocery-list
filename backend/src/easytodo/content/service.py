@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.boards.permissions import (
+    BOARD_GONE,
     Action,
     RowLock,
     is_possible_id,
@@ -36,7 +37,6 @@ CATEGORY_GONE = "This category no longer exists."
 ITEM_GONE = "This item no longer exists."
 _UNIQUE_VIOLATION = "23505"  # PostgreSQL SQLSTATEs
 _FOREIGN_KEY_VIOLATION = "23503"
-BOARD_GONE = "Board not found."
 
 
 async def _load[M: (Category, Item)](

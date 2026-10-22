@@ -3,12 +3,14 @@ another connection's row lock."""
 
 import asyncio
 import json
+from urllib.parse import unquote
 
 import httpx
 from factories import DEFAULT_PASSWORD
 from sqlalchemy import text
 
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
+from easytodo.web import FLASH_COOKIE
 
 # A name with quotes, HTML and a script, and how the templates must show it (autoescaped).
 NASTY = 'O\'Reilly <b>"x"</b> <script>alert(1)</script>'
@@ -36,6 +38,12 @@ async def signed_in(client_factory, email: str) -> httpx.AsyncClient:
 def toast_message(response: httpx.Response) -> str:
     """The error toast of an htmx request's response (its ``HX-Trigger`` header)."""
     return json.loads(response.headers["hx-trigger"])["toast"]["message"]
+
+
+def flash_of(response: httpx.Response) -> dict:
+    """The toast ``response`` leaves for the next page (its flash cookie), as
+    ``{"level": ..., "message": ...}``."""
+    return json.loads(unquote(response.cookies[FLASH_COOKIE]))
 
 
 async def wait_until_a_query_waits_for_a_lock(db) -> None:

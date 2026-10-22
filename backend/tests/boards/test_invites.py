@@ -1,6 +1,7 @@
 """Board invites: a link (reusable until it expires or is revoked), an e-mail (single use, for that
 address only), and the sign-in or sign-up round trip from an invite link."""
 
+import asyncio
 import logging
 import re
 import socket
@@ -9,8 +10,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 from factories import DEFAULT_PASSWORD, create_board, create_user
-from helpers import login, signed_in, toast_message
-from sqlalchemy import func, select, update
+from helpers import login, signed_in, toast_message, wait_until_a_query_waits_for_a_lock
+from sqlalchemy import func, select, text, update
 
 from easytodo.boards.invite_routes import EMAIL_INVITE_LIMIT
 from easytodo.boards.invites import INVITE_TTL, create_email_invite, create_link_invite
@@ -413,6 +414,36 @@ async def test_board_deleted_right_after_an_accept_still_redirects(
 
     assert r.status_code == 303
     assert r.headers["location"] == f"/boards/{board.id}"
+
+
+async def test_email_accept_locks_the_board_before_the_invite(
+    client_factory, db, settings, board, owner
+):
+    """In the order a delete of the board takes them (the board, then its invites through the
+    cascade), so the two cannot deadlock: while it waits for the board, the accept holds no lock
+    on the invite."""
+    newcomer = await create_user(db, "bob@example.com")
+    sent = await create_email_invite(
+        db, board.id, owner, "bob@example.com", BoardRole.EDITOR, ConsoleMailer(), settings
+    )
+    bob = await signed_in(client_factory, "bob@example.com")
+
+    async with db.bind.connect() as deleting:
+        transaction = await deleting.begin()
+        await deleting.execute(
+            text("SELECT 1 FROM boards WHERE id = :id FOR UPDATE"), {"id": board.id}
+        )
+        accept = asyncio.create_task(bob.post(f"/invite/{sent.link.rsplit('/', 1)[1]}/accept"))
+        await wait_until_a_query_waits_for_a_lock(db)
+        await deleting.execute(  # LockNotAvailableError if the accept held the invite
+            text("SELECT 1 FROM board_invites WHERE id = :id FOR UPDATE NOWAIT"),
+            {"id": sent.invite.id},
+        )
+        await transaction.rollback()
+        r = await accept
+
+    assert r.status_code == 303
+    assert await role_of(db, board.id, newcomer.id) == BoardRole.EDITOR
 
 
 async def test_member_reopening_a_link_invite_goes_to_the_board(
