@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from fastapi import Request, Response
 from fastapi.responses import HTMLResponse
@@ -61,6 +61,19 @@ templates.env.globals.update(
 
 def is_htmx(request: Request) -> bool:
     return request.headers.get("HX-Request") == "true"
+
+
+def prompt_answer(request: Request) -> str:
+    """What the user typed into an ``hx-prompt``, which htmx sends as ``HX-Prompt``; "" when the
+    request has none.
+
+    Text a header cannot carry (beyond Latin-1, such as "Łosoś") htmx sends percent-encoded, and
+    says so in ``HX-Prompt-URI-AutoEncoded``: only then is it decoded.
+    """
+    answer = request.headers.get("HX-Prompt", "")
+    if request.headers.get("HX-Prompt-URI-AutoEncoded") == "true":
+        answer = unquote(answer)
+    return answer
 
 
 def render(

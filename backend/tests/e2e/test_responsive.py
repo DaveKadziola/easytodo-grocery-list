@@ -165,8 +165,8 @@ def test_phone_shows_the_list_right_below_the_board_name(
     assert first_item["y"] - (heading["y"] + heading["height"]) < 160, (heading, first_item)
     assert page.locator("li[data-item-id]:visible").count() >= 3  # without scrolling:
     assert first_item["y"] + first_item["height"] < page.viewport_size["height"] / 2
-    expect(page.get_by_label("Board name")).to_be_hidden()  # rename and delete: in the menu
-    expect(page.get_by_role("button", name="Delete board")).to_be_hidden()
+    expect(page.get_by_label("Board name")).to_be_hidden()  # rename and archive: in the menu
+    expect(page.get_by_role("button", name="Archive board")).to_be_hidden()
 
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])
@@ -196,7 +196,7 @@ def test_theme_follows_the_system_and_stays_readable(
     page.get_by_role("button", name="Bread", exact=True).click()  # the item modal
     expect(page.get_by_role("dialog")).to_be_visible()
     assert page.evaluate(LOW_CONTRAST_TEXT, AA) == []
-    for path in ("/boards", "/account"):
+    for path in ("/boards", "/boards/archived", "/account"):
         page.goto(path)
         assert page.evaluate(LOW_CONTRAST_TEXT, AA) == [], path
 

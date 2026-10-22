@@ -134,7 +134,7 @@ async def test_registration_stays_closed_without_an_invite_page_as_next(
     assert await count_users(db) == 1  # the owner
 
 
-@pytest.mark.parametrize("state", ["unknown", "expired", "revoked"])
+@pytest.mark.parametrize("state", ["unknown", "expired", "revoked", "archived"])
 async def test_a_dead_invite_does_not_open_registration(closed, db, board, owner, state):
     token, invite = await link_invite(db, board, owner)
     if state == "unknown":
@@ -146,8 +146,11 @@ async def test_a_dead_invite_does_not_open_registration(closed, db, board, owner
             .values(expires_at=func.now() - timedelta(seconds=1))
         )
         await db.commit()
-    else:
+    elif state == "revoked":
         await revoke_invite(db, board.id, invite.id, owner)
+    else:  # its board was archived
+        await db.execute(update(Board).where(Board.id == board.id).values(archived_at=func.now()))
+        await db.commit()
     next_path = f"/invite/{token}"
 
     for r in (await register_page(closed, next_path), await sign_up(closed, next_path)):

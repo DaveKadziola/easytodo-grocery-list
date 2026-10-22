@@ -13,7 +13,7 @@ from easytodo.security.csrf import CSRF_HEADER
 HX = {"HX-Request": "true"}
 NO_PERMISSION = "You don't have permission to do that."
 OWNER_ROLE = "The owner's role can't be changed."
-OWNER_LEAVES = "The owner can't leave. Delete the board instead."
+OWNER_LEAVES = "The owner can't leave. Archive the board instead."
 
 
 async def members_of(db, board_id: int) -> dict[int, BoardRole]:

@@ -14,7 +14,13 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from easytodo.boards.permissions import Action, check_permission, is_possible_id, require_board
+from easytodo.boards.permissions import (
+    Action,
+    RowLock,
+    is_possible_id,
+    load_for_member,
+    require_board,
+)
 from easytodo.boards.service import ITEM_ORDER, CategoryView
 from easytodo.content.validation import (
     CATEGORY_NAME_MAX_LENGTH,
@@ -23,7 +29,7 @@ from easytodo.content.validation import (
     clean_name,
 )
 from easytodo.errors import Conflict, NotFound, ValidationFailed
-from easytodo.models import BoardMember, BoardRole, Category, Item, User
+from easytodo.models import Board, BoardMember, BoardRole, Category, Item, User
 from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
 
 CATEGORY_GONE = "This category no longer exists."
@@ -34,40 +40,57 @@ BOARD_GONE = "Board not found."
 
 
 async def _load[M: (Category, Item)](
-    db: AsyncSession, model: type[M], object_id: int, user: User, action: Action, gone: str
+    db: AsyncSession,
+    model: type[M],
+    object_id: int,
+    user: User,
+    action: Action,
+    gone: str,
+    lock: RowLock,
 ) -> tuple[M, BoardRole]:
-    """The row and ``user``'s role on its board, in one query joined with ``board_members``.
+    """The row and ``user``'s role on its board, in one query joined with ``board_members`` and
+    the board, which must not be archived.
 
-    For a change (any action but VIEW) the row stays locked until the commit: a delete from
-    another device that got there first makes this ``NotFound``, a later one waits for it.
+    For a change (any action but VIEW) the row stays locked in mode ``lock`` until the commit: a
+    delete from another device that got there first makes this ``NotFound``, a later one waits
+    for it. A member whose role does not allow the change takes no lock (see
+    ``load_for_member``).
     """
-    row = None
-    if is_possible_id(object_id):
-        query = (
-            select(model, BoardMember.role)
-            .join(BoardMember, BoardMember.board_id == model.board_id)
-            .where(model.id == object_id, BoardMember.user_id == user.id)
-        )
-        if action is not Action.VIEW:
-            query = query.with_for_update(of=model)
-        row = (await db.execute(query)).one_or_none()
-    if row is None:
+    if not is_possible_id(object_id):
         raise NotFound(gone)
-    found, role = row
-    check_permission(role, action)
+    query = (
+        select(model, BoardMember.role)
+        .join(Board, Board.id == model.board_id)
+        .join(BoardMember, BoardMember.board_id == model.board_id)
+        .where(model.id == object_id, BoardMember.user_id == user.id, Board.archived_at.is_(None))
+    )
+    row_lock = None if action is Action.VIEW else lock
+    found, role = await load_for_member(db, query, action, gone, lock=row_lock, of=model)
     return found, role
 
 
 async def load_category(
-    db: AsyncSession, category_id: int, user: User, action: Action
+    db: AsyncSession,
+    category_id: int,
+    user: User,
+    action: Action,
+    *,
+    lock: RowLock = RowLock.NO_KEY_UPDATE,
 ) -> tuple[Category, BoardRole]:
-    return await _load(db, Category, category_id, user, action, CATEGORY_GONE)
+    """The category and ``user``'s role; for a change, locked in mode ``lock`` (see ``_load``)."""
+    return await _load(db, Category, category_id, user, action, CATEGORY_GONE, lock)
 
 
 async def load_item(
-    db: AsyncSession, item_id: int, user: User, action: Action
+    db: AsyncSession,
+    item_id: int,
+    user: User,
+    action: Action,
+    *,
+    lock: RowLock = RowLock.NO_KEY_UPDATE,
 ) -> tuple[Item, BoardRole]:
-    return await _load(db, Item, item_id, user, action, ITEM_GONE)
+    """The item and ``user``'s role; for a change, locked in mode ``lock`` (see ``_load``)."""
+    return await _load(db, Item, item_id, user, action, ITEM_GONE, lock)
 
 
 def _category_changed(board_id: int, *category_ids: int) -> BoardEvent:
@@ -129,7 +152,9 @@ async def rename_category(db: AsyncSession, category_id: int, user: User, name: 
 
 async def delete_category(db: AsyncSession, category_id: int, user: User) -> None:
     """Delete the category; its items go with it (FK cascade)."""
-    category, _ = await load_category(db, category_id, user, Action.EDIT_CONTENT)
+    category, _ = await load_category(
+        db, category_id, user, Action.EDIT_CONTENT, lock=RowLock.UPDATE
+    )
     event = BoardEvent(
         EventType.CATEGORY_DELETED, board_id=category.board_id, category_ids=(category.id,)
     )
@@ -171,7 +196,10 @@ async def get_category_view(
 async def create_item(
     db: AsyncSession, category_id: int, user: User, name: str, description: str | None = None
 ) -> Item:
-    category, _ = await load_category(db, category_id, user, Action.EDIT_CONTENT)
+    # A share lock: items can be added to the category at the same time, while a delete waits.
+    category, _ = await load_category(
+        db, category_id, user, Action.EDIT_CONTENT, lock=RowLock.SHARE
+    )
     item = Item(
         board_id=category.board_id,  # always the category's board, never taken from the request
         category_id=category.id,
@@ -220,15 +248,15 @@ async def move_item(
     item, _ = await load_item(db, item_id, user, Action.EDIT_CONTENT)
     if target_category_id == item.category_id:
         # Already there: nothing to change, and no lock on its category, which could deadlock
-        # against a delete or "Clear done" of that category that holds it and waits for the item.
+        # against a delete of that category that holds it and waits for the item.
         await commit_and_publish(db)
         return item, item.category_id
     target = None
     if is_possible_id(target_category_id):
-        target = await db.scalar(
+        target = await db.scalar(  # a share lock: other items can move in at the same time
             select(Category)
             .where(Category.id == target_category_id, Category.board_id == item.board_id)
-            .with_for_update()
+            .with_for_update(read=True)
         )
     if target is None:  # also a category on another board: items never change boards
         raise NotFound(CATEGORY_GONE)
@@ -240,7 +268,7 @@ async def move_item(
 
 async def delete_item(db: AsyncSession, item_id: int, user: User) -> int:
     """Delete the item; returns the id of the category it was in."""
-    item, _ = await load_item(db, item_id, user, Action.EDIT_CONTENT)
+    item, _ = await load_item(db, item_id, user, Action.EDIT_CONTENT, lock=RowLock.UPDATE)
     event = _category_changed(item.board_id, item.category_id)
     await db.delete(item)
     await commit_and_publish(db, event)
@@ -249,7 +277,9 @@ async def delete_item(db: AsyncSession, item_id: int, user: User) -> int:
 
 async def clear_done(db: AsyncSession, category_id: int, user: User) -> int:
     """Delete the category's done items; returns how many there were."""
-    category, _ = await load_category(db, category_id, user, Action.EDIT_CONTENT)
+    category, _ = await load_category(
+        db, category_id, user, Action.EDIT_CONTENT, lock=RowLock.SHARE
+    )
     result = await db.execute(
         delete(Item).where(Item.category_id == category.id, Item.is_done.is_(True))
     )

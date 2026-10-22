@@ -283,6 +283,41 @@ async def test_removed_member_socket_is_closed(live_server, db, dave, groceries,
         }
 
 
+async def test_archiving_closes_the_board_sockets_and_refuses_new_ones(
+    live_server, db, dave, groceries, sign_in
+):
+    board, dairy = groceries
+    eve = await create_user(db, "eve@example.com")
+    db.add(BoardMember(board_id=board.id, user_id=eve.id, role=BoardRole.EDITOR))
+    await db.commit()
+    owner = await sign_in(live_server, "dave@example.com")
+    member = await sign_in(live_server, "eve@example.com")
+
+    async with (
+        board_socket(live_server, board.id, token=token_of(member)) as ws_member,
+        board_socket(live_server, board.id, token=token_of(owner), client_id="phone") as ws_owner,
+    ):
+        r = await owner.post(f"/boards/{board.id}/archive", headers=HX | {"X-Client-Id": "phone"})
+        assert r.status_code == 200, r.text
+
+        for ws in (ws_member, ws_owner):  # the archiving tab too: it leaves the board
+            assert await next_message(ws) == {
+                "type": "board.deleted",
+                "board_id": board.id,
+                "category_ids": [],
+            }
+            assert await close_code(ws) == 4404
+    for device in (owner, member):  # a page still open on the board, reconnecting
+        async with board_socket(live_server, board.id, token=token_of(device)) as ws:
+            assert await close_code(ws) == 4404
+
+    r = await owner.post(f"/boards/{board.id}/restore", headers=HX)
+    assert r.status_code == 200, r.text
+    async with board_socket(live_server, board.id, token=token_of(member), client_id="M") as ws:
+        await add_item(owner, dairy.id, client_id="O")
+        assert (await next_message(ws))["type"] == "category.changed"
+
+
 async def test_logout_closes_that_sessions_socket(live_server, groceries, sign_in):
     board, dairy = groceries
     a = await sign_in(live_server, "dave@example.com")

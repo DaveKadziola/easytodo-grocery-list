@@ -386,6 +386,35 @@ async def test_board_deleted_while_an_invite_is_accepted_is_a_404_not_a_500(
     assert "Board not found." in r.text
 
 
+async def test_board_deleted_right_after_an_accept_still_redirects(
+    client_factory, db, board, invite_token, monkeypatch, _db_engine
+):
+    """The accept is committed; another device deletes the board before the answer is sent. The
+    answer is still the redirect to the board (whose page then says it is gone), not a 500."""
+    from sqlalchemy import delete
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from easytodo.boards import invites
+    from easytodo.models import Board
+
+    commit_and_publish = invites.commit_and_publish
+
+    async def commit_then_delete_the_board(session, *events):
+        await commit_and_publish(session, *events)
+        async with AsyncSession(_db_engine) as other:
+            await other.execute(delete(Board).where(Board.id == board.id))
+            await other.commit()
+
+    monkeypatch.setattr(invites, "commit_and_publish", commit_then_delete_the_board)
+    await create_user(db, "bob@example.com")
+    bob = await signed_in(client_factory, "bob@example.com")
+
+    r = await bob.post(f"/invite/{invite_token}/accept")
+
+    assert r.status_code == 303
+    assert r.headers["location"] == f"/boards/{board.id}"
+
+
 async def test_member_reopening_a_link_invite_goes_to_the_board(
     client_factory, db, board, owner, invite_token
 ):

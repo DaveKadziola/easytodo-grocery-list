@@ -9,7 +9,6 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import ColumnElement, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.auth.service import normalize_email
@@ -112,10 +111,16 @@ def _still_usable() -> tuple[ColumnElement[bool], ...]:
 
 
 async def get_valid_invite(db: AsyncSession, raw_token: str) -> BoardInvite:
-    """The invite for ``raw_token``; ``NotFound`` if it is unknown, expired or revoked, or an
-    e-mail invite that was already used."""
+    """The invite for ``raw_token``; ``NotFound`` if it is unknown, expired or revoked, an e-mail
+    invite that was already used, or one to an archived board."""
     invite = await db.scalar(
-        select(BoardInvite).where(BoardInvite.token_hash == hash_token(raw_token), *_still_usable())
+        select(BoardInvite)
+        .join(Board, Board.id == BoardInvite.board_id)
+        .where(
+            BoardInvite.token_hash == hash_token(raw_token),
+            *_still_usable(),
+            Board.archived_at.is_(None),
+        )
     )
     if invite is None:
         raise NotFound(INVITE_INVALID)
@@ -140,7 +145,9 @@ async def accept_invite(db: AsyncSession, raw_token: str, user: User) -> Board:
     """Make ``user`` a member with the invite's role and return the board.
 
     A member already keeps their role (an invite never demotes anyone). An e-mail invite must be
-    for ``user``'s address, and is used up even when ``user`` is a member already.
+    for ``user``'s address, and is used up even when ``user`` is a member already. The board
+    returned is the one read before the member is added, not read again after the commit, when
+    another device may have deleted it already.
     """
     invite = await get_valid_invite(db, raw_token)
     if invite.email is not None:
@@ -155,22 +162,24 @@ async def accept_invite(db: AsyncSession, raw_token: str, user: User) -> Board:
         )
         if used is None:
             raise NotFound(INVITE_INVALID)
-    try:
-        # A savepoint: a failed insert must not expire the signed-in user the error page shows.
-        async with db.begin_nested():
-            joined = await db.scalar(  # None: a member already, who keeps their role
-                insert(BoardMember)
-                .values(board_id=invite.board_id, user_id=user.id, role=invite.role)
-                .on_conflict_do_nothing(index_elements=[BoardMember.board_id, BoardMember.user_id])
-                .returning(BoardMember.user_id)
-            )
-    except IntegrityError as exc:
-        if getattr(exc.orig, "sqlstate", None) == "23503":  # the board was deleted meanwhile
-            raise NotFound("Board not found.") from None
-        raise
-    events = [BoardEvent(EventType.BOARD_UPDATED, board_id=invite.board_id)] if joined else []
+    # FOR KEY SHARE: the board cannot be deleted before the commit (the new member's foreign
+    # key holds the same lock), and changes to it do not wait.
+    board = await db.scalar(
+        select(Board)
+        .where(Board.id == invite.board_id, Board.archived_at.is_(None))
+        .with_for_update(read=True, key_share=True)
+    )
+    if board is None:  # deleted or archived since the invite was read
+        raise NotFound("Board not found.")
+    joined = await db.scalar(  # None: a member already, who keeps their role
+        insert(BoardMember)
+        .values(board_id=board.id, user_id=user.id, role=invite.role)
+        .on_conflict_do_nothing(index_elements=[BoardMember.board_id, BoardMember.user_id])
+        .returning(BoardMember.user_id)
+    )
+    events = [BoardEvent(EventType.BOARD_UPDATED, board_id=board.id)] if joined else []
     await commit_and_publish(db, *events)
-    return await db.get_one(Board, invite.board_id)
+    return board
 
 
 async def list_pending_invites(db: AsyncSession, board_id: int, user: User) -> list[BoardInvite]:
@@ -186,18 +195,20 @@ async def list_pending_invites(db: AsyncSession, board_id: int, user: User) -> l
 
 async def revoke_invite(db: AsyncSession, board_id: int, invite_id: int, user: User) -> None:
     """Revoke the board's invite (found through ``user``'s memberships, so another board's, also
-    one asked for through another board's URL, is ``NotFound``); revoking it again changes
-    nothing."""
+    one asked for through another board's URL, is ``NotFound``, as is one to an archived board);
+    revoking it again changes nothing."""
     row = None
     if is_possible_id(invite_id):
         row = (
             await db.execute(
                 select(BoardInvite, BoardMember.role)
+                .join(Board, Board.id == BoardInvite.board_id)
                 .join(BoardMember, BoardMember.board_id == BoardInvite.board_id)
                 .where(
                     BoardInvite.id == invite_id,
                     BoardInvite.board_id == board_id,
                     BoardMember.user_id == user.id,
+                    Board.archived_at.is_(None),
                 )
             )
         ).one_or_none()

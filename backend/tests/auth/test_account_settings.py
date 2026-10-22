@@ -7,6 +7,7 @@ from urllib.parse import unquote
 
 import pytest
 from factories import create_user
+from helpers import NASTY, NASTY_ESCAPED
 from sqlalchemy import select
 
 from auth.test_account import change_form, password_hash, session_id, session_ids, sign_in
@@ -23,8 +24,6 @@ from easytodo.security.csrf import CSRF_HEADER
 from easytodo.web import FLASH_COOKIE
 
 EMAIL = "dave@example.com"
-NASTY = 'O\'Reilly <b>"x"</b> <script>alert(1)</script>'
-NASTY_ESCAPED = "O&#39;Reilly &lt;b&gt;&#34;x&#34;&lt;/b&gt; &lt;script&gt;alert(1)&lt;/script&gt;"
 DEFAULTS = (None, 30, "name", False, True)  # what a new account has, in settings() order
 
 # Every form of this page with data that changes every setting it holds.

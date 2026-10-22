@@ -1,13 +1,14 @@
 """The board page in Chromium: the phone layout, adding and ticking items, drag and drop (mouse
-and touch), the item modal, the category menu, renaming and deleting the board, a change that
-lost a race with another device, and no CSP violations anywhere."""
+and touch), the item modal, the category menu, renaming and archiving the board, the "Archived
+boards" page, a change that lost a race with another device, and no CSP violations anywhere."""
 
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs
 
 import pytest
 from factories import create_board, create_category, create_item
+from helpers import NASTY
 from playwright.sync_api import Locator, Page, expect
 from sqlalchemy import delete, update
 
@@ -16,7 +17,6 @@ from easytodo.models import Category, Item
 
 pytestmark = pytest.mark.e2e
 
-NASTY = 'O\'Reilly <b>"x"</b> <script>alert(1)</script>'
 # What a finger must be able to hit: every control at least 44×44 px (the checkbox through the
 # label around it).
 TAP_TARGETS = (
@@ -26,14 +26,23 @@ TAP_TARGETS = (
 SCROLL_CLEAR_OF_THE_BOTTOM_BAR = "(el) => el.scrollIntoView({ block: 'center' })"
 
 
-def seed_board(seed, owner, categories: dict[str, list[str]], done: tuple[str, ...] = ()) -> int:
-    """A board "Groceries" of ``owner`` with these categories (in this order) and items, the ones
-    named in ``done`` ticked; returns the board's id."""
+def seed_board(
+    seed,
+    owner,
+    categories: dict[str, list[str]],
+    done: tuple[str, ...] = (),
+    *,
+    name: str = "Groceries",
+    archived: bool = False,
+) -> int:
+    """A board ``name`` of ``owner`` (archived a day ago if ``archived``) with these categories (in
+    this order) and items, the ones named in ``done`` ticked; returns the board's id."""
 
     async def make(db) -> int:
-        board = await create_board(db, owner, "Groceries")
-        for position, (name, items) in enumerate(categories.items()):
-            category = await create_category(db, board, name, position)
+        archived_at = datetime.now(UTC) - timedelta(days=1) if archived else None
+        board = await create_board(db, owner, name, archived_at=archived_at)
+        for position, (category_name, items) in enumerate(categories.items()):
+            category = await create_category(db, board, category_name, position)
             for item_name in items:
                 await create_item(db, category, item_name, is_done=item_name in done)
         return board.id
@@ -174,9 +183,9 @@ def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, ope
     page = logged_in_page
     board_problems = watch_console(page)
     page.goto("/boards")
-    open_board(page, board_id)  # as the owner: rename and delete are in the board's menu
+    open_board(page, board_id)  # as the owner: rename and archive are in the board's menu
     page.get_by_label("Board actions").click()
-    expect(page.get_by_role("button", name="Delete board")).to_be_visible()
+    expect(page.get_by_role("button", name="Archive board")).to_be_visible()
     page.keyboard.press("Escape")
     # A drag, whose answer swaps the whole board in: htmx must not copy the dragged item's
     # empty style attribute (from SortableJS) over, which style-src 'self' would refuse.
@@ -192,6 +201,9 @@ def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, ope
     expect(dialog).to_be_hidden()
     category(page, "Dairy").locator("summary").click()
     expect(category(page, "Dairy").get_by_role("button", name="Clear done (1)")).to_be_visible()
+    seed_board(seed, user, {"Tools": ["Hammer"]}, name="Old list", archived=True)
+    page.goto("/boards/archived")
+    expect(page.get_by_role("heading", name="Old list")).to_be_visible()
 
     assert [p for p in problems if "Content Security Policy" in p or "Refused to" in p] == []
     assert problems == [] and board_problems == []
@@ -207,20 +219,50 @@ def test_owner_renames_and_deletes_the_board(logged_in_page, seed, user, open_bo
 
     expect(page.get_by_label("Board name")).to_be_hidden()  # in the menu, not on the page
     page.get_by_label("Board actions").click()
-    page.get_by_label("Board name").fill("Weekend")
+    page.get_by_label("Board name").fill("Łosoś")
     page.locator("form", has=page.get_by_label("Board name")).get_by_role(
         "button", name="Rename"
     ).click()
-    expect(page.get_by_role("heading", level=1)).to_have_text("Weekend")
-    expect(page.locator("#board-content")).to_have_attribute("data-board-name", "Weekend")
+    expect(page.get_by_role("heading", level=1)).to_have_text("Łosoś")
+    expect(page.locator("#board-content")).to_have_attribute("data-board-name", "Łosoś")
 
     page.get_by_label("Board actions").click()
-    page.once("dialog", lambda dialog: dialog.accept())
-    page.get_by_role("button", name="Delete board").click()
+    confirms: list[str] = []
+    page.once("dialog", lambda d: (confirms.append(d.message), d.accept()))
+    page.get_by_role("button", name="Archive board").click()
 
+    # No toast asserted: the page's own socket gets board.deleted too, and either way it goes to
+    # the list (one of the two loads shows the flash).
     expect(page).to_have_url(re.compile(r"/boards$"))
     expect(page.get_by_text("You have no boards yet.")).to_be_visible()
-    assert 403 not in statuses
+    assert confirms == ["Archive “Łosoś”? Its members lose access until you restore it."]
+
+    page.goto("/boards/archived")
+    prompts: list[str] = []
+    page.once("dialog", lambda d: (prompts.append(d.message), d.accept("Łosoś")))
+    page.get_by_role("button", name="Delete permanently").click()
+
+    expect(page.get_by_text("No archived boards.")).to_be_visible()
+    expect(page.locator("#toasts")).to_contain_text("Board deleted permanently.")
+    assert prompts == ["Type “Łosoś” to delete this board and everything on it permanently."]
+    assert 403 not in statuses and 422 not in statuses
+    assert problems == []
+
+
+def test_archived_board_is_restored_from_the_archive_page(logged_in_page, seed, user):
+    page = logged_in_page
+    seed_board(seed, user, {"Dairy": ["Milk"]}, name="Weekend", archived=True)
+    problems = watch_console(page)
+    page.goto("/boards")
+    expect(page.get_by_text("You have no boards yet.")).to_be_visible()
+
+    page.goto("/boards/archived")
+    page.get_by_role("button", name="Restore").click()
+
+    expect(page.locator("#toasts")).to_contain_text("Board restored.")
+    expect(page.get_by_text("No archived boards.")).to_be_visible()
+    page.get_by_role("link", name="Back to boards").click()
+    expect(page.get_by_role("link", name=re.compile("Weekend"))).to_be_visible()
     assert problems == []
 
 

@@ -120,8 +120,8 @@ Here v1 had "dairy  products" (two spaces) and "Dairy products": in v2 they are
 Notes:
 
 - **Every run creates another board.** To import again (say, after more changes in v1), delete the
-  earlier board first ("Delete board" in the ⋮ menu next to the board's name), or you get the data
-  twice.
+  earlier board first, or you get the data twice: "Archive board" in the ⋮ menu next to the
+  board's name, then "Delete permanently" on the "Archived boards" page (`/boards/archived`).
 - **Names are tidied and made unique.** Runs of spaces become one space. Two categories whose
   names differ only in letter case get " (2)", " (3)"... The report lists the v1 names that
   changed.

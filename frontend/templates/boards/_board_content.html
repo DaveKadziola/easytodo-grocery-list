@@ -5,7 +5,7 @@
 {% set role = view.role %}
 {% set can_edit = can(role, Action.EDIT_CONTENT) %}
 <div id="board-content" data-board-id="{{ view.board.id }}" data-board-name="{{ view.board.name }}" class="space-y-6">
-  {#- On a phone the list starts right below the name: the owner's rare controls (rename, delete)
+  {#- On a phone the list starts right below the name: the owner's rare controls (rename, archive)
       sit in the ⋮ menu, and "New category" is in the bottom bar, which shows this form. #}
   <div class="flex items-end gap-2">
     <div class="min-w-0 flex-1">
@@ -22,7 +22,7 @@
           <input id="board-name" name="name" value="{{ view.board.name }}" required maxlength="80" autocomplete="off" class="input">
           <button type="submit" class="btn-secondary w-full">Rename</button>
         </form>
-        <button type="button" class="menu-item text-red-700 dark:text-red-400" hx-delete="/boards/{{ view.board.id }}" hx-confirm="Delete this board with all its categories and items?">Delete board</button>
+        <button type="button" class="menu-item text-red-700 dark:text-red-400" hx-post="/boards/{{ view.board.id }}/archive" hx-confirm="Archive “{{ view.board.name }}”? Its members lose access until you restore it.">Archive board</button>
       </div>
     </details>
     {% endif %}

@@ -49,9 +49,12 @@ async def create_board(
     owner: User,
     name: str = "Groceries",
     members: dict[User, BoardRole] = {},  # noqa: B006 (read only)
+    *,
+    archived_at: datetime | None = None,
 ) -> Board:
-    """A board with ``owner`` as its owner member, plus ``members`` with the given roles."""
-    board = Board(name=name, owner_id=owner.id)
+    """A board with ``owner`` as its owner member, plus ``members`` with the given roles;
+    archived at ``archived_at`` when that is given."""
+    board = Board(name=name, owner_id=owner.id, archived_at=archived_at)
     db.add(board)
     await db.flush()
     db.add(BoardMember(board_id=board.id, user_id=owner.id, role=BoardRole.OWNER))

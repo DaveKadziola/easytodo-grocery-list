@@ -1,0 +1,37 @@
+{# The "Archived boards" page: the user's own archived boards, the last archived first, each to
+   restore or to delete for good (by typing its name into the hx-prompt; the answer reloads this
+   page). Context: archived (list of ArchivedBoard). -#}
+{% extends "base.html" %}
+{% block title %}Archived boards · EasyToDo{% endblock %}
+{% block content %}
+<div class="mx-auto w-full max-w-3xl space-y-6">
+  <div>
+    <a href="/boards" class="link inline-flex min-h-11 items-center text-sm">Back to boards</a>
+    <h1 class="text-2xl font-semibold">Archived boards</h1>
+  </div>
+
+  {% if archived %}
+  <ul class="space-y-4">
+    {% for a in archived %}
+    <li id="archived-board-{{ a.board.id }}" class="card flex flex-wrap items-center justify-between gap-3">
+      <div class="min-w-0">
+        <h2 class="break-words text-lg font-semibold">{{ a.board.name }}</h2>
+        <p class="text-sm text-slate-600 dark:text-slate-400">
+          Archived <time datetime="{{ a.board.archived_at.isoformat() }}" class="whitespace-nowrap">{{ a.board.archived_at.strftime("%Y-%m-%d %H:%M") }} UTC</time>
+        </p>
+        <p class="text-sm text-slate-600 dark:text-slate-400">
+          {% if a.purge_at %}Deleted permanently on <time datetime="{{ a.purge_at.isoformat() }}" class="whitespace-nowrap">{{ a.purge_at.strftime("%Y-%m-%d %H:%M") }} UTC</time>{% else %}Kept until you delete it{% endif %}
+        </p>
+      </div>
+      <div class="flex shrink-0 flex-wrap gap-2">
+        <button type="button" class="btn-secondary" hx-post="/boards/{{ a.board.id }}/restore">Restore</button>
+        <button type="button" class="btn-danger" hx-delete="/boards/{{ a.board.id }}" hx-prompt="Type “{{ a.board.name }}” to delete this board and everything on it permanently.">Delete permanently</button>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-slate-600 dark:text-slate-400">No archived boards.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -6,14 +6,13 @@ connection status in the header and the phone's bottom bar."""
 import re
 
 from factories import create_board, create_category, create_item, create_user
+from helpers import NASTY, NASTY_ESCAPED
 from sqlalchemy import select, update
 
 from easytodo.models import Item, User
 from easytodo.web import FRONTEND_DIR
 
 HX = {"HX-Request": "true"}
-NASTY = 'O\'Reilly <b>"x"</b> <script>alert(1)</script>'
-NASTY_ESCAPED = "O&#39;Reilly &lt;b&gt;&#34;x&#34;&lt;/b&gt; &lt;script&gt;alert(1)&lt;/script&gt;"
 # Markup that only someone who may change the board's content gets.
 EDIT_CONTROLS = (
     'hx-post="/items/',
@@ -128,12 +127,12 @@ async def test_board_content_carries_the_board_header(signed_in_client, editor_c
     assert re.search(r"<h1[^>]*>Groceries</h1>", owner_html)
     assert '<a href="/boards"' in owner_html
     assert f'hx-patch="/boards/{board.id}"' in owner_html
-    assert f'hx-delete="/boards/{board.id}"' in owner_html
+    assert f'hx-post="/boards/{board.id}/archive"' in owner_html
 
     editor_html = (await editor_client.get(f"/boards/{board.id}/content", headers=HX)).text
     assert re.search(r"<h1[^>]*>Groceries</h1>", editor_html)
     assert f'hx-patch="/boards/{board.id}"' not in editor_html
-    assert f'hx-delete="/boards/{board.id}"' not in editor_html
+    assert f'hx-post="/boards/{board.id}/archive"' not in editor_html
     assert f'hx-post="/boards/{board.id}/categories"' in editor_html  # New category
     assert re.search(r'<div id="categories"[^>]* data-sortable-categories>', editor_html)
 

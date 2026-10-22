@@ -7,6 +7,7 @@ import sys
 
 import pytest
 from factories import create_user
+from helpers import NASTY, NASTY_ESCAPED
 
 from easytodo import web
 from easytodo.display import (
@@ -17,9 +18,6 @@ from easytodo.display import (
     user_display_name,
 )
 from easytodo.models import User
-
-NASTY = 'O\'Reilly <b>"x"</b> <script>alert(1)</script>'
-NASTY_ESCAPED = "O&#39;Reilly &lt;b&gt;&#34;x&#34;&lt;/b&gt; &lt;script&gt;alert(1)&lt;/script&gt;"
 
 
 def avatar(user_id: int, name: str, **kwargs: str) -> str:

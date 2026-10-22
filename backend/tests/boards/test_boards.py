@@ -1,16 +1,17 @@
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 
 import pytest
 from factories import DEFAULT_PASSWORD, create_board, create_category, create_item, create_user
-from helpers import login
+from helpers import NASTY, NASTY_ESCAPED, login
 from sqlalchemy import event, func, select
 
 from easytodo.boards import service
 from easytodo.boards.permissions import Action
 from easytodo.boards.service import get_board_view, list_boards
-from easytodo.models import Board, BoardMember, BoardRole, Category, Item, User
+from easytodo.models import Board, BoardMember, BoardRole, User
 from easytodo.realtime.events import BoardEvent, EventType, current_origin
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
 
@@ -108,7 +109,7 @@ async def test_root_redirects_to_boards(client, db):
     assert r.headers["location"] == "/boards"
 
 
-@pytest.mark.parametrize("path", ["/boards", "/boards/1"])
+@pytest.mark.parametrize("path", ["/boards", "/boards/1", "/boards/archived"])
 async def test_board_pages_require_sign_in(client, path):
     r = await client.get(path)
     assert r.status_code == 303
@@ -152,6 +153,10 @@ async def test_list_boards_puts_own_boards_first_then_sorts_by_name_in_one_query
         db, eve, "Apple club", members={dave: BoardRole.EDITOR, frank: BoardRole.VIEWER}
     )
     await create_board(db, eve, "Eve private plans")
+    await create_board(db, dave, "Archived list", archived_at=datetime(2026, 10, 1, tzinfo=UTC))
+    await create_board(
+        db, eve, "Archived club", {dave: BoardRole.EDITOR}, archived_at=datetime.now(UTC)
+    )
     bread = await create_category(db, club, "Bread")
     await create_item(db, bread, "Rye")
     await create_item(db, bread, "Baguette")
@@ -305,60 +310,36 @@ async def test_rename_validates_the_name(client, db, name):
     assert await db.scalar(select(Board.name)) == "Groceries"
 
 
-async def test_owner_deletes_board_with_everything_on_it(client, db, published):
-    dave = await create_user(db, "dave@example.com")
-    eve = await create_user(db, "eve@example.com")
-    board = await create_board(db, dave, "Groceries", members={eve: BoardRole.EDITOR})
-    keep = await create_board(db, dave, "Keep me")
-    await create_item(db, await create_category(db, board, "Dairy"), "Milk")
-    await create_item(db, await create_category(db, keep, "Tools"), "Hammer")
-    await login(client, "dave@example.com")
-
-    page = await client.get(f"/boards/{board.id}")
-    assert f'hx-delete="/boards/{board.id}"' in page.text
-
-    r = await client.delete(f"/boards/{board.id}", headers=HX | {"X-Client-Id": "tab-1"})
-
-    assert r.status_code == 200
-    assert r.headers["hx-redirect"] == "/boards"
-    assert list(await db.scalars(select(Board.name))) == ["Keep me"]
-    assert set(await db.scalars(select(BoardMember.board_id))) == {keep.id}
-    assert list(await db.scalars(select(Category.name))) == ["Tools"]
-    assert list(await db.scalars(select(Item.name))) == ["Hammer"]
-    assert published == [((BoardEvent(EventType.BOARD_DELETED, board_id=board.id),), "tab-1")]
-    assert (await client.get(f"/boards/{board.id}")).status_code == 404
-
-
-async def test_delete_without_htmx_redirects_to_the_list(client, db):
-    dave = await create_user(db, "dave@example.com")
-    board = await create_board(db, dave, "Groceries")
-    await login(client, "dave@example.com")
-
-    r = await client.delete(f"/boards/{board.id}")
-
-    assert r.status_code == 303
-    assert r.headers["location"] == "/boards"
-    assert await count_rows(db, Board) == 0
-
-
+@pytest.mark.parametrize("breach", ["no_token", "foreign_origin"])
 @pytest.mark.parametrize(
-    "method,path,data",
+    "method,path,data,archived",
     [
-        ("POST", "/boards", {"name": "New one"}),
-        ("PATCH", "/boards/{id}", {"name": "Renamed"}),
-        ("DELETE", "/boards/{id}", None),
+        ("POST", "/boards", {"name": "New one"}, False),
+        ("PATCH", "/boards/{id}", {"name": "Renamed"}, False),
+        ("POST", "/boards/{id}/archive", None, False),
+        ("POST", "/boards/{id}/restore", None, True),
+        ("DELETE", "/boards/{id}", None, True),
     ],
 )
-async def test_board_writes_require_the_csrf_token(client, db, method, path, data):
+async def test_board_writes_require_the_csrf_token(
+    client, db, method, path, data, archived, breach
+):
     dave = await create_user(db, "dave@example.com")
-    board = await create_board(db, dave, "Groceries")
+    archived_at = datetime(2026, 10, 1, tzinfo=UTC) if archived else None
+    board = await create_board(db, dave, "Groceries", archived_at=archived_at)
     await login(client, "dave@example.com")
-    del client.headers[CSRF_HEADER]
+    if breach == "no_token":
+        del client.headers[CSRF_HEADER]
+    else:
+        client.headers["Origin"] = "https://evil.example"
 
-    r = await client.request(method, path.format(id=board.id), data=data)
+    r = await client.request(
+        method, path.format(id=board.id), data=data, headers={"HX-Prompt": "Groceries"}
+    )
 
     assert r.status_code == 403
-    assert list(await db.scalars(select(Board.name))) == ["Groceries"]
+    rows = await db.execute(select(Board.name, Board.archived_at))
+    assert rows.all() == [("Groceries", archived_at)]
 
 
 async def test_board_page_lists_categories_and_items(client, db):
@@ -379,17 +360,13 @@ async def test_board_page_lists_categories_and_items(client, db):
 
 async def test_board_names_are_rendered_escaped(client, db):  # Review Focus 1
     dave = await create_user(db, "dave@example.com")
-    nasty = 'O\'Reilly <b>"x"</b> <script>alert(1)</script>'
-    board = await create_board(db, dave, nasty)
+    board = await create_board(db, dave, NASTY)
     await login(client, "dave@example.com")
 
     for path in ("/boards", f"/boards/{board.id}"):
         html = (await client.get(path)).text
         assert "<script>alert(1)</script>" not in html and "<b>" not in html
-        assert (
-            "O&#39;Reilly &lt;b&gt;&#34;x&#34;&lt;/b&gt; &lt;script&gt;alert(1)&lt;/script&gt;"
-            in html
-        )
+        assert NASTY_ESCAPED in html
 
 
 async def test_board_view_uses_two_queries(db, monkeypatch):

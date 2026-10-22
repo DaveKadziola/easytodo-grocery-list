@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from factories import create_board, create_category, create_item, create_user
+from helpers import wait_until_a_query_waits_for_a_lock
 from sqlalchemy import delete, select, text
 
 from easytodo.content.service import clear_done, get_category_view
@@ -262,22 +263,6 @@ async def test_action_on_deleted_category_returns_404_with_resync(editor_client,
         }
 
 
-async def _wait_until_a_query_waits_for_a_lock(db) -> None:
-    deadline = asyncio.get_running_loop().time() + 5
-    while asyncio.get_running_loop().time() < deadline:
-        async with db.bind.connect() as conn:  # a fresh snapshot of pg_stat_activity each time
-            waiting = await conn.scalar(
-                text(
-                    "SELECT count(*) FROM pg_stat_activity"
-                    " WHERE datname = current_database() AND wait_event_type = 'Lock'"
-                )
-            )
-        if waiting:
-            return
-        await asyncio.sleep(0.02)
-    raise AssertionError("no query started waiting for the row lock")
-
-
 @pytest.mark.parametrize(
     "deletion,method,path,data,message",
     [
@@ -307,7 +292,7 @@ async def test_change_racing_a_delete_on_another_device_is_404_not_500(  # Revie
         change = asyncio.create_task(
             editor_client.request(method, path.format(**ids), data=data, headers=HX)
         )
-        await _wait_until_a_query_waits_for_a_lock(db)
+        await wait_until_a_query_waits_for_a_lock(db)
         await transaction.commit()
         r = await change
 
@@ -316,6 +301,58 @@ async def test_change_racing_a_delete_on_another_device_is_404_not_500(  # Revie
         "toast": {"level": "error", "message": message},
         "resync": True,
     }
+
+
+@pytest.mark.parametrize(
+    "table,held,method,path,data",
+    [
+        # The category is only the parent of a new item, or of the done items "Clear done" deletes.
+        ("categories", "FOR SHARE", "POST", "/categories/{category}/items", {"name": "Eggs"}),
+        ("categories", "FOR SHARE", "POST", "/categories/{category}/clear-done", None),
+        # A rename or a tick changes no key: a row a new child row points to (its foreign key
+        # check holds FOR KEY SHARE) can still change.
+        ("categories", "FOR KEY SHARE", "PATCH", "/categories/{category}", {"name": "Fridge"}),
+        ("items", "FOR KEY SHARE", "POST", "/items/{item}/toggle", None),
+    ],
+)
+async def test_writes_take_only_the_row_lock_they_need(
+    editor_client, category, item, db, table, held, method, path, data
+):
+    """Another device holds a lock on the row that does not conflict: the write does not wait."""
+    async with db.bind.connect() as other_device, other_device.begin():
+        row_id = category.id if table == "categories" else item.id
+        await other_device.execute(
+            text(f"SELECT 1 FROM {table} WHERE id = :id {held}"), {"id": row_id}
+        )
+        request = editor_client.request(
+            method, path.format(category=category.id, item=item.id), data=data, headers=HX
+        )
+        r = await asyncio.wait_for(request, 2)
+
+    assert r.status_code == 200, r.headers.get("hx-trigger")
+
+
+async def test_viewer_write_is_403_without_waiting_for_a_row_lock(viewer_client, item, db):
+    """An editor's change holds the item and its category locked: a viewer's write is refused at
+    once instead of queueing behind it (and, had it got there first, would hold up the editor)."""
+    async with db.bind.connect() as other_device, other_device.begin():
+        for table, row_id in (("categories", item.category_id), ("items", item.id)):
+            await other_device.execute(
+                text(f"SELECT 1 FROM {table} WHERE id = :id FOR UPDATE"), {"id": row_id}
+            )
+        for method, path, data in (
+            ("POST", f"/items/{item.id}/toggle", None),
+            ("PATCH", f"/items/{item.id}", {"name": "Oat milk"}),
+            ("DELETE", f"/items/{item.id}", None),
+            ("POST", f"/categories/{item.category_id}/items", {"name": "Eggs"}),
+            ("POST", f"/categories/{item.category_id}/clear-done", None),
+            ("PATCH", f"/categories/{item.category_id}", {"name": "Fridge"}),
+            ("DELETE", f"/categories/{item.category_id}", None),
+        ):
+            request = viewer_client.request(method, path, data=data, headers=HX)
+            r = await asyncio.wait_for(request, 2)
+            assert r.status_code == 403, (method, path)
+            assert toast(r) == "You don't have permission to do that."
 
 
 async def test_name_length_limits(editor_client, category):

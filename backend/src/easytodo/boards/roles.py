@@ -22,3 +22,8 @@ _ALLOWED: dict[BoardRole, frozenset[Action]] = {
 
 def can(role: BoardRole, action: Action) -> bool:
     return action in _ALLOWED[role]
+
+
+def roles_for(action: Action) -> tuple[BoardRole, ...]:
+    """The roles that may do ``action`` (for a query that should find only their members)."""
+    return tuple(role for role, actions in _ALLOWED.items() if action in actions)
