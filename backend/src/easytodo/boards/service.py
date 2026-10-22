@@ -118,14 +118,16 @@ async def landing_board_id(db: AsyncSession, user: User, last_opened: int | None
 
 async def list_boards(db: AsyncSession, user: User) -> list[BoardSummary]:
     """The active boards ``user`` is a member of: their own first, then the shared ones, each by
-    name; one query, with each board's owner's e-mail."""
+    name; one query, with each board's owner's e-mail and its open items (in active
+    categories)."""
     owner = aliased(User)
     members = aliased(BoardMember)
     member_count = select(func.count()).where(members.board_id == Board.id).scalar_subquery()
     open_items = (
         select(func.count())
         .select_from(Item)
-        .where(Item.board_id == Board.id, Item.is_done.is_(False))
+        .join(Category, Category.id == Item.category_id)
+        .where(Item.board_id == Board.id, Item.is_done.is_(False), Category.archived_at.is_(None))
         .scalar_subquery()
     )
     rows = await db.execute(
@@ -208,19 +210,25 @@ async def delete_board(db: AsyncSession, board_id: int, user: User, confirm_name
 
 
 async def get_board_view(db: AsyncSession, board_id: int, user: User) -> BoardView:
-    """The board with its categories (by position) and their items (open first, then by name).
+    """The board with its active categories (by position) and their items (open first, then by
+    name).
 
-    Two queries after the permission check: the categories and all of the board's items.
+    Two queries after the permission check: the categories and the items in them.
     """
     board, role = await require_board(db, board_id, user, Action.VIEW)
     categories = list(
         await db.scalars(
             select(Category)
-            .where(Category.board_id == board.id)
+            .where(Category.board_id == board.id, Category.archived_at.is_(None))
             .order_by(Category.position, Category.id)
         )
     )
-    items = await db.scalars(select(Item).where(Item.board_id == board.id).order_by(*ITEM_ORDER))
+    items = await db.scalars(
+        select(Item)
+        .join(Category, Category.id == Item.category_id)
+        .where(Item.board_id == board.id, Category.archived_at.is_(None))
+        .order_by(*ITEM_ORDER)
+    )
     by_category: dict[int, list[Item]] = {}
     for item in items:
         by_category.setdefault(item.category_id, []).append(item)

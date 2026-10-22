@@ -88,11 +88,13 @@ async def test_editor_category_fragment_has_edit_controls(editor_client, categor
         html,
     )
     assert f'hx-patch="/categories/{category.id}"' in html  # rename
+    confirm = "Archive “Dairy” with its items? You can restore it from the board's archive."
     assert re.search(
-        rf'hx-delete="/categories/{category.id}" hx-target="#category-{category.id}"'
-        r' hx-confirm="[^"]+"',
+        rf'hx-post="/categories/{category.id}/archive" hx-target="#category-{category.id}"'
+        rf' hx-confirm="{re.escape(confirm)}">Archive category</button>',
         html,
     )
+    assert "hx-delete=" not in html  # deleting a category for good is on the archive page
     assert "category-handle" in html and "data-sortable-items" in html
     assert re.search(r'<button type="button" id="item-\d+-name"[^>]* @click="openItem"', html)
 

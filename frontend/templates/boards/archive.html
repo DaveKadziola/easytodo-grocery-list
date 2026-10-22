@@ -1,0 +1,44 @@
+{# The board's "Archived categories" page: its archived categories, the last archived first, each
+   with its items' count and when it is deleted for good (after the retention of the board's
+   owner). Editors and the owner restore one (it goes last on the board) or delete it for good by
+   typing its name into the hx-prompt; either answer reloads this page. Nothing here is a category
+   of the board page (no data-category-* or category-{id} ids), which board.js and realtime.js
+   would act on. Context: board, role (the member's BoardRole), archived (list of
+   ArchivedCategory). -#}
+{% extends "base.html" %}
+{% block title %}Archived categories · {{ board.name }} · EasyToDo{% endblock %}
+{% block content %}
+{% set can_edit = can(role, Action.EDIT_CONTENT) %}
+<div class="mx-auto w-full max-w-3xl space-y-6">
+  <div>
+    <a href="/boards/{{ board.id }}" class="link inline-flex min-h-11 items-center text-sm">Back to the board</a>
+    <h1 class="break-words text-2xl font-semibold">Archived categories in {{ board.name }}</h1>
+  </div>
+
+  {% if archived %}
+  <ul class="space-y-4">
+    {% for a in archived %}
+    <li id="archived-category-{{ a.category.id }}" class="card flex flex-wrap items-center justify-between gap-3">
+      <div class="min-w-0">
+        <h2 class="break-words text-lg font-semibold">{{ a.category.name }}</h2>
+        <p class="text-sm text-slate-600 dark:text-slate-400">
+          {{ a.item_count }} {{ "item" if a.item_count == 1 else "items" }} · Archived <time datetime="{{ a.category.archived_at.isoformat() }}" class="whitespace-nowrap">{{ a.category.archived_at.strftime("%Y-%m-%d %H:%M") }} UTC</time>
+        </p>
+        <p class="text-sm text-slate-600 dark:text-slate-400">
+          {% if a.purge_at %}Deleted permanently on <time datetime="{{ a.purge_at.isoformat() }}" class="whitespace-nowrap">{{ a.purge_at.strftime("%Y-%m-%d %H:%M") }} UTC</time>{% else %}Kept until you delete it{% endif %}
+        </p>
+      </div>
+      {% if can_edit %}
+      <div class="flex shrink-0 flex-wrap gap-2">
+        <button type="button" class="btn-secondary" hx-post="/categories/{{ a.category.id }}/restore">Restore</button>
+        <button type="button" class="btn-danger" hx-delete="/categories/{{ a.category.id }}" hx-prompt="Type “{{ a.category.name }}” to delete this category and its items permanently.">Delete permanently</button>
+      </div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-slate-600 dark:text-slate-400">No archived categories.</p>
+  {% endif %}
+</div>
+{% endblock %}

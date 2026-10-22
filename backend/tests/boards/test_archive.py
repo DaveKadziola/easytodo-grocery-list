@@ -5,7 +5,6 @@ import asyncio
 import json
 import re
 from datetime import UTC, datetime, timedelta
-from urllib.parse import quote
 
 import pytest
 from content.test_isolation import ROUTES, fill
@@ -13,8 +12,10 @@ from factories import create_board, create_category, create_item, create_user
 from helpers import (
     NASTY,
     NASTY_ESCAPED,
+    TYPED_NAMES,
     flash_of,
     signed_in,
+    text_of,
     toast_message,
     wait_until_a_query_waits_for_a_lock,
 )
@@ -67,11 +68,6 @@ async def archive(db, board: Board, when: datetime = ARCHIVED_AT) -> None:
 
 async def user_named(db, email: str) -> User:
     return await db.scalar(select(User).where(User.email == email))
-
-
-def text_of(html: str) -> str:
-    """``html`` without its tags, each run of whitespace as one space."""
-    return " ".join(re.sub(r"<[^>]+>", " ", html).split())
 
 
 def archived_entry(html: str, board_id: int) -> str:
@@ -275,15 +271,7 @@ async def test_delete_needs_an_archived_board_and_its_typed_name(owner, board, c
     assert await rows(db) == before
 
 
-@pytest.mark.parametrize(  # Review Focus 3
-    ("name", "prompt"),
-    [
-        ("Łosoś", {"HX-Prompt": quote("Łosoś", safe=""), "HX-Prompt-URI-AutoEncoded": "true"}),
-        ("Café", {"HX-Prompt": "Café".encode("latin-1")}),  # Latin-1: htmx sends it as it is
-        ('O\'Reilly <b>"x"</b>', {"HX-Prompt": ' O\'Reilly <b>"x"</b> '}),
-        ("Deals %41", {"HX-Prompt": "Deals %41"}),  # not marked as encoded: taken literally
-    ],
-)
+@pytest.mark.parametrize(("name", "prompt"), TYPED_NAMES)  # Review Focus 3
 async def test_permanent_delete_accepts_a_non_latin1_name(
     owner, client_factory, db, sharing_events, name, prompt
 ):

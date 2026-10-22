@@ -66,9 +66,15 @@ async def create_board(
 
 
 async def create_category(
-    db: AsyncSession, board: Board, name: str = "Dairy", position: int = 0
+    db: AsyncSession,
+    board: Board,
+    name: str = "Dairy",
+    position: int = 0,
+    *,
+    archived_at: datetime | None = None,
 ) -> Category:
-    category = Category(board_id=board.id, name=name, position=position)
+    """A category of ``board``; archived at ``archived_at`` when that is given."""
+    category = Category(board_id=board.id, name=name, position=position, archived_at=archived_at)
     db.add(category)
     await db.commit()
     return category

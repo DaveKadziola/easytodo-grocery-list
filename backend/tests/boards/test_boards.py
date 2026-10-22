@@ -160,6 +160,8 @@ async def test_list_boards_puts_own_boards_first_then_sorts_by_name_in_one_query
     await create_item(db, bread, "Rye")
     await create_item(db, bread, "Baguette")
     await create_item(db, bread, "Stale loaf", is_done=True)
+    old_bread = await create_category(db, club, "Old bread", archived_at=datetime.now(UTC))
+    await create_item(db, old_bread, "Archived loaf")  # open, but its category is archived
 
     with count_queries(db) as statements:
         summaries = await list_boards(db, dave)
@@ -386,6 +388,8 @@ async def test_board_view_uses_two_queries(db, monkeypatch):
     await create_item(db, fruit, "banana", is_done=True)
     await create_item(db, fruit, "Apple")
     await create_item(db, fruit, "cherry")
+    archived = await create_category(db, board, "Archived", archived_at=datetime.now(UTC))
+    await create_item(db, archived, "Not on the board any more")
     elsewhere = await create_category(db, await create_board(db, owner, "Other"), "Elsewhere")
     await create_item(db, elsewhere, "Not on this board")
 

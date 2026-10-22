@@ -15,10 +15,13 @@ NO_PERMISSION = "You don't have permission to do that."
 # Every content route, as (method, path template, form data); the ids are filled in per test.
 ROUTES = [
     ("GET", "/boards/{board}/content", None),
+    ("GET", "/boards/{board}/archive", None),
     ("POST", "/boards/{board}/categories", {"name": "Hijacked"}),
     ("PUT", "/boards/{board}/categories/order", {"ids": ["{category}", "{other_category}"]}),
     ("GET", "/categories/{category}", None),
     ("PATCH", "/categories/{category}", {"name": "Hijacked"}),
+    ("POST", "/categories/{category}/archive", None),
+    ("POST", "/categories/{category}/restore", None),
     ("DELETE", "/categories/{category}", None),
     ("POST", "/categories/{category}/items", {"name": "Hijacked", "description": "x"}),
     ("PATCH", "/items/{item}", {"name": "Hijacked", "description": "x"}),

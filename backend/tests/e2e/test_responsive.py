@@ -195,7 +195,7 @@ def test_theme_follows_the_system_and_stays_readable(
     page.get_by_role("button", name="Bread", exact=True).click()  # the item modal
     expect(page.get_by_role("dialog")).to_be_visible()
     assert page.evaluate(LOW_CONTRAST_TEXT, AA) == []
-    for path in ("/boards", "/boards/archived", "/account"):
+    for path in ("/boards", "/boards/archived", f"/boards/{seeded_board}/archive", "/account"):
         page.goto(path)
         assert page.evaluate(LOW_CONTRAST_TEXT, AA) == [], path
 

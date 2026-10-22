@@ -444,18 +444,24 @@ def test_back_on_the_tab_it_catches_up_with_the_cursor_in_an_empty_field(two_log
     expect(field).to_be_focused()
 
 
-def test_deleted_category_disappears_on_the_other_device_without_reload(two_logged_in_pages):
+def test_archived_category_leaves_and_comes_back_on_the_other_device(two_logged_in_pages):
     a, b = two_logged_in_pages
     b.evaluate("window.notReloaded = true")
     reloads = board_reloads(b)
 
     category(a, "Dairy").get_by_label("Category actions").click()
     a.once("dialog", lambda dialog: dialog.accept())
-    category(a, "Dairy").get_by_role("button", name="Delete category").click()
+    category(a, "Dairy").get_by_role("button", name="Archive category").click()
 
     expect(category(b, "Dairy")).to_have_count(0, timeout=LIVE_UPDATE_MS)
-    assert b.evaluate("window.notReloaded") is True
     assert board_reloads(b) == reloads  # only that section went, the board was not fetched again
+
+    a.get_by_role("link", name="Archived categories").click()
+    a.get_by_role("button", name="Restore").click()
+
+    expect(items_of(b, "Dairy")).to_have_text([re.compile("Milk")], timeout=LIVE_UPDATE_MS)
+    assert b.evaluate("window.notReloaded") is True  # the page itself was never reloaded
+    assert b.locator("#toasts > *").all_inner_texts() == []
 
 
 def test_text_typed_into_add_item_survives_changes_to_its_category(two_logged_in_pages):
@@ -518,7 +524,7 @@ def test_update_finding_its_category_gone_does_not_reload_the_board_while_typing
     )
     seed(lambda db: service.create_item(db, dairy_id, user, "Butter"))
     wait_until(page, lambda: held, "the update's request")
-    seed(lambda db: service.delete_category(db, dairy_id, user))
+    seed(lambda db: service.archive_category(db, dairy_id, user))
     wait_for_message(page, messages, "category.deleted")
     field = category(page, "Bakery").get_by_placeholder("Add item")
     field.fill("Chee")

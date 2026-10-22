@@ -7,10 +7,13 @@
 <div id="board-content" data-board-id="{{ view.board.id }}" data-board-name="{{ view.board.name }}" class="space-y-6">
   {#- On a phone the list starts right below the name: renaming, inviting and archiving are in the
       board's ⋮ menu on the board list, and "New category" is in the bottom bar, which shows this
-      form. #}
+      form. The board's archived categories are a link beside "All boards", for every member. #}
   <div class="flex items-end gap-2">
     <div class="min-w-0 flex-1">
-      <a href="/boards" class="link inline-flex min-h-11 items-center text-sm">All boards</a>
+      <div class="flex flex-wrap gap-x-4">
+        <a href="/boards" class="link inline-flex min-h-11 items-center text-sm">All boards</a>
+        <a href="/boards/{{ view.board.id }}/archive" class="link inline-flex min-h-11 items-center text-sm">Archived categories</a>
+      </div>
       <h1 class="break-words text-2xl font-semibold">{{ view.board.name }}</h1>
     </div>
   </div>
@@ -25,7 +28,7 @@
 
   <div id="categories" class="gap-6 sm:columns-2 lg:columns-3"{% if can_edit %} data-sortable-categories{% endif %}>
     {#- Shown only while it is the only child: until the first category arrives (the "New category"
-        form appends it here, the board is not reloaded) and again once the last one is deleted. #}
+        form appends it here, the board is not reloaded) and again once the last one is archived. #}
     <p class="mb-6 hidden text-slate-600 dark:text-slate-400 only:block">{% if can_edit %}Add your first category{% else %}This board has no categories yet.{% endif %}</p>
     {% for category_view in view.categories %}
     {% include "boards/_category.html" %}

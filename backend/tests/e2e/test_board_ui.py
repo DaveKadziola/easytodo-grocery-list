@@ -1,7 +1,8 @@
 """The board page in Chromium: the phone layout, adding and ticking items, drag and drop (mouse
-and touch), the item modal, the category menu, the "Archived boards" page, a change that lost a
-race with another device, and no CSP violations anywhere. (Renaming and archiving a board are
-tested on the board list, in test_board_list_ui.py.)"""
+and touch), the item modal, the category menu, the "Archived boards" page and the board's
+"Archived categories" page, a change that lost a race with another device, and no CSP
+violations anywhere. (Renaming and archiving a board are tested on the board list, in
+test_board_list_ui.py.)"""
 
 import re
 from datetime import UTC, datetime, timedelta
@@ -318,7 +319,7 @@ def test_new_category_goes_last_and_the_field_is_ready_for_the_next(
     expect(page.locator("section[data-category-id] h2")).to_have_text(["Dairy", "Bakery"])
 
 
-def test_category_menu_renames_clears_done_and_deletes(logged_in_page, seed, user, open_board):
+def test_category_menu_renames_clears_done_and_archives(logged_in_page, seed, user, open_board):
     page = logged_in_page
     board_id = seed_board(
         seed, user, {"Dairy": ["Milk", "Yogurt"], "Bakery": ["Bread"]}, done=("Milk",)
@@ -335,12 +336,57 @@ def test_category_menu_renames_clears_done_and_deletes(logged_in_page, seed, use
     expect(items_of(page, "Fridge")).to_have_text([re.compile("Yogurt")])
 
     category(page, "Fridge").locator("summary").click()
-    page.once("dialog", lambda dialog: dialog.accept())
-    category(page, "Fridge").get_by_role("button", name="Delete category").click()
+    confirms: list[str] = []
+    page.once("dialog", lambda d: (confirms.append(d.message), d.accept()))
+    category(page, "Fridge").get_by_role("button", name="Archive category").click()
     expect(category(page, "Fridge")).to_have_count(0)
+    expect(page.locator("#toasts")).to_contain_text("Category archived.")
+    assert confirms == [
+        "Archive “Fridge” with its items? You can restore it from the board's archive."
+    ]
 
     page.reload()
     expect(page.locator("section[data-category-id] h2")).to_have_text(["Bakery"])
+
+
+def test_archive_page_restores_and_deletes_permanently(  # Review Focus 3
+    logged_in_page, seed, user, open_board
+):
+    page = logged_in_page
+
+    async def make(db) -> int:
+        board = await create_board(db, user, "Groceries")
+        await create_item(db, await create_category(db, board, "Bakery"), "Bread")
+        yesterday = datetime.now(UTC) - timedelta(days=1)
+        dairy = await create_category(db, board, "Dairy", archived_at=yesterday)
+        await create_item(db, dairy, "Milk")
+        await create_category(db, board, "Łosoś", archived_at=yesterday)
+        return board.id
+
+    board_id = seed(make)
+    problems = watch_console(page)
+    open_board(page, board_id)
+    expect(page.locator("section[data-category-id] h2")).to_have_text(["Bakery"])
+
+    page.get_by_role("link", name="Archived categories").click()
+    expect(page.get_by_role("heading", level=1)).to_have_text("Archived categories in Groceries")
+    dairy = page.locator("li").filter(has=page.get_by_role("heading", name="Dairy", exact=True))
+    expect(dairy).to_contain_text("1 item ·")
+    dairy.get_by_role("button", name="Restore").click()
+    expect(page.locator("#toasts")).to_contain_text("Category restored.")
+    expect(page.get_by_role("heading", name="Dairy", exact=True)).to_have_count(0)
+
+    prompts: list[str] = []
+    page.once("dialog", lambda d: (prompts.append(d.message), d.accept("Łosoś")))
+    page.get_by_role("button", name="Delete permanently").click()
+    expect(page.get_by_text("No archived categories.")).to_be_visible()
+    expect(page.locator("#toasts")).to_contain_text("Category deleted permanently.")
+    assert prompts == ["Type “Łosoś” to delete this category and its items permanently."]
+
+    page.get_by_role("link", name="Back to the board").click()
+    expect(page.locator("section[data-category-id] h2")).to_have_text(["Bakery", "Dairy"])
+    expect(items_of(page, "Dairy")).to_have_text([re.compile("Milk")])
+    assert problems == []
 
 
 def test_dragging_the_handle_reorders_categories(logged_in_page, seed, user, open_board):

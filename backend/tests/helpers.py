@@ -1,9 +1,10 @@
-"""Shared test steps that drive the app over HTTP, the name that tests escaping, and waiting for
-another connection's row lock."""
+"""Shared test steps that drive the app over HTTP, the names that test escaping and typed
+confirmations, reading pages and toasts, and waiting for another connection's row lock."""
 
 import asyncio
 import json
-from urllib.parse import unquote
+import re
+from urllib.parse import quote, unquote
 
 import httpx
 from factories import DEFAULT_PASSWORD
@@ -15,6 +16,15 @@ from easytodo.web import FLASH_COOKIE
 # A name with quotes, HTML and a script, and how the templates must show it (autoescaped).
 NASTY = 'O\'Reilly <b>"x"</b> <script>alert(1)</script>'
 NASTY_ESCAPED = "O&#39;Reilly &lt;b&gt;&#34;x&#34;&lt;/b&gt; &lt;script&gt;alert(1)&lt;/script&gt;"
+
+# Names typed into an hx-prompt to confirm a permanent delete, each with the headers htmx sends
+# it in (Review Focus 3): ``(name, headers)``, for ``pytest.mark.parametrize``.
+TYPED_NAMES = [
+    ("Łosoś", {"HX-Prompt": quote("Łosoś", safe=""), "HX-Prompt-URI-AutoEncoded": "true"}),
+    ("Café", {"HX-Prompt": "Café".encode("latin-1")}),  # Latin-1: htmx sends it as it is
+    ('O\'Reilly <b>"x"</b>', {"HX-Prompt": ' O\'Reilly <b>"x"</b> '}),
+    ("Deals %41", {"HX-Prompt": "Deals %41"}),  # not marked as encoded: taken literally
+]
 
 
 async def login(client: httpx.AsyncClient, email: str, password: str = DEFAULT_PASSWORD) -> None:
@@ -36,8 +46,13 @@ async def signed_in(client_factory, email: str) -> httpx.AsyncClient:
 
 
 def toast_message(response: httpx.Response) -> str:
-    """The error toast of an htmx request's response (its ``HX-Trigger`` header)."""
+    """The toast of an htmx request's response (its ``HX-Trigger`` header)."""
     return json.loads(response.headers["hx-trigger"])["toast"]["message"]
+
+
+def text_of(html: str) -> str:
+    """``html`` without its tags, each run of whitespace as one space."""
+    return " ".join(re.sub(r"<[^>]+>", " ", html).split())
 
 
 def flash_of(response: httpx.Response) -> dict:

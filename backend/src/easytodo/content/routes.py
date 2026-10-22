@@ -1,6 +1,9 @@
-"""Categories and items over HTMX. Each route answers with the HTML fragment to swap in: the
-whole board content, one category, or nothing (a deleted category, a new order)."""
+"""Categories and items over HTMX, and the board's "Archived categories" page. Each route
+answers with the HTML fragment to swap in: the whole board content, one category, or nothing (an
+archived category, a new order); a category restored or deleted for good from the archive page
+reloads that page instead."""
 
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Form, Request
@@ -10,21 +13,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from easytodo.auth.deps import CurrentUser, DbSession, FormField
 from easytodo.boards.service import BoardView, get_board_view
 from easytodo.content.service import (
+    archive_category,
     clear_done,
     create_category,
     create_item,
     delete_category,
     delete_item,
     get_category_view,
+    list_archived_categories,
     move_item,
     rename_category,
     reorder_categories,
+    restore_category,
     toggle_item,
     update_item,
 )
 from easytodo.errors import ValidationFailed
 from easytodo.models import User
-from easytodo.web import render
+from easytodo.web import flash, prompt_answer, render
 
 router = APIRouter()
 
@@ -49,6 +55,15 @@ async def board_content(
     request: Request, db: DbSession, user: CurrentUser, board_id: int
 ) -> Response:
     return _board_content(request, await get_board_view(db, board_id, user))
+
+
+@router.get("/boards/{board_id}/archive")
+async def archive_page(
+    request: Request, db: DbSession, user: CurrentUser, board_id: int
+) -> Response:
+    board, role, archived = await list_archived_categories(db, board_id, user)
+    context = {"board": board, "role": role, "archived": archived}
+    return render(request, "boards/archive.html", context)
 
 
 @router.post("/boards/{board_id}/categories")
@@ -85,10 +100,33 @@ async def rename(
     return await _current_category(request, db, user, category_id)
 
 
+@router.post("/categories/{category_id}/archive")
+async def archive(db: DbSession, user: CurrentUser, category_id: int) -> Response:
+    await archive_category(db, category_id, user)
+    # An empty 200: HTMX swaps the category out.
+    toast = {"toast": {"level": "info", "message": "Category archived."}}
+    return Response(headers={"HX-Trigger": json.dumps(toast)})
+
+
+def _archive_page_again(request: Request, message: str) -> Response:
+    """The "Archived categories" page again (reloaded in place), ``message`` as a toast."""
+    response = Response(headers={"HX-Refresh": "true"})
+    flash(response, message, request.app.state.settings)
+    return response
+
+
+@router.post("/categories/{category_id}/restore")
+async def restore(request: Request, db: DbSession, user: CurrentUser, category_id: int) -> Response:
+    category, renamed = await restore_category(db, category_id, user)
+    message = f"Category restored as “{category.name}”." if renamed else "Category restored."
+    return _archive_page_again(request, message)
+
+
 @router.delete("/categories/{category_id}")
-async def delete(db: DbSession, user: CurrentUser, category_id: int) -> Response:
-    await delete_category(db, category_id, user)
-    return Response()  # an empty 200: HTMX swaps the category out
+async def delete(request: Request, db: DbSession, user: CurrentUser, category_id: int) -> Response:
+    """Delete an archived category for good; the user typed its name into the ``hx-prompt``."""
+    await delete_category(db, category_id, user, prompt_answer(request))
+    return _archive_page_again(request, "Category deleted permanently.")
 
 
 @router.post("/categories/{category_id}/items")

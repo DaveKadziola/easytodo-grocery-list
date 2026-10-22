@@ -11,7 +11,6 @@ from easytodo.realtime.events import BoardEvent, EventType
 HX = {"HX-Request": "true"}
 DUPLICATE = "A category with this name already exists."
 OUT_OF_DATE = "Category order is out of date. Refresh the board."
-CATEGORY_GONE = "This category no longer exists."
 
 
 def toast(response) -> str:
@@ -172,35 +171,6 @@ async def test_category_name_may_have_120_characters(editor_client, board, db):
     r = await editor_client.post(f"/boards/{board.id}/categories", data={"name": "x" * 120})
     assert r.status_code == 201
     assert await categories_in_order(db, board) == ["x" * 120]
-
-
-async def test_delete_category_removes_it_with_its_items(
-    editor_client, board, category, item, db, published
-):
-    keep = await create_category(db, board, "Bakery", position=1)
-    bread = await create_item(db, keep, "Bread")
-
-    r = await editor_client.delete(
-        f"/categories/{category.id}", headers=HX | {"X-Client-Id": "tab-1"}
-    )
-
-    assert r.status_code == 200
-    assert r.content == b""
-    assert await categories_in_order(db, board) == ["Bakery"]
-    assert list(await db.scalars(select(Item.id))) == [bread.id]
-    assert published == [
-        (
-            (
-                BoardEvent(
-                    EventType.CATEGORY_DELETED, board_id=board.id, category_ids=(category.id,)
-                ),
-            ),
-            "tab-1",
-        )
-    ]
-    r = await editor_client.get(f"/categories/{category.id}", headers=HX)
-    assert r.status_code == 404
-    assert toast(r) == CATEGORY_GONE
 
 
 async def test_category_fragment_lists_its_items_open_first(editor_client, board, category, db):

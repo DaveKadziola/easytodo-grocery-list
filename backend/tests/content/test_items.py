@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from factories import create_board, create_category, create_item, create_user
 from helpers import wait_until_a_query_waits_for_a_lock
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text, update
 
 from easytodo.content.service import clear_done, get_category_view
 from easytodo.content.validation import clean_description, clean_name
@@ -246,12 +246,13 @@ async def test_action_on_deleted_item_returns_404_with_resync(editor_client, ite
         }
 
 
-async def test_action_on_deleted_category_returns_404_with_resync(editor_client, category):
-    await editor_client.delete(f"/categories/{category.id}")
+async def test_action_on_archived_category_returns_404_with_resync(editor_client, category):
+    r = await editor_client.post(f"/categories/{category.id}/archive")
+    assert r.status_code == 200
     for method, path, data in (
         ("GET", f"/categories/{category.id}", None),
         ("PATCH", f"/categories/{category.id}", {"name": "Dairy"}),
-        ("DELETE", f"/categories/{category.id}", None),
+        ("POST", f"/categories/{category.id}/archive", None),
         ("POST", f"/categories/{category.id}/items", {"name": "Milk"}),
         ("POST", f"/categories/{category.id}/clear-done", None),
     ):
@@ -270,13 +271,16 @@ async def test_action_on_deleted_category_returns_404_with_resync(editor_client,
         ("item", "PATCH", "/items/{item}", {"name": "Oat milk"}, ITEM_GONE),
         ("category", "POST", "/categories/{category}/items", {"name": "Eggs"}, CATEGORY_GONE),
         ("category", "POST", "/items/{item}/move", {"category_id": "{category}"}, CATEGORY_GONE),
+        ("archive", "POST", "/categories/{category}/items", {"name": "Eggs"}, CATEGORY_GONE),
+        ("archive", "POST", "/items/{item}/move", {"category_id": "{category}"}, CATEGORY_GONE),
+        ("archive", "POST", "/categories/{category}/archive", None, CATEGORY_GONE),
     ],
 )
 async def test_change_racing_a_delete_on_another_device_is_404_not_500(  # Review Focus 2
     editor_client, board, category, item, db, deletion, method, path, data, message
 ):
-    """The other device's delete holds its row lock until it commits; the change waits for it and
-    then finds the row gone."""
+    """The other device's delete (or archiving of the category) holds its row lock until it
+    commits; the change waits for it and then finds the row gone."""
     source = await create_category(db, board, "Source", position=1)
     moving = await create_item(db, source, "Moving")
     ids = {"item": item.id if deletion == "item" else moving.id, "category": category.id}
@@ -285,6 +289,8 @@ async def test_change_racing_a_delete_on_another_device_is_404_not_500(  # Revie
     deleted = delete(Item).where(Item.id == item.id)
     if deletion == "category":
         deleted = delete(Category).where(Category.id == category.id)
+    elif deletion == "archive":
+        deleted = update(Category).where(Category.id == category.id).values(archived_at=func.now())
 
     async with db.bind.connect() as other_device:
         transaction = await other_device.begin()
@@ -317,9 +323,10 @@ async def test_change_racing_a_delete_on_another_device_is_404_not_500(  # Revie
             "/items/{item}/move",
             {"category_id": "{other_category}"},
         ),
-        # A rename or a tick changes no key: a row a new child row points to (its foreign key
-        # check holds FOR KEY SHARE) can still change.
+        # A rename, an archiving or a tick changes no key: a row a new child row points to (its
+        # foreign key check holds FOR KEY SHARE) can still change.
         ("category", "FOR KEY SHARE", "PATCH", "/categories/{category}", {"name": "Fridge"}),
+        ("category", "FOR KEY SHARE", "POST", "/categories/{category}/archive", None),
         ("item", "FOR KEY SHARE", "POST", "/items/{item}/toggle", None),
     ],
 )
@@ -357,6 +364,8 @@ async def test_viewer_write_is_403_without_waiting_for_a_row_lock(viewer_client,
             ("POST", f"/categories/{item.category_id}/items", {"name": "Eggs"}),
             ("POST", f"/categories/{item.category_id}/clear-done", None),
             ("PATCH", f"/categories/{item.category_id}", {"name": "Fridge"}),
+            ("POST", f"/categories/{item.category_id}/archive", None),
+            ("POST", f"/categories/{item.category_id}/restore", None),
             ("DELETE", f"/categories/{item.category_id}", None),
         ):
             request = viewer_client.request(method, path, data=data, headers=HX)
