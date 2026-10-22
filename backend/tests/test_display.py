@@ -82,6 +82,7 @@ def test_avatar_macro_escapes_the_name():
     html = avatar(1, NASTY)
 
     assert f'title="{NASTY_ESCAPED}"' in html
+    assert ">O&lt;</span>" in html
     assert "<script>" not in html and "<b>" not in html
 
 
