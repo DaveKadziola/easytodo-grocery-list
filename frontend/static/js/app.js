@@ -84,7 +84,9 @@
   showFlash();
 
   // Menus (<details> with a <summary>): one open at a time, closed by Esc (back to its summary),
-  // by a click or tap outside it, and when the page goes to the background.
+  // by a click or tap outside it, and when the page goes to the background. A click outside that
+  // closes a menu does only that: on a link (a board's card on the list is one) it would also
+  // follow it. A summary is no link, so a tap on another menu's button still opens that menu.
   function openMenus() {
     return Array.from(document.querySelectorAll("details[open]"));
   }
@@ -107,9 +109,9 @@
     menu.querySelector("summary").focus();
   });
   document.addEventListener("click", (event) => {
-    openMenus().forEach((menu) => {
-      if (!menu.contains(event.target)) menu.open = false;
-    });
+    const outside = openMenus().filter((menu) => !menu.contains(event.target));
+    outside.forEach((menu) => (menu.open = false));
+    if (outside.length && event.target.closest("a[href]")) event.preventDefault();
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") openMenus().forEach((menu) => (menu.open = false));

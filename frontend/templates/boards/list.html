@@ -1,15 +1,15 @@
 {# The board list: the user's own boards, then the ones shared with them. A card opens its board
-   from its whole area (the link's ::after covers the card; the ⋮ menu, later in the DOM, sits
-   above it): rename, invite and archive in the owner's menu, leave in the menu of anyone else.
-   Context: boards (list of BoardSummary), archived_count (the user's archived boards), name and
-   error (the "New board" form). -#}
+   from its whole area (the link's ::after covers the card and carries the hover and focus rings;
+   the ⋮ menu, later in the DOM, sits above it): rename, invite and archive in the owner's menu,
+   leave in the menu of anyone else. Context: boards (list of BoardSummary), archived_count (the
+   user's archived boards), name and error (the "New board" form). -#}
 {% extends "base.html" %}
 {% block title %}Boards · EasyToDo{% endblock %}
 {% block content %}
 {% macro board_card(s) %}
 {% set is_owner = s.role == "owner" %}
 <li class="card relative flex items-start gap-2">
-  <a href="/boards/{{ s.board.id }}" class="min-w-0 flex-1 after:absolute after:inset-0 after:rounded-xl hover:after:ring-1 hover:after:ring-emerald-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600">
+  <a href="/boards/{{ s.board.id }}" class="min-w-0 flex-1 after:absolute after:inset-0 after:rounded-xl hover:after:ring-1 hover:after:ring-emerald-600 focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-emerald-600">
     <span class="block break-words text-lg font-semibold">{{ s.board.name }}</span>
     <span class="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
       {% if not is_owner %}

@@ -136,3 +136,84 @@ def test_the_whole_card_opens_its_board_but_the_menu_button_does_not(logged_in_p
     page.mouse.click(box["x"] + box["width"] - 4, box["y"] + box["height"] - 4)  # a corner
 
     expect(page).to_have_url(re.compile(r"/boards/\d+$"))
+
+
+def test_a_tap_that_dismisses_a_menu_does_not_open_a_board(signed_in_page, seed, user):
+    page = signed_in_page(**PHONE)
+
+    async def make(db) -> None:
+        await create_board(db, user, "Groceries")
+        await create_board(db, user, "Weekend")
+
+    seed(make)
+    page.goto("/boards")
+    groceries = page.get_by_role("link", name=re.compile("Groceries"))
+
+    # The lower card's menu: it opens downwards, clear of the card above.
+    weekend = open_board_menu(page, "Weekend")
+    groceries.tap()  # outside the menu, on another card's link
+
+    expect(weekend.locator(".menu")).to_be_hidden()
+    page.wait_for_timeout(300)  # a navigation would take a moment
+    expect(page).to_have_url(re.compile(r"/boards$"))
+
+    # Switching from one menu to another stays a single tap on the second ⋮ button.
+    open_board_menu(page, "Weekend")
+    groceries_menu = page.locator("li.card").filter(has=page.get_by_label("Actions for Groceries"))
+    groceries_menu.locator("summary").tap()
+    expect(groceries_menu.locator(".menu")).to_be_visible()
+    expect(weekend.locator(".menu")).to_be_hidden()
+    page.keyboard.press("Escape")
+
+    groceries.tap()  # with no menu open it opens the board
+    expect(page).to_have_url(re.compile(r"/boards/\d+$"))
+
+
+# The ring's contrast against the page (WCAG 1.4.11 asks 3:1 for the focus indicator) and where
+# it is drawn: on the link's ::after, which covers the whole card, not on the link itself.
+FOCUS_RING = r"""
+(link) => {
+  const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+  const rgb = (color) => {
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillStyle = color;
+    ctx.fillRect(0, 0, 1, 1);
+    return Array.from(ctx.getImageData(0, 0, 1, 1).data.slice(0, 3), (v) => v / 255);
+  };
+  const luminance = ([r, g, b]) => {
+    const linear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+  };
+  const ring = getComputedStyle(link, "::after");
+  const [hi, lo] = [
+    luminance(rgb(ring.outlineColor)),
+    luminance(rgb(getComputedStyle(document.body).backgroundColor)),
+  ].sort((a, b) => b - a);
+  return {
+    linkOutline: getComputedStyle(link).outlineStyle,
+    ringOutline: ring.outlineStyle,
+    ringWidth: parseFloat(ring.outlineWidth),
+    ringCoversCard: parseFloat(ring.width) === link.closest("li").clientWidth,
+    contrast: (hi + 0.05) / (lo + 0.05),
+  };
+}
+"""
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_keyboard_focus_rings_the_whole_card(signed_in_page, seed, user, scheme):
+    page = signed_in_page(color_scheme=scheme)
+    seed(lambda db: create_board(db, user, "Groceries"))
+    page.goto("/boards")
+    link = page.get_by_role("link", name=re.compile("Groceries"))
+
+    for _ in range(10):  # Tab from the top of the page to the card's link
+        page.keyboard.press("Tab")
+        if link.evaluate("(el) => el === document.activeElement"):
+            break
+    expect(link).to_be_focused()
+
+    ring = link.evaluate(FOCUS_RING)
+    assert ring["linkOutline"] == "none" and ring["ringOutline"] == "solid", ring
+    assert ring["ringWidth"] >= 2 and ring["ringCoversCard"], ring
+    assert ring["contrast"] >= 3, ring
