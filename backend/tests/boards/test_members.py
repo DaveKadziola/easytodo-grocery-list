@@ -1,5 +1,7 @@
 """Board members: the members page, changing a member's role, removing a member and leaving."""
 
+import re
+
 import pytest
 from factories import create_board, create_user
 from helpers import signed_in, toast_message
@@ -40,6 +42,10 @@ async def test_members_page_lists_members_with_roles(client_factory, db, team):
     path = f"/boards/{board.id}/members"
 
     page = (await (await signed_in(client_factory, "owner@example.com")).get(path)).text
+    assert "<title>Invite and members · Groceries · EasyToDo</title>" in page
+    assert re.search(r"<h1[^>]*>Invite and members</h1>\s*<p[^>]*>Groceries</p>", page)
+    assert re.search(r'<a href="/boards"[^>]*>Back to boards</a>', page)
+    assert f'href="/boards/{board.id}"' not in page
     assert page.index("owner@example.com") < page.index("eve@example.com")
     assert page.index("eve@example.com") < page.index("frank@example.com")
     assert f'hx-patch="/boards/{board.id}/members/{eve.id}"' in page
@@ -56,10 +62,12 @@ async def test_members_page_lists_members_with_roles(client_factory, db, team):
         assert control not in page
     assert f'action="/boards/{board.id}/leave"' in page
 
-    board_page = await (await signed_in(client_factory, "frank@example.com")).get(
-        f"/boards/{board.id}"
-    )
-    assert f'href="{path}"' in board_page.text
+    # The way to this page is the owner's ⋮ menu on the board list; a member has no link to it
+    # (they leave from their own ⋮ menu).
+    for email, linked in (("owner@example.com", True), ("frank@example.com", False)):
+        client = await signed_in(client_factory, email)
+        assert (f'href="{path}"' in (await client.get("/boards")).text) is linked
+        assert f'href="{path}"' not in (await client.get(f"/boards/{board.id}")).text
 
 
 async def test_non_members_get_404_for_the_members_page(client_factory, db, team):

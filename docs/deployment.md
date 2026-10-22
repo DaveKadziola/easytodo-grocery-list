@@ -90,14 +90,14 @@ A tunnel connector on your side opens an outgoing connection to the provider. Th
 
 - [ ] **`POSTGRES_PASSWORD`**: set a random value before the first `docker compose up`, e.g. `openssl rand -hex 24`. Postgres stores it in the `pgdata` volume on its first start, so changing `.env` later does not change it.
 - [ ] **`EASYTODO_SECRET_KEY`**: a strong random key, e.g. `openssl rand -hex 32` (at least 32 characters). It encrypts the 2FA secrets stored in the database. Keep it unchanged, and keep a copy in a safe place apart from the backups (a password manager, say): without it, the 2FA secrets in a restored database cannot be read, and with it anyone holding a dump can read them.
-- [ ] **`EASYTODO_REGISTRATION_OPEN=false`** once everyone has an account, then apply it with `docker compose up -d`. While it is `true`, anyone who can reach the app can sign up. With `false`, people can still sign up from a valid invite link: an e-mail invite works only for its own address, but a link invite lets anyone who has the link create an account until it expires (after 7 days) or is revoked. Revoke the links you no longer need on the board's Members page.
+- [ ] **`EASYTODO_REGISTRATION_OPEN=false`** once everyone has an account, then apply it with `docker compose up -d`. While it is `true`, anyone who can reach the app can sign up. With `false`, people can still sign up from a valid invite link: an e-mail invite works only for its own address, but a link invite lets anyone who has the link create an account until it expires (after 7 days) or is revoked. Revoke the links you no longer need on the board's "Invite and members" page (⋮ on the board list → Invite).
 - [ ] **Mail over SMTP, not the console.** Set `EASYTODO_MAIL_BACKEND=smtp` and the `EASYTODO_SMTP_*` settings (the README's SMTP section has a Proton Mail example). The default `console` backend sends nothing: it writes every mail, password-reset and invite links included, to the app's log as a WARNING. Never use it in production.
 - [ ] **Logs contain live links. Restrict who can read them.**
   - `/invite/{token}` links let anyone who has one join the board (and create an account, even with registration closed) until the link expires (after 7 days) or is revoked.
   - `/password/reset/{token}` links work once within 60 minutes, and until then they are a full account takeover.
   - Both appear in the app's access log (`docker compose logs app`), in a proxy's access log if you turn one on (Caddy logs no requests by default), and, with the console mail backend, in the mails the app writes to that same log.
   - On Linux, anyone in the `docker` group can read the container logs.
-  - Revoke a leaked invite link on the board's Members page. A password change invalidates all of the account's reset links.
+  - Revoke a leaked invite link on the board's "Invite and members" page (⋮ on the board list → Invite). A password change invalidates all of the account's reset links.
 - [ ] **Backups** with `pg_dump`, run from the repository root, into `backups/` (git-ignored). A dump holds every account's password hash, so it is created readable by your user only (`umask 077`). Copy the dumps off the server, e.g. from a daily cron job:
 
   ```sh

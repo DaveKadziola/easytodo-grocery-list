@@ -73,7 +73,7 @@ so both run side by side. If v1 uses port 8000, set `EASYTODO_PORT=8001` and
 
 The new board belongs to an existing v2 account. Use the admin account from the quick start
 (`create-admin`), or sign up at `/register` first. Other people get access later through the
-board's Members page.
+board's "Invite and members" page (⋮ on the board list → Invite).
 
 ## 4. Import
 
@@ -120,8 +120,9 @@ Here v1 had "dairy  products" (two spaces) and "Dairy products": in v2 they are
 Notes:
 
 - **Every run creates another board.** To import again (say, after more changes in v1), delete the
-  earlier board first, or you get the data twice: "Archive board" in the ⋮ menu next to the
-  board's name, then "Delete permanently" on the "Archived boards" page (`/boards/archived`).
+  earlier board first, or you get the data twice: "Archive" in the board's ⋮ menu on the board
+  list, then "Delete permanently" on the "Archived boards" page (`/boards/archived`), which
+  "Archived (n)" on the board list opens.
 - **Names are tidied and made unique.** Runs of spaces become one space. Two categories whose
   names differ only in letter case get " (2)", " (3)"... The report lists the v1 names that
   changed.

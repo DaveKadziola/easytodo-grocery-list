@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -133,13 +134,11 @@ async def test_user_sees_only_own_and_shared_boards(client_factory, db):
     r = await client.get("/boards")
 
     assert r.status_code == 200
-    assert f'href="/boards/{groceries.id}"' in r.text
-    assert f'href="/boards/{hardware.id}"' in r.text
-    assert r.text.count('href="/boards/') == 2
+    assert re.findall(r'href="/boards/(\d+)"', r.text) == [str(groceries.id), str(hardware.id)]
     assert "Groceries" in r.text and "Hardware store" in r.text
     assert "Eve private plans" not in r.text and "Mallory board" not in r.text
     assert "2 open items" in r.text and "0 open items" in r.text
-    assert "Owner" in r.text and "Viewer" in r.text
+    assert "Owner: eve@example.com" in r.text and "Viewer" in r.text
     assert 'action="/boards"' in r.text and "New board" in r.text
 
 
@@ -166,10 +165,12 @@ async def test_list_boards_puts_own_boards_first_then_sorts_by_name_in_one_query
         summaries = await list_boards(db, dave)
 
     assert len(statements) == 1
-    assert [(s.board.name, s.role, s.member_count, s.open_items) for s in summaries] == [
-        ("banana list", BoardRole.OWNER, 1, 0),
-        ("Cherry list", BoardRole.OWNER, 1, 0),
-        ("Apple club", BoardRole.EDITOR, 3, 2),
+    assert [
+        (s.board.name, s.role, s.member_count, s.open_items, s.owner_email) for s in summaries
+    ] == [
+        ("banana list", BoardRole.OWNER, 1, 0, "dave@example.com"),
+        ("Cherry list", BoardRole.OWNER, 1, 0, "dave@example.com"),
+        ("Apple club", BoardRole.EDITOR, 3, 2, "eve@example.com"),
     ]
 
 
@@ -280,7 +281,7 @@ async def test_owner_renames_board(client, db, published):
     board = await create_board(db, dave, "Groceries")
     await login(client, "dave@example.com")
 
-    page = await client.get(f"/boards/{board.id}")
+    page = await client.get("/boards")  # the rename form is in the board's ⋮ menu on the list
     assert f'hx-patch="/boards/{board.id}"' in page.text
 
     r = await client.patch(
@@ -293,6 +294,12 @@ async def test_owner_renames_board(client, db, published):
     assert r.headers["hx-refresh"] == "true"
     assert await db.scalar(select(Board.name)) == "Weekly shop"
     assert published == [((BoardEvent(EventType.BOARD_UPDATED, board_id=board.id),), "tab-1")]
+
+    r = await client.patch(f"/boards/{board.id}", data={"name": "Without htmx"})
+
+    assert r.status_code == 303
+    assert r.headers["location"] == "/boards"
+    assert await db.scalar(select(Board.name)) == "Without htmx"
 
 
 @pytest.mark.parametrize("name", ["", "x" * 81])

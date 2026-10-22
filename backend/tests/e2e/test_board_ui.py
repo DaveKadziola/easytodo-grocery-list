@@ -1,6 +1,7 @@
 """The board page in Chromium: the phone layout, adding and ticking items, drag and drop (mouse
-and touch), the item modal, the category menu, renaming and archiving the board, the "Archived
-boards" page, a change that lost a race with another device, and no CSP violations anywhere."""
+and touch), the item modal, the category menu, the "Archived boards" page, a change that lost a
+race with another device, and no CSP violations anywhere. (Renaming and archiving a board are
+tested on the board list, in test_board_list_ui.py.)"""
 
 import re
 from datetime import UTC, datetime, timedelta
@@ -12,7 +13,7 @@ from helpers import NASTY
 from playwright.sync_api import Locator, Page, expect
 from sqlalchemy import delete, update
 
-from e2e.conftest import watch_console
+from e2e.conftest import open_board_menu, watch_console
 from easytodo.models import Category, Item
 
 pytestmark = pytest.mark.e2e
@@ -183,10 +184,11 @@ def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, ope
     page = logged_in_page
     board_problems = watch_console(page)
     page.goto("/boards")
-    open_board(page, board_id)  # as the owner: rename and archive are in the board's menu
-    page.get_by_label("Board actions").click()
-    expect(page.get_by_role("button", name="Archive board")).to_be_visible()
+    menu = open_board_menu(page, "Groceries")  # as the owner: rename, invite and archive
+    expect(menu.get_by_role("button", name="Archive", exact=True)).to_be_visible()
     page.keyboard.press("Escape")
+    open_board(page, board_id)
+    expect(page.get_by_label("Board actions")).to_have_count(0)  # not on the board any more
     # A drag, whose answer swaps the whole board in: htmx must not copy the dragged item's
     # empty style attribute (from SortableJS) over, which style-src 'self' would refuse.
     bread = items_of(page, "Bakery").first
@@ -207,46 +209,6 @@ def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, ope
 
     assert [p for p in problems if "Content Security Policy" in p or "Refused to" in p] == []
     assert problems == [] and board_problems == []
-
-
-def test_owner_renames_and_deletes_the_board(logged_in_page, seed, user, open_board):
-    page = logged_in_page
-    board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
-    open_board(page, board_id)
-    problems = watch_console(page)
-    statuses: list[int] = []
-    page.on("response", lambda response: statuses.append(response.status))
-
-    expect(page.get_by_label("Board name")).to_be_hidden()  # in the menu, not on the page
-    page.get_by_label("Board actions").click()
-    page.get_by_label("Board name").fill("Łosoś")
-    page.locator("form", has=page.get_by_label("Board name")).get_by_role(
-        "button", name="Rename"
-    ).click()
-    expect(page.get_by_role("heading", level=1)).to_have_text("Łosoś")
-    expect(page.locator("#board-content")).to_have_attribute("data-board-name", "Łosoś")
-
-    page.get_by_label("Board actions").click()
-    confirms: list[str] = []
-    page.once("dialog", lambda d: (confirms.append(d.message), d.accept()))
-    page.get_by_role("button", name="Archive board").click()
-
-    # No toast asserted: the page's own socket gets board.deleted too, and either way it goes to
-    # the list (one of the two loads shows the flash).
-    expect(page).to_have_url(re.compile(r"/boards$"))
-    expect(page.get_by_text("You have no boards yet.")).to_be_visible()
-    assert confirms == ["Archive “Łosoś”? Its members lose access until you restore it."]
-
-    page.goto("/boards/archived")
-    prompts: list[str] = []
-    page.once("dialog", lambda d: (prompts.append(d.message), d.accept("Łosoś")))
-    page.get_by_role("button", name="Delete permanently").click()
-
-    expect(page.get_by_text("No archived boards.")).to_be_visible()
-    expect(page.locator("#toasts")).to_contain_text("Board deleted permanently.")
-    assert prompts == ["Type “Łosoś” to delete this board and everything on it permanently."]
-    assert 403 not in statuses and 422 not in statuses
-    assert problems == []
 
 
 def test_archived_board_is_restored_from_the_archive_page(logged_in_page, seed, user):

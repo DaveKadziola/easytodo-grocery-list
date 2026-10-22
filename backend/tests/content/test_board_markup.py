@@ -126,13 +126,17 @@ async def test_board_content_carries_the_board_header(signed_in_client, editor_c
     assert f'data-board-id="{board.id}" data-board-name="Groceries"' in owner_html
     assert re.search(r"<h1[^>]*>Groceries</h1>", owner_html)
     assert '<a href="/boards"' in owner_html
-    assert f'hx-patch="/boards/{board.id}"' in owner_html
-    assert f'hx-post="/boards/{board.id}/archive"' in owner_html
+    # Managing the board (rename, invite, archive) is in the ⋮ menu on the board list.
+    for owner_control in (
+        f'hx-patch="/boards/{board.id}"',
+        f'hx-post="/boards/{board.id}/archive"',
+        f'href="/boards/{board.id}/members"',
+        "Board actions",
+    ):
+        assert owner_control not in owner_html
 
     editor_html = (await editor_client.get(f"/boards/{board.id}/content", headers=HX)).text
     assert re.search(r"<h1[^>]*>Groceries</h1>", editor_html)
-    assert f'hx-patch="/boards/{board.id}"' not in editor_html
-    assert f'hx-post="/boards/{board.id}/archive"' not in editor_html
     assert f'hx-post="/boards/{board.id}/categories"' in editor_html  # New category
     assert re.search(r'<div id="categories"[^>]* data-sortable-categories>', editor_html)
 

@@ -82,10 +82,10 @@ async def board_page(request: Request, db: DbSession, user: CurrentUser, board_i
 async def rename(
     request: Request, db: DbSession, user: CurrentUser, board_id: int, name: FormField = ""
 ) -> Response:
-    board = await rename_board(db, board_id, user, name)
+    await rename_board(db, board_id, user, name)
     if is_htmx(request):
         return Response(headers={"HX-Refresh": "true"})  # the new name shows up in several places
-    return RedirectResponse(f"/boards/{board.id}", status_code=303)
+    return RedirectResponse("/boards", status_code=303)  # where the board is renamed from
 
 
 @router.post("/{board_id}/archive")

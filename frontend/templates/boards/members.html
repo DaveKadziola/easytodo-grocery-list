@@ -1,16 +1,18 @@
-{# The members page. Context: board, role (the viewer's own), members (list of MemberView),
-   invites (the pending ones; owner only), new_link (a link invite just created, or the link of
-   an e-mail invite to link_email whose mail was not delivered: shown this once),
-   valid_days (how long an invite works) and notice. Every change here answers with this whole page, and its htmx controls swap in
-   #sharing (they inherit hx-target and hx-select from it). -#}
+{# The members page, reached from "Invite" in the owner's ⋮ menu on the board list. Context: board,
+   role (the viewer's own), members (list of MemberView), invites (the pending ones; owner only),
+   new_link (a link invite just created, or the link of an e-mail invite to link_email whose mail
+   was not delivered: shown this once), valid_days (how long an invite works) and notice. Every
+   change here answers with this whole page, and its htmx controls swap in #sharing (they inherit
+   hx-target and hx-select from it). -#}
 {% extends "base.html" %}
-{% block title %}Members · {{ board.name }} · EasyToDo{% endblock %}
+{% block title %}Invite and members · {{ board.name }} · EasyToDo{% endblock %}
 {% block content %}
 {% set manage = can(role, Action.MANAGE_MEMBERS) %}
 <div id="sharing" hx-target="#sharing" hx-select="#sharing" class="mx-auto w-full max-w-2xl space-y-6">
   <div>
-    <a href="/boards/{{ board.id }}" class="link inline-flex min-h-11 items-center text-sm">Back to the board</a>
-    <h1 class="break-words text-2xl font-semibold">{{ board.name }}: members</h1>
+    <a href="/boards" class="link inline-flex min-h-11 items-center text-sm">Back to boards</a>
+    <h1 class="text-2xl font-semibold">Invite and members</h1>
+    <p class="break-words text-slate-600 dark:text-slate-400">{{ board.name }}</p>
   </div>
 
   {% if manage %}

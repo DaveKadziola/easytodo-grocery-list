@@ -12,6 +12,7 @@ from factories import create_board, create_category, create_item, create_user
 from playwright.sync_api import Locator, Page, Route, WebSocketRoute, expect
 from sqlalchemy import delete
 
+from e2e.conftest import open_board_menu
 from easytodo.content import service
 from easytodo.models import BoardMember, BoardRole, Category
 
@@ -132,9 +133,10 @@ def test_rename_shows_on_the_other_device_without_reload(two_logged_in_pages):
     a, b = two_logged_in_pages
     b.evaluate("window.notReloaded = true")
 
-    a.get_by_label("Board actions").click()
-    a.get_by_label("Board name").fill("Weekend")
-    a.locator("form", has=a.get_by_label("Board name")).get_by_role("button", name="Rename").click()
+    a.goto("/boards")  # renaming is in the board's ⋮ menu on the list
+    card = open_board_menu(a, "Groceries")
+    card.get_by_label("Board name").fill("Weekend")
+    card.get_by_role("button", name="Rename").click()
 
     expect(b.get_by_role("heading", level=1)).to_have_text("Weekend", timeout=LIVE_UPDATE_MS)
     expect(b).to_have_title("Weekend · EasyToDo")

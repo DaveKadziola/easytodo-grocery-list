@@ -1,31 +1,18 @@
 {# The whole board: its header and its categories in position order. Swapped as a whole by
-   GET /boards/{id}/content (and after an item moves), so the name and the owner's controls stay
-   current too. One column on a phone, two on a tablet, three from 1024 px (CSS columns).
+   GET /boards/{id}/content (and after an item moves), so the name and the controls stay current
+   too. One column on a phone, two on a tablet, three from 1024 px (CSS columns).
    Context: view (BoardView); sets role for the included fragments. -#}
 {% set role = view.role %}
 {% set can_edit = can(role, Action.EDIT_CONTENT) %}
 <div id="board-content" data-board-id="{{ view.board.id }}" data-board-name="{{ view.board.name }}" class="space-y-6">
-  {#- On a phone the list starts right below the name: the owner's rare controls (rename, archive)
-      sit in the ⋮ menu, and "New category" is in the bottom bar, which shows this form. #}
+  {#- On a phone the list starts right below the name: renaming, inviting and archiving are in the
+      board's ⋮ menu on the board list, and "New category" is in the bottom bar, which shows this
+      form. #}
   <div class="flex items-end gap-2">
     <div class="min-w-0 flex-1">
       <a href="/boards" class="link inline-flex min-h-11 items-center text-sm">All boards</a>
       <h1 class="break-words text-2xl font-semibold">{{ view.board.name }}</h1>
     </div>
-    <a href="/boards/{{ view.board.id }}/members" class="btn-secondary shrink-0">Members</a>
-    {% if can(role, Action.MANAGE_BOARD) %}
-    <details class="relative shrink-0">
-      <summary class="btn-icon cursor-pointer list-none text-slate-600 dark:text-slate-400 [&::-webkit-details-marker]:hidden" title="Board actions" aria-label="Board actions">⋮</summary>
-      <div class="menu">
-        <form hx-patch="/boards/{{ view.board.id }}" class="space-y-2 p-2">
-          <label for="board-name" class="label">Board name</label>
-          <input id="board-name" name="name" value="{{ view.board.name }}" required maxlength="80" autocomplete="off" class="input">
-          <button type="submit" class="btn-secondary w-full">Rename</button>
-        </form>
-        <button type="button" class="menu-item text-red-700 dark:text-red-400" hx-post="/boards/{{ view.board.id }}/archive" hx-confirm="Archive “{{ view.board.name }}”? Its members lose access until you restore it.">Archive board</button>
-      </div>
-    </details>
-    {% endif %}
   </div>
 
   {% if can_edit %}

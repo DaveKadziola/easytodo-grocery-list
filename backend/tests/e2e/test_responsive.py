@@ -165,8 +165,7 @@ def test_phone_shows_the_list_right_below_the_board_name(
     assert first_item["y"] - (heading["y"] + heading["height"]) < 160, (heading, first_item)
     assert page.locator("li[data-item-id]:visible").count() >= 3  # without scrolling:
     assert first_item["y"] + first_item["height"] < page.viewport_size["height"] / 2
-    expect(page.get_by_label("Board name")).to_be_hidden()  # rename and archive: in the menu
-    expect(page.get_by_role("button", name="Archive board")).to_be_hidden()
+    expect(page.get_by_label("Board actions")).to_have_count(0)  # board management: on the list
 
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])

@@ -9,17 +9,17 @@ import pytest
 from factories import DEFAULT_PASSWORD, create_board
 from playwright.sync_api import Browser, Page, expect
 
-from e2e.conftest import watch_console
+from e2e.conftest import open_board_menu, watch_console
 from easytodo.config import Settings
 
 pytestmark = pytest.mark.e2e
 
 
 def create_invite_link(page: Page, base_url: str, board_id: int) -> str:
-    """From the board, go to its members page and create a link invite as a viewer; returns the
-    link the page shows (once)."""
-    page.goto(f"/boards/{board_id}")
-    page.get_by_role("link", name="Members").click()
+    """From the ⋮ menu of the board "Groceries" on the board list, go to its members page and
+    create a link invite as a viewer; returns the link the page shows (once)."""
+    page.goto("/boards")
+    open_board_menu(page, "Groceries").get_by_role("link", name="Invite", exact=True).click()
     expect(page).to_have_url(re.compile(rf"/boards/{board_id}/members$"))
     page.get_by_label("Role", exact=True).select_option("viewer")
     page.get_by_role("button", name="Invite").click()

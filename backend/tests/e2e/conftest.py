@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from factories import DEFAULT_PASSWORD, create_board, create_category, create_item, create_user
 from live_server import LiveServer, in_worker_thread, live_server  # noqa: F401 (fixture)
-from playwright.sync_api import Browser, BrowserContext, Page, expect
+from playwright.sync_api import Browser, BrowserContext, Locator, Page, expect
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -46,6 +46,14 @@ def watch_console(page: Page) -> list[str]:
     )
     page.on("pageerror", lambda exc: problems.append(f"pageerror: {exc}"))
     return problems
+
+
+def open_board_menu(page: Page, name: str) -> Locator:
+    """Open the ⋮ menu of the board ``name`` on the board list (``/boards``); returns the board's
+    card (``li.card``), whose menu items are inside it."""
+    menu = page.get_by_label(f"Actions for {name}", exact=True)
+    menu.click()
+    return page.locator("li.card").filter(has=menu)
 
 
 type Seed = Callable[[Callable[[AsyncSession], Awaitable[Any]]], Any]

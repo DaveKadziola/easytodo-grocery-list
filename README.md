@@ -93,13 +93,15 @@ browsers, or a normal and a private window, each signed in as someone else.
 
    Open it (it works once, for 60 minutes) and choose a new password. That signs the account out
    everywhere.
-4. **Sharing.** As the owner, open a board → Members. Under "Invite someone", pick the role
-   "Viewer", then either leave the email empty to get a link (it is shown once: copy it) or enter
-   `bob@example.com` (the console backend sends no mail: the page then shows the invite link to
-   pass on, which only Bob's account can use). Open the link in Bob's browser and choose
-   "Join board". As a viewer, Bob sees the board without edit controls. Change his role to
-   editor on the Members page and he can edit. As Bob, choose "Leave board"; invite him again,
-   and then remove him from the Members page.
+4. **Sharing.** As the owner, open the board list, choose ⋮ on the board → Invite. On the
+   "Invite and members" page, under "Invite someone", pick the role "Viewer", then either leave
+   the email empty to get a link (it is shown once: copy it) or enter `bob@example.com` (the
+   console backend sends no mail: the page then shows the invite link to pass on, which only
+   Bob's account can use). Open the link in Bob's browser and choose "Join board". As a viewer,
+   Bob sees the board without edit controls, and it is listed under "Shared with me". Change his
+   role to editor on the "Invite and members" page and he can edit. As Bob, choose ⋮ on the
+   board in his list → "Leave board"; invite him again, and then remove him from the "Invite and
+   members" page.
 5. **Real time with two browsers.** Open the same board in both browsers; each header shows
    "Live". Add, tick, rename and drag items in one: the other follows without reloading. Then
    take one of them offline (airplane mode on a phone, or developer tools → Network → Offline),

@@ -36,6 +36,7 @@ class BoardSummary:
     role: BoardRole
     member_count: int
     open_items: int
+    owner_email: str
 
 
 @dataclass(frozen=True)
@@ -117,7 +118,8 @@ async def landing_board_id(db: AsyncSession, user: User, last_opened: int | None
 
 async def list_boards(db: AsyncSession, user: User) -> list[BoardSummary]:
     """The active boards ``user`` is a member of: their own first, then the shared ones, each by
-    name."""
+    name; one query, with each board's owner's e-mail."""
+    owner = aliased(User)
     members = aliased(BoardMember)
     member_count = select(func.count()).where(members.board_id == Board.id).scalar_subquery()
     open_items = (
@@ -127,8 +129,9 @@ async def list_boards(db: AsyncSession, user: User) -> list[BoardSummary]:
         .scalar_subquery()
     )
     rows = await db.execute(
-        select(Board, BoardMember.role, member_count, open_items)
+        select(Board, BoardMember.role, member_count, open_items, owner.email)
         .join(BoardMember, BoardMember.board_id == Board.id)
+        .join(owner, owner.id == Board.owner_id)
         .where(BoardMember.user_id == user.id, Board.archived_at.is_(None))
         .order_by((Board.owner_id == user.id).desc(), func.lower(Board.name), Board.id)
     )
