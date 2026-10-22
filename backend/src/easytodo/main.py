@@ -16,7 +16,6 @@ from easytodo.admin.routes import router as admin_router
 from easytodo.auth.account_routes import router as account_router
 from easytodo.auth.routes import router as auth_router
 from easytodo.boards.invite_routes import router as invite_router
-from easytodo.boards.permissions import Action, can
 from easytodo.boards.routes import router as boards_router
 from easytodo.config import Settings, get_settings
 from easytodo.content.routes import router as content_router
@@ -33,7 +32,7 @@ from easytodo.realtime.listener import EventListener, listener_dsn
 from easytodo.realtime.routes import router as realtime_router
 from easytodo.security.csrf import verify_csrf
 from easytodo.security.ratelimit import RateLimiter
-from easytodo.web import STATIC_DIR, templates
+from easytodo.web import STATIC_DIR
 
 IMMUTABLE = "public, max-age=31536000, immutable"
 
@@ -86,8 +85,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.rate_limiter = RateLimiter()
     install_error_handlers(app)
-    # Templates show controls by the member's role: {% if can(role, Action.EDIT_CONTENT) %}.
-    templates.env.globals.update(can=can, Action=Action)
     app.add_middleware(ClientIdMiddleware)
     app.add_middleware(GZipMiddleware, minimum_size=1000)
     app.add_middleware(CsrfCookieMiddleware, settings=settings)

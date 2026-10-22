@@ -11,7 +11,9 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader
 
+from easytodo.boards.roles import Action, can
 from easytodo.config import Settings
+from easytodo.display import avatar_color, display_name, initials, user_display_name
 
 FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend"
 STATIC_DIR = FRONTEND_DIR / "static"
@@ -43,7 +45,18 @@ def static_url(path: str) -> str:
     return f"/static/{path}?v={known[2]}"
 
 
-templates.env.globals["static_url"] = static_url
+# What templates call without being passed it: {% if can(role, Action.EDIT_CONTENT) %} shows
+# controls by the member's role, the display helpers show a person (see display.py). Set here, not
+# when the app is created, so that a template renders with them whichever module is imported first.
+templates.env.globals.update(
+    static_url=static_url,
+    can=can,
+    Action=Action,
+    display_name=display_name,
+    user_display_name=user_display_name,
+    initials=initials,
+    avatar_color=avatar_color,
+)
 
 
 def is_htmx(request: Request) -> bool:

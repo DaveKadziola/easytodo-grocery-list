@@ -1,32 +1,14 @@
-"""What each board role may do, and the board lookup every board-scoped request goes through."""
-
-from enum import StrEnum, auto
+"""The permission check and the board lookup every board-scoped request goes through. What each
+role may do (``Action``, ``can``) is in ``roles``, and is importable from here too."""
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from easytodo.boards.roles import Action, can
 from easytodo.errors import Forbidden, NotFound
 from easytodo.models import Board, BoardMember, BoardRole, User
 
-
-class Action(StrEnum):
-    VIEW = auto()
-    EDIT_CONTENT = auto()
-    MANAGE_MEMBERS = auto()
-    MANAGE_BOARD = auto()
-
-
-_ALLOWED: dict[BoardRole, frozenset[Action]] = {
-    BoardRole.VIEWER: frozenset({Action.VIEW}),
-    BoardRole.EDITOR: frozenset({Action.VIEW, Action.EDIT_CONTENT}),
-    BoardRole.OWNER: frozenset(Action),
-}
-
 _MAX_ID = 2**63 - 1  # ids are BigIntegers; a larger one cannot exist (and would fail in SQL)
-
-
-def can(role: BoardRole, action: Action) -> bool:
-    return action in _ALLOWED[role]
 
 
 def check_permission(role: BoardRole, action: Action) -> None:

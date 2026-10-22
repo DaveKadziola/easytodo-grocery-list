@@ -1,5 +1,6 @@
-"""The account pages in Chromium: the flash toast after a password change shows exactly once, and
-the recovery codes of two-factor authentication are saved as a .txt file or copied."""
+"""The account pages in Chromium: the flash toast after a password change shows exactly once, the
+recovery codes of two-factor authentication are saved as a .txt file or copied, the settings
+forms save with a toast, and the avatar colours can be read."""
 
 import re
 from pathlib import Path
@@ -10,7 +11,8 @@ from factories import DEFAULT_PASSWORD
 from playwright.sync_api import Page, expect
 
 from e2e.conftest import watch_console
-from easytodo.web import FLASH_COOKIE
+from e2e.test_responsive import AA, LOW_CONTRAST_TEXT
+from easytodo.web import FLASH_COOKIE, templates
 
 pytestmark = pytest.mark.e2e
 
@@ -85,3 +87,53 @@ def test_recovery_codes_copy(live_server, logged_in_page):
         len(codes) == 10 and all(c in copied for c in codes) and not any(c in copied for c in old)
     )
     assert problems == []
+
+
+def test_account_settings_are_saved_with_a_toast(logged_in_page_mobile):
+    page = logged_in_page_mobile
+    problems = watch_console(page)
+    page.goto("/account")
+
+    def save(button: str, toast: str) -> None:
+        page.get_by_role("button", name=button).click()
+        expect(page.locator("#toasts > *")).to_have_count(1)
+        expect(page.locator("#toasts")).to_have_text(toast)
+
+    page.get_by_label("Display name").fill("  Anna   Kowalska ")
+    save("Save name", "Profile saved.")
+    page.get_by_label("Delete archived items after").select_option("never")
+    save("Save archive settings", "Archive settings saved.")
+    page.get_by_label("Sort by").select_option("updated")
+    page.get_by_label("Order").select_option("desc")
+    page.get_by_label("Open items first").uncheck()
+    save("Save sorting", "Sorting saved.")
+
+    page.reload()
+    expect(page.get_by_label("Display name")).to_have_value("Anna Kowalska")
+    expect(page.get_by_label("Delete archived items after")).to_have_value("never")
+    expect(page.get_by_label("Sort by")).to_have_value("updated")
+    expect(page.get_by_label("Order")).to_have_value("desc")
+    expect(page.get_by_label("Open items first")).not_to_be_checked()
+    expect(page.locator("#toasts > *")).to_have_count(0)
+    assert page.evaluate("document.scrollingElement.scrollWidth <= window.innerWidth")
+    assert problems == []
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_avatar_colours_are_readable(signed_in_page, scheme):
+    page = signed_in_page(color_scheme=scheme)
+    page.goto("/account")
+    avatar = templates.env.get_template("partials/_avatar.html").module.avatar
+    # Without aria-hidden, which keeps the contrast check from looking at them.
+    html = "".join(
+        str(avatar(user_id, "Anna Kowalska")).replace(' aria-hidden="true"', "")
+        for user_id in range(8)
+    )
+
+    page.evaluate(
+        "(html) => document.querySelector('main').insertAdjacentHTML('beforeend', html)", html
+    )
+
+    expect(page.locator("main .avatar")).to_have_count(8)
+    expect(page.locator("main .avatar[aria-hidden]")).to_have_count(0)
+    assert page.evaluate(LOW_CONTRAST_TEXT, AA) == []

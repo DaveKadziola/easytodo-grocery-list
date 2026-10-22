@@ -72,6 +72,11 @@
     @apply rounded focus-visible:outline-2 focus-visible:outline-emerald-600;
   }
 
+  /* A person's initials on a colour (partials/_avatar.html, which adds the colour and "md"). */
+  .avatar {
+    @apply inline-flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold;
+  }
+
   /* A menu opened from a <details> summary: a category's actions, the board switcher. */
   .menu {
     @apply absolute right-0 z-10 mt-1 w-64 rounded-lg bg-white p-1 shadow-lg ring-1 ring-slate-200;

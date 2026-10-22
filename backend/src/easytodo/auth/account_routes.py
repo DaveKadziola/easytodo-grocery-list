@@ -1,5 +1,5 @@
-"""The account pages: changing the password, two-factor authentication and managing the
-signed-in devices."""
+"""The account pages: the profile and settings, changing the password, two-factor authentication
+and managing the signed-in devices."""
 
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -21,8 +21,9 @@ from easytodo.auth.twofa import (
     disable_2fa,
     regenerate_recovery_codes,
 )
+from easytodo.content.validation import clean_name
 from easytodo.errors import AppError, Conflict, NotFound, ValidationFailed
-from easytodo.models import User, UserSession
+from easytodo.models import RETENTION_CHOICES, SORT_FIELDS, User, UserSession
 from easytodo.realtime.events import commit_and_publish
 from easytodo.security.passwords import (
     MAX_PASSWORD_LENGTH,
@@ -43,6 +44,17 @@ _MAX_SESSION_ID = 2**63 - 1  # user_sessions.id is a BigInteger; a larger id can
 # whoever holds a stolen session.
 PasswordGuesses = Annotated[None, Depends(rate_limit("password-change", 10, 900))]
 
+DISPLAY_NAME_MAX_LENGTH = 60  # users.display_name is a String(60)
+PROFILE_SAVED = "Profile saved."
+ARCHIVE_SAVED = "Archive settings saved."
+SORT_SAVED = "Sorting saved."
+RETENTION_INVALID = "Choose how long archived items are kept."
+SORT_INVALID = "Choose a valid sort order."
+
+# The archive form's "days" -> users.archive_retention_days; None (NULL) keeps archived items.
+_RETENTION_BY_FORM_VALUE = {str(days): days for days in RETENTION_CHOICES} | {"never": None}
+_SORT_DIRECTIONS = ("asc", "desc")  # the sort form's "sort_direction"
+
 
 async def _account_page(
     request: Request,
@@ -56,7 +68,11 @@ async def _account_page(
         .where(UserSession.user_id == user.id, UserSession.expires_at > datetime.now(UTC))
         .order_by(UserSession.last_seen_at.desc(), UserSession.id.desc())
     )
-    context = {"sessions": list(sessions), "current_session_id": request.state.session.id} | context
+    context = {
+        "sessions": list(sessions),
+        "current_session_id": request.state.session.id,
+        "retention_choices": RETENTION_CHOICES,
+    } | context
     return render(request, "account/index.html", context, status_code=status_code)
 
 
@@ -213,3 +229,62 @@ async def revoke_own_session(db: DbSession, user: CurrentUser, session_id: int) 
     await revoke_session(db, session_id)
     await commit_and_publish(db, *sessions_revoked(user.id, [session_id]))
     return RedirectResponse("/account", status_code=303)
+
+
+def _saved(request: Request, message: str) -> Response:
+    response = RedirectResponse("/account", status_code=303)
+    flash(response, message, request.app.state.settings)
+    return response
+
+
+# The three settings forms below check all of their fields before they change any. They do not
+# publish an event (nobody else's page shows these) and are not password guesses.
+@router.post("/profile")
+async def save_profile(
+    request: Request, db: DbSession, user: CurrentUser, display_name: FormField = ""
+) -> Response:
+    try:
+        # Empty is not an error here: it takes the name away, and the email's part shows instead.
+        name = (
+            clean_name(display_name, max_len=DISPLAY_NAME_MAX_LENGTH, label="Display name")
+            if display_name.strip()
+            else None
+        )
+    except ValidationFailed as exc:
+        return await _account_page(request, db, user, {"profile_error": exc.message}, 400)
+    user.display_name = name
+    await db.commit()
+    return _saved(request, PROFILE_SAVED)
+
+
+@router.post("/archive-retention")
+async def save_archive_retention(
+    request: Request, db: DbSession, user: CurrentUser, days: FormField = ""
+) -> Response:
+    if days not in _RETENTION_BY_FORM_VALUE:
+        return await _account_page(request, db, user, {"archive_error": RETENTION_INVALID}, 400)
+    user.archive_retention_days = _RETENTION_BY_FORM_VALUE[days]  # "never": NULL
+    await db.commit()
+    return _saved(request, ARCHIVE_SAVED)
+
+
+@router.post("/sort")
+async def save_sort(
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    sort_field: FormField = "",
+    sort_direction: FormField = "",
+    sort_open_first: FormField = "",  # a checkbox: "true" when ticked, absent when not
+) -> Response:
+    if (
+        sort_field not in SORT_FIELDS
+        or sort_direction not in _SORT_DIRECTIONS
+        or sort_open_first not in ("", "true")
+    ):
+        return await _account_page(request, db, user, {"sort_error": SORT_INVALID}, 400)
+    user.sort_field = sort_field
+    user.sort_descending = sort_direction == "desc"
+    user.sort_open_first = sort_open_first == "true"
+    await db.commit()
+    return _saved(request, SORT_SAVED)
