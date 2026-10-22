@@ -87,6 +87,7 @@
   // by a click or tap outside it, and when the page goes to the background. A click outside that
   // closes a menu does only that: on a link (a board's card on the list is one) it would also
   // follow it. A summary is no link, so a tap on another menu's button still opens that menu.
+  // Keyboard activation (detail 0) is never a dismissing tap, so Enter on a link still follows it.
   function openMenus() {
     return Array.from(document.querySelectorAll("details[open]"));
   }
@@ -111,7 +112,7 @@
   document.addEventListener("click", (event) => {
     const outside = openMenus().filter((menu) => !menu.contains(event.target));
     outside.forEach((menu) => (menu.open = false));
-    if (outside.length && event.target.closest("a[href]")) event.preventDefault();
+    if (outside.length && event.detail > 0 && event.target.closest("a[href]")) event.preventDefault();
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") openMenus().forEach((menu) => (menu.open = false));

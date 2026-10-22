@@ -168,6 +168,13 @@ def test_a_tap_that_dismisses_a_menu_does_not_open_a_board(signed_in_page, seed,
     groceries.tap()  # with no menu open it opens the board
     expect(page).to_have_url(re.compile(r"/boards/\d+$"))
 
+    # Enter on a link is never a dismissing tap: it follows the link even with a menu open.
+    page.goto("/boards")
+    open_board_menu(page, "Weekend")
+    groceries.focus()
+    page.keyboard.press("Enter")
+    expect(page).to_have_url(re.compile(r"/boards/\d+$"))
+
 
 # The ring's contrast against the page (WCAG 1.4.11 asks 3:1 for the focus indicator) and where
 # it is drawn: on the link's ::after, which covers the whole card, not on the link itself.
