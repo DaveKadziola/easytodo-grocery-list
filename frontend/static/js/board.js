@@ -100,8 +100,15 @@
       .catch(stale);
   }
 
+  // The category sections of `container` (#categories) in the order shown. Its other children are
+  // not categories: the placeholder "Add your first category" is the list's first child, and a
+  // section added "On top" lands before it, so the sections do not always sit side by side.
+  function sectionsOf(container) {
+    return Array.from(container.querySelectorAll(":scope > [data-category-id]"));
+  }
+
   function categoryIds() {
-    return Array.from(document.querySelectorAll("#categories > [data-category-id]"), (el) => el.dataset.categoryId);
+    return sectionsOf(document.getElementById("categories")).map((el) => el.dataset.categoryId);
   }
 
   function saveCategoryOrder(source) {
@@ -210,7 +217,8 @@
         onEnd(event) {
           dragging = false;
           if (event.item.getAttribute("style") === "") event.item.removeAttribute("style");
-          if (event.oldIndex !== event.newIndex) saveCategoryOrder(container);
+          // Not oldIndex: that counts the placeholder, which a section can be dropped beside.
+          if (event.oldDraggableIndex !== event.newDraggableIndex) saveCategoryOrder(container);
           becameIdle();
         },
       });
@@ -419,11 +427,13 @@
   document.addEventListener("htmx:responseError", failed);
   document.addEventListener("htmx:sendError", failed);
 
-  // Moves `section` one place up or down among the categories and saves the order.
+  // Moves `section` one place up or down among the categories and saves the order. The neighbour
+  // is the next category section, not the next element (which may be the placeholder).
   function moveCategory(section, direction) {
-    const sibling = direction === "up" ? section.previousElementSibling : section.nextElementSibling;
-    if (!sibling || !sibling.matches("[data-category-id]")) return;
     const container = section.parentElement;
+    const sections = sectionsOf(container);
+    const sibling = sections[sections.indexOf(section) + (direction === "up" ? -1 : 1)];
+    if (!sibling) return;
     container.insertBefore(section, direction === "up" ? sibling : sibling.nextElementSibling);
     saveCategoryOrder(container);
   }
@@ -839,8 +849,8 @@
         this.request = null;
         this.$refs.form.reset();
         if (!this.open) return;
-        const list = event.target;
-        const section = xhr.getResponseHeader("HX-Reswap") === "afterbegin" ? list.firstElementChild : list.lastElementChild;
+        const sections = sectionsOf(event.target);
+        const section = xhr.getResponseHeader("HX-Reswap") === "afterbegin" ? sections[0] : sections[sections.length - 1];
         leaveNewCategory(this, false);
         const field = section && document.getElementById(`new-item-${section.dataset.categoryId}`);
         if (field) {

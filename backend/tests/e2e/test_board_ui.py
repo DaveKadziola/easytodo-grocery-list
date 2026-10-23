@@ -576,6 +576,51 @@ def test_new_category_on_top_of_an_empty_board_goes_before_its_placeholder(
     expect(sections).to_have_text(["Nuts", "Fruit"])
 
 
+@pytest.mark.parametrize(
+    ("moved", "order"),
+    [
+        ("the new first one goes down", ["Dairy", "Fruit", "Bakery"]),
+        ("the old first one goes up", ["Dairy", "Fruit", "Bakery"]),
+        ("the last one is dragged to the top", ["Bakery", "Fruit", "Dairy"]),
+    ],
+)
+def test_a_category_added_on_top_is_moved_like_any_other_without_a_reload(
+    logged_in_page, seed, user, open_board, moved, order
+):
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": [], "Bakery": []})
+    open_board(page, board_id)
+    page.get_by_role("button", name="New category").click()
+    dialog = page.get_by_role("dialog", name="New category")
+    dialog.get_by_label("Category name").fill("Fruit")
+    dialog.get_by_label("On top").check()
+    dialog.get_by_label("Category name").press("Enter")
+    expect(dialog).to_be_hidden()
+    expect(category_names(page)).to_have_text(["Fruit", "Dairy", "Bakery"])
+    # What makes this a case of its own: the hidden placeholder is the list's first child, and the
+    # new section was put before it, so "Fruit" is not next to "Dairy" in the page (no reload since).
+    expect(page.locator("#categories > *").nth(1)).to_have_text("Add your first category")
+
+    with page.expect_response(ORDER_SAVED) as saved:
+        if moved == "the last one is dragged to the top":
+            category(page, "Bakery").locator(".category-handle").drag_to(
+                category(page, "Fruit").locator(".category-handle")
+            )
+        else:
+            moving, button = (
+                (category(page, "Fruit"), "Move down")
+                if moved == "the new first one goes down"
+                else (category(page, "Dairy"), "Move up")
+            )
+            moving.get_by_label("Category actions").click()
+            moving.get_by_role("button", name=button).click()
+
+    assert saved.value.status == 204
+    expect(category_names(page)).to_have_text(order)
+    page.reload()
+    expect(category_names(page)).to_have_text(order)
+
+
 @pytest.mark.parametrize("refusal", ["forbidden", "gone"])
 def test_new_category_dialog_closes_when_the_board_refuses(
     signed_in_as, seed, user, open_board, refusal
