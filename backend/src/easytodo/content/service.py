@@ -18,23 +18,27 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import cache
 
-from sqlalchemy import ColumnElement, delete, exists, func, select
+from sqlalchemy import BigInteger, ColumnElement, Select, bindparam, delete, exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.boards.permissions import (
     BOARD_GONE,
     Action,
+    MemberLookup,
     RowLock,
+    check_permission,
     is_possible_id,
     load_for_member,
+    member_lookup,
     require_board,
 )
 from easytodo.boards.service import (
     CategoryView,
     select_item_views,
-    select_sort_pref,
+    select_member_category,
     sort_choice,
 )
 from easytodo.content.validation import (
@@ -76,6 +80,33 @@ def _category_state(archived: bool | None) -> tuple[ColumnElement[bool], ...]:
     return (Category.archived_at.is_not(None) if archived else Category.archived_at.is_(None),)
 
 
+@cache
+def _load_lookup(
+    model: type[Category | Item],
+    archived: bool | None,
+    include_deleted: bool,
+    action: Action,
+    lock: RowLock | None,
+) -> MemberLookup:
+    """The statements of ``_load`` for one combination of its options, built once."""
+    query: Select = (
+        select(model, BoardMember.role)
+        .join(Board, Board.id == model.board_id)
+        .join(BoardMember, BoardMember.board_id == model.board_id)
+        .where(
+            model.id == bindparam("object_id", type_=BigInteger),
+            BoardMember.user_id == bindparam("user_id", type_=BigInteger),
+            Board.archived_at.is_(None),
+        )
+    )
+    if model is Item:
+        query = query.join(Category, Category.id == Item.category_id)
+        if not include_deleted:
+            query = query.where(Item.deleted_at.is_(None))
+    query = query.where(*_category_state(archived))
+    return member_lookup(query, action, lock=lock, of=model)
+
+
 async def _load[M: (Category, Item)](
     db: AsyncSession,
     model: type[M],
@@ -102,19 +133,13 @@ async def _load[M: (Category, Item)](
     """
     if not is_possible_id(object_id):
         raise NotFound(gone)
-    query = (
-        select(model, BoardMember.role)
-        .join(Board, Board.id == model.board_id)
-        .join(BoardMember, BoardMember.board_id == model.board_id)
-        .where(model.id == object_id, BoardMember.user_id == user.id, Board.archived_at.is_(None))
-    )
-    if model is Item:
-        query = query.join(Category, Category.id == Item.category_id)
-        if not include_deleted:
-            query = query.where(Item.deleted_at.is_(None))
-    query = query.where(*_category_state(archived))
     row_lock = None if action is Action.VIEW else lock
-    found, role = await load_for_member(db, query, action, gone, lock=row_lock, of=model)
+    found, role = await load_for_member(
+        db,
+        _load_lookup(model, archived, include_deleted, action, row_lock),
+        gone,
+        {"object_id": object_id, "user_id": user.id},
+    )
     return found, role
 
 
@@ -340,11 +365,17 @@ async def reorder_categories(
 async def get_category_view(
     db: AsyncSession, category_id: int, user: User
 ) -> tuple[CategoryView, BoardRole]:
-    """The category with its items in ``user``'s order for it, and ``user``'s role: three
-    queries (the category, the items and the sort row, which an empty category needs too)."""
-    category, role = await load_category(db, category_id, user, Action.VIEW)
+    """The category with its items in ``user``'s order for it, and ``user``'s role: two
+    queries (the category with ``user``'s sort row, which an empty category needs too, and the
+    items). Reading, so no lock."""
+    if not is_possible_id(category_id):
+        raise NotFound(CATEGORY_GONE)
+    found = await select_member_category(db, user, category_id)
+    if found is None:
+        raise NotFound(CATEGORY_GONE)
+    category, role, pref = found
+    check_permission(role, Action.VIEW)
     items = await select_item_views(db, user, category_id=category.id)
-    pref = await select_sort_pref(db, user, category.id)
     return CategoryView(category, items, sort_choice(user, pref)), role
 
 

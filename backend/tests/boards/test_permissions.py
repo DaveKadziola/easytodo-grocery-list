@@ -2,10 +2,21 @@ from datetime import UTC, datetime
 
 import pytest
 from factories import create_board, create_user
+from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 
-from easytodo.boards.permissions import Action, RowLock, can, require_board, roles_for
+from easytodo.boards.permissions import (
+    Action,
+    RowLock,
+    _board_lookup,
+    can,
+    member_lookup,
+    require_board,
+    roles_for,
+)
+from easytodo.content.service import _load_lookup
 from easytodo.errors import Forbidden, NotFound
-from easytodo.models import BoardRole
+from easytodo.models import Board, BoardRole, Category, Item
 
 
 @pytest.mark.parametrize(
@@ -116,3 +127,67 @@ async def test_require_board_with_a_lock_refuses_or_hides_as_without(db, lock):
     for user, board_id in ((stranger, board.id), (owner, 10**6), (owner, 0)):
         with pytest.raises(NotFound, match="^Board not found.$"):
             await require_board(db, board_id, user, Action.MANAGE_BOARD, lock=lock)
+
+
+def sql_of(statement) -> str:
+    return " ".join(str(statement.compile(dialect=postgresql.dialect())).split())
+
+
+@pytest.mark.parametrize(
+    "lock,clause",
+    [
+        (RowLock.SHARE, "FOR SHARE OF boards"),
+        (RowLock.NO_KEY_UPDATE, "FOR NO KEY UPDATE OF boards"),
+        (RowLock.UPDATE, "FOR UPDATE OF boards"),
+    ],
+)
+def test_a_locked_lookup_locks_only_its_row_and_takes_only_roles_that_may(lock, clause):
+    lookup = _board_lookup(False, Action.EDIT_CONTENT, lock)
+
+    assert sql_of(lookup.locked).endswith(clause)
+    assert "board_members.role IN" in sql_of(lookup.locked)
+    # What runs when that finds nothing, to tell 404 from 403: no role filter and no lock.
+    assert "board_members.role IN" not in sql_of(lookup.query)
+    assert "FOR " not in sql_of(lookup.query)
+
+
+def test_a_lookup_without_a_lock_has_only_its_query_and_always_needs_of():
+    assert _board_lookup(False, Action.VIEW, None).locked is None
+    with pytest.raises(TypeError):
+        member_lookup(select(Board), Action.VIEW)  # type: ignore[call-arg]
+
+
+def test_lookups_are_built_once_for_each_combination_of_what_shapes_them():
+    edit = _board_lookup(False, Action.EDIT_CONTENT, RowLock.SHARE)
+    assert _board_lookup(False, Action.EDIT_CONTENT, RowLock.SHARE) is edit
+    for other in (
+        _board_lookup(True, Action.EDIT_CONTENT, RowLock.SHARE),
+        _board_lookup(False, Action.MANAGE_BOARD, RowLock.SHARE),
+        _board_lookup(False, Action.EDIT_CONTENT, RowLock.UPDATE),
+        _board_lookup(False, Action.EDIT_CONTENT, None),
+    ):
+        assert other is not edit
+
+    item = _load_lookup(Item, False, False, Action.EDIT_CONTENT, RowLock.NO_KEY_UPDATE)
+    assert _load_lookup(Item, False, False, Action.EDIT_CONTENT, RowLock.NO_KEY_UPDATE) is item
+    assert _load_lookup(Item, False, True, Action.EDIT_CONTENT, RowLock.NO_KEY_UPDATE) is not item
+    assert (
+        _load_lookup(Category, False, False, Action.EDIT_CONTENT, RowLock.NO_KEY_UPDATE) is not item
+    )
+
+
+def test_load_lookups_lock_the_model_asked_for_and_keep_the_conditions_of_each_option():
+    item = _load_lookup(Item, False, False, Action.EDIT_CONTENT, RowLock.NO_KEY_UPDATE)
+    assert sql_of(item.locked).endswith("FOR NO KEY UPDATE OF items")  # not the category's row
+    for sql in (sql_of(item.query), sql_of(item.locked)):
+        assert "items.deleted_at IS NULL" in sql
+        assert "categories.archived_at IS NULL" in sql
+        assert "boards.archived_at IS NULL" in sql
+    with_deleted = _load_lookup(Item, False, True, Action.EDIT_CONTENT, RowLock.UPDATE)
+    assert "items.deleted_at IS NULL" not in sql_of(with_deleted.query)
+    assert sql_of(with_deleted.locked).endswith("FOR UPDATE OF items")
+    archived = _load_lookup(Category, True, False, Action.EDIT_CONTENT, RowLock.SHARE)
+    assert "categories.archived_at IS NOT NULL" in sql_of(archived.query)
+    assert sql_of(archived.locked).endswith("FOR SHARE OF categories")
+    viewed = _load_lookup(Item, False, False, Action.VIEW, None)
+    assert viewed.locked is None

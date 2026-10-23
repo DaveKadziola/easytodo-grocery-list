@@ -3,7 +3,7 @@
    it or its items, and by the member's own sort menu on it.
    Context: category_view (CategoryView, with the member's own sort order for it), role (the
    member's BoardRole). -#}
-{% from "partials/_avatar.html" import avatar %}
+{% from "boards/_item.html" import item_row %}
 {% set category = category_view.category %}
 {% set can_edit = can(role, Action.EDIT_CONTENT) %}
 {% set sort = category_view.sort %}
@@ -74,7 +74,7 @@
     {% endif %}
     <ul class="mt-2 min-h-11"{% if can_edit %} data-sortable-items{% endif %}>
       {% for iv in category_view.items %}
-      {% include "boards/_item.html" %}
+      {{ item_row(iv, can_edit) }}
       {% else %}
       <li class="py-2.5 text-sm text-slate-500 dark:text-slate-400">No items yet.</li>
       {% endfor %}

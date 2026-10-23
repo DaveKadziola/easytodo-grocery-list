@@ -1,6 +1,11 @@
-{# One item; done items are struck through. The name opens the item modal, which reads the item
-   from the data-* attributes only (autoescaped like any other value).
-   Context: iv (ItemView), can_edit, avatar (the macro of partials/_avatar.html). -#}
+{# One item row, as item_row(iv, can_edit), iv being an ItemView. Done items are struck through.
+   The name opens the item modal, which reads the item from the data-* attributes only
+   (autoescaped like any other value).
+   A macro, not an include: an include looks the template up and copies the whole context for every
+   item (hundreds on a big board). So the row sees nothing of the page: what it needs besides
+   iv and can_edit, pass as one more argument. -#}
+{% from "partials/_avatar.html" import avatar %}
+{% macro item_row(iv, can_edit) -%}
 {% set item = iv.item %}
 <li id="item-{{ item.id }}" data-item-id="{{ item.id }}" class="flex items-start{% if item.is_done %} text-slate-500 dark:text-slate-400 line-through{% endif %}">
   {% if can_edit %}
@@ -21,3 +26,4 @@
   <div class="shrink-0 py-2.5 pl-2 *:align-top">{{ avatar(iv.author.user_id, iv.author.name) }}</div>
   {% endif %}
 </li>
+{%- endmacro %}

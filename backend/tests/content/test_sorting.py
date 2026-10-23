@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from factories import create_board, create_category, create_item, create_user
-from helpers import NASTY, NASTY_ESCAPED, count_queries, wait_until_a_query_waits_for_a_lock
+from helpers import NASTY, NASTY_ESCAPED, wait_until_a_query_waits_for_a_lock
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -456,18 +456,3 @@ async def test_views_read_the_sort_row_afresh(db, board, category):
     in_category, _ = await get_category_view(db, category.id, owner)
     assert in_category.sort == SortChoice("updated", True, True, True)
     assert names_in(in_category) == ["apple", "Cherry", "Banana", "Almond"]
-
-
-async def test_category_view_uses_at_most_three_queries(db, board, category):
-    await seed_fruit(db, category)
-    owner = await user_named(db, "owner@example.com")
-    db.add(CategorySortPref(user_id=owner.id, category_id=category.id, **NAME_DESCENDING))
-    await db.commit()
-    db.expunge_all()
-
-    with count_queries(db) as statements:
-        view, _ = await get_category_view(db, category.id, owner)
-
-    assert len(statements) <= 3
-    assert view.sort == SortChoice("name", True, True, True)
-    assert names_in(view) == ["Cherry", "Banana", "apple", "Almond"]

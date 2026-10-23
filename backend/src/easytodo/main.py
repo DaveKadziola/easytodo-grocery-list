@@ -1,3 +1,4 @@
+import gc
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs
@@ -68,9 +69,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             on_reconnect=hub.reconnect_all,
         )
         await listener.start()
+        # Everything alive now (modules, classes, the app) lives as long as the process: freeze it,
+        # so a full collection walks only what requests create. Unfrozen on shutdown: frozen
+        # objects are never collected, not even once they are garbage (an app a test is done with).
+        gc.collect()
+        gc.freeze()
         try:
             yield
         finally:
+            gc.unfreeze()
             await listener.stop()
             await engine.dispose()
 
@@ -87,7 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.rate_limiter = RateLimiter()
     install_error_handlers(app)
     app.add_middleware(ClientIdMiddleware)
-    app.add_middleware(GZipMiddleware, minimum_size=1000)
+    app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=6)
     app.add_middleware(CsrfCookieMiddleware, settings=settings)
     app.add_middleware(SecurityHeadersMiddleware, settings=settings)  # outermost
 

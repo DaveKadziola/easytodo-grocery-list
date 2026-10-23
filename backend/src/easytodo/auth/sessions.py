@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Response
-from sqlalchemy import delete, select
+from sqlalchemy import DateTime, String, bindparam, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.config import Settings
@@ -49,6 +49,14 @@ async def create_session(
     return raw_token, session
 
 
+async def _touch(db: AsyncSession, session: UserSession, now: datetime) -> None:
+    """Bump ``session.last_seen_at`` to ``now`` and commit, unless it is less than
+    ``LAST_SEEN_INTERVAL`` old."""
+    if now - session.last_seen_at >= LAST_SEEN_INTERVAL:
+        session.last_seen_at = now
+        await db.commit()
+
+
 async def load_session(db: AsyncSession, raw_token: str) -> UserSession | None:
     """The unexpired session for ``raw_token``; bumps ``last_seen_at`` at most every 5 minutes."""
     now = datetime.now(UTC)
@@ -57,10 +65,46 @@ async def load_session(db: AsyncSession, raw_token: str) -> UserSession | None:
             UserSession.token_hash == hash_token(raw_token), UserSession.expires_at > now
         )
     )
-    if session is not None and now - session.last_seen_at >= LAST_SEEN_INTERVAL:
-        session.last_seen_at = now
-        await db.commit()
+    if session is not None:
+        await _touch(db, session, now)
     return session
+
+
+# Built once, like the other statements on the hot paths (the token hash and the time are the
+# parameters): building one takes longer than running it.
+_SESSION_AND_USER = (
+    select(UserSession, User)
+    .join(User, User.id == UserSession.user_id)
+    .where(
+        UserSession.token_hash == bindparam("token_hash", type_=String),
+        UserSession.expires_at > bindparam("now", type_=DateTime(timezone=True)),
+    )
+)
+
+
+async def load_session_and_user(
+    db: AsyncSession, raw_token: str
+) -> tuple[UserSession, User] | None:
+    """The unexpired session for ``raw_token`` and its user, in one query: ``load_session`` plus
+    the user, with the same ``last_seen_at`` bump. ``None`` when there is no such session.
+
+    Only that: a disabled user, a session waiting for its second factor and a password that must
+    change are for the caller to judge (``deps``). A deleted user has no session (it goes with the
+    user, ``ON DELETE CASCADE``), so there is no moment in which a request finds the session and
+    then misses the user.
+
+    The bump commits after the user was read, so ``db`` must keep loaded objects across a commit
+    (the app's sessions do: ``expire_on_commit=False``).
+    """
+    now = datetime.now(UTC)
+    row = (
+        await db.execute(_SESSION_AND_USER, {"token_hash": hash_token(raw_token), "now": now})
+    ).one_or_none()
+    if row is None:
+        return None
+    session, user = row
+    await _touch(db, session, now)
+    return session, user
 
 
 async def revoke_session(db: AsyncSession, session_id: int) -> None:

@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import Depends, Form, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from easytodo.auth.sessions import SESSION_COOKIE, load_session
+from easytodo.auth.sessions import SESSION_COOKIE, load_session, load_session_and_user
 from easytodo.db import get_db
 from easytodo.errors import (
     Forbidden,
@@ -36,11 +36,11 @@ async def active_session(
 ) -> tuple[User, UserSession] | None:
     """The user and unexpired session of the session cookie ``raw_token``, unless the user is
     disabled. The rule ``require_user`` and ``websocket_user`` share."""
-    session = await load_session(db, raw_token) if raw_token else None
-    if session is None:
+    found = await load_session_and_user(db, raw_token) if raw_token else None
+    if found is None:
         return None
-    user = await db.get(User, session.user_id)
-    if user is None or user.status == UserStatus.DISABLED:  # None: deleted since the session read
+    session, user = found
+    if user.status == UserStatus.DISABLED:
         return None
     return user, session
 

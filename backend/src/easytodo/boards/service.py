@@ -14,6 +14,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     ColumnElement,
+    Row,
     ScalarSelect,
     Select,
     String,
@@ -24,6 +25,7 @@ from sqlalchemy import (
     func,
     not_,
     select,
+    true,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -335,13 +337,27 @@ def _item_views_query(board_ref: ColumnElement | ScalarSelect) -> Select[Any]:
     """The items with their author's columns, whether the board is shared (the board ``board_ref``
     has more than one member) and the counts of checklist entries (done, all) and attachments;
     joined with the viewer's own sort row of each item's category (the ``user_id`` parameter), for
-    the order; in no scope yet, and in no order."""
+    the order; in no scope yet, and in no order.
+
+    The counts are LATERAL subqueries, one for the checklist (done and all in one scan of the
+    item's entries) and one for the attachments, so an item costs two index lookups, not three,
+    and the plan cannot degrade into one that sums whole tables for every item (what a grouped
+    join does when the planner's row estimates are stale). An aggregate without GROUP BY always
+    returns one row, so joining them ``ON true`` loses no item.
+    """
     # Not tied to an item's row: PostgreSQL counts the members once, not for every item.
     shared = select(func.count()).where(BoardMember.board_id == board_ref).scalar_subquery() > 1
     entries = (
-        select(func.count()).select_from(ChecklistEntry).where(ChecklistEntry.item_id == Item.id)
+        select(
+            func.count().label("total"),
+            func.count().filter(ChecklistEntry.is_done.is_(True)).label("done"),
+        )
+        .where(ChecklistEntry.item_id == Item.id)
+        .lateral("entries")
     )
-    attachments = select(func.count()).select_from(Attachment).where(Attachment.item_id == Item.id)
+    files = (
+        select(func.count().label("total")).where(Attachment.item_id == Item.id).lateral("files")
+    )
     return (
         select(
             Item,
@@ -349,9 +365,9 @@ def _item_views_query(board_ref: ColumnElement | ScalarSelect) -> Select[Any]:
             _AUTHOR.email,
             _AUTHOR.display_name,
             shared,
-            entries.where(ChecklistEntry.is_done.is_(True)).scalar_subquery(),
-            entries.scalar_subquery(),
-            attachments.scalar_subquery(),
+            entries.c.done,
+            entries.c.total,
+            files.c.total,
         )
         .join(Category, Category.id == Item.category_id)
         .outerjoin(_AUTHOR, _AUTHOR.id == Item.created_by)
@@ -360,6 +376,8 @@ def _item_views_query(board_ref: ColumnElement | ScalarSelect) -> Select[Any]:
             _SORT_PREF,
             and_(_SORT_PREF.category_id == Item.category_id, _SORT_PREF.user_id == _USER_ID),
         )
+        .join(entries, true())
+        .join(files, true())
         .where(Category.archived_at.is_(None), Item.deleted_at.is_(None))
     )
 
@@ -423,6 +441,40 @@ async def select_sort_pref(
     for ``select_item_views``. Read afresh (populate_existing): the rows are written with Core
     statements, which leave the identity map as it was."""
     return await db.scalar(_OWN_SORT, {"user_id": user.id, "category_id": category_id})
+
+
+# An active category of an active board with the role of the member asking and their own sort row
+# of it, when they have one: one statement, as an empty category has no item row to carry the sort
+# row. Built once, with populate_existing like the statements around it.
+_MEMBER_CATEGORY = (
+    select(Category, BoardMember.role, _SORT_PREF)
+    .join(Board, Board.id == Category.board_id)
+    .join(BoardMember, BoardMember.board_id == Category.board_id)
+    .outerjoin(
+        _SORT_PREF, and_(_SORT_PREF.category_id == Category.id, _SORT_PREF.user_id == _USER_ID)
+    )
+    .where(
+        Category.id == _CATEGORY_ID,
+        BoardMember.user_id == _USER_ID,
+        Board.archived_at.is_(None),
+        Category.archived_at.is_(None),
+    )
+    .execution_options(populate_existing=True)
+)
+
+
+async def select_member_category(
+    db: AsyncSession, user: User, category_id: int
+) -> Row[tuple[Category, BoardRole, CategorySortPref | None]] | None:
+    """The row ``(category, role, sort row)``: the active category (of an active board), ``user``'s
+    role on its board and ``user``'s own sort row of it, if they have made one; ``None`` when there
+    is no such category or ``user`` is not a member of its board.
+
+    One statement and no lock: for reading (a change goes through ``content.service.load_category``).
+    ``category_id`` must be a possible id (``is_possible_id``).
+    """
+    result = await db.execute(_MEMBER_CATEGORY, {"category_id": category_id, "user_id": user.id})
+    return result.one_or_none()
 
 
 # The board's active categories with the viewer's own sort row of each, built once like the item

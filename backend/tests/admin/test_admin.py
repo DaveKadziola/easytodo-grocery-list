@@ -25,8 +25,7 @@ from websockets.exceptions import ConnectionClosed
 from easytodo.admin import service
 from easytodo.admin.routes import router
 from easytodo.admin.service import AdminStats, delete_user, get_stats, list_users
-from easytodo.auth import deps
-from easytodo.auth.sessions import SESSION_COOKIE
+from easytodo.auth.sessions import SESSION_COOKIE, load_session_and_user
 from easytodo.auth.twofa import begin_setup, confirm_setup
 from easytodo.errors import Conflict
 from easytodo.models import (
@@ -531,24 +530,21 @@ async def test_reset_2fa_turns_it_off_and_ends_pending_sign_ins(
     assert (await device.get("/account/2fa/setup")).status_code == 200
 
 
-async def test_request_racing_the_deletion_of_its_user_is_signed_out(
-    client_factory, db, admin, monkeypatch
-):
+async def test_request_of_a_deleted_user_is_signed_out(client_factory, db, admin):
+    """The session goes with its user (a cascade), and the session and the user are read in one
+    statement, so there is no moment in which a request sees one without the other."""
     dave = await create_user(db, "dave@example.com")
     device = await signed_in(client_factory, "dave@example.com")
-    load_session = deps.load_session
+    cookie = device.cookies[SESSION_COOKIE]
+    assert await load_session_and_user(db, cookie) is not None
 
-    async def load_session_then_delete_user(session_db, raw_token):
-        session = await load_session(session_db, raw_token)
-        await delete_user(db, admin, dave.id)  # an admin, just then
-        return session
+    await delete_user(db, admin, dave.id)  # an admin, just then
 
-    monkeypatch.setattr(deps, "load_session", load_session_then_delete_user)
-
-    r = await device.get("/boards")  # not a 500
-
-    assert r.status_code == 303
-    assert r.headers["location"].startswith("/login")
+    for _ in range(2):  # not a 500, and the cookie does not work the second time either
+        r = await device.get("/boards")
+        assert r.status_code == 303
+        assert r.headers["location"].startswith("/login")
+    assert await load_session_and_user(db, cookie) is None
 
 
 async def test_admin_cannot_open_users_board(admin_client, db):

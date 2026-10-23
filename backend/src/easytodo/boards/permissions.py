@@ -3,9 +3,10 @@ locks a change takes. What each role may do (``Action``, ``can``, ``roles_for``)
 and is importable from here too."""
 
 from enum import StrEnum, auto
-from typing import Any
+from functools import cache
+from typing import Any, NamedTuple
 
-from sqlalchemy import ColumnElement, Row, Select, select
+from sqlalchemy import BigInteger, ColumnElement, Row, Select, bindparam, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.boards.roles import Action, can, roles_for
@@ -50,42 +51,75 @@ def _board_state(archived: bool | None) -> tuple[ColumnElement[bool], ...]:
     return (Board.archived_at.is_not(None) if archived else Board.archived_at.is_(None),)
 
 
-async def load_for_member(
-    db: AsyncSession,
-    query: Select[Any],
-    action: Action,
-    gone: str,
-    *,
-    lock: RowLock | None = None,
-    of: Any,
-) -> Row[Any]:
-    """The one row of ``query``: a select of what was asked for and ``BoardMember.role``, joined
-    with the user's own membership. ``NotFound(gone)`` when there is none, ``Forbidden`` when the
-    role does not allow ``action``.
+class MemberLookup(NamedTuple):
+    """The statements of a ``load_for_member`` call, built by ``member_lookup``."""
+
+    query: Select[Any]
+    locked: Select[Any] | None  # ``query`` for a change: with the role filter and the row lock
+    action: Action
+
+
+def member_lookup(
+    query: Select[Any], action: Action, *, lock: RowLock | None = None, of: Any
+) -> MemberLookup:
+    """``query`` and, with ``lock``, its locked variant, for ``load_for_member``. ``query`` selects
+    what was asked for and ``BoardMember.role``, joined with the user's own membership, and takes
+    its ids as bind parameters (``load_for_member`` has their values).
 
     ``of`` is the table (model) whose row ``lock`` is for, and must always be given: a lock
     without it would take a row of every table in the join, the memberships and the board too.
-    With ``lock``, that row stays locked in that mode until the commit, and the query
-    takes only a role that allows ``action``: a member who may not do it neither takes the lock
-    nor waits for anyone else's. Only when that finds nothing does the query run again without
-    lock and role, to tell a missing row (404) from a missing permission (403); if the role
-    allows ``action`` by then, something changed in between (a role, a move), which is a 404 too,
-    so the page reloads.
+
+    Building a statement and working out its cache key takes longer than running it, so the
+    caller builds the lookup once for each combination of what shapes it (the model, ``archived``,
+    ``action``, ``lock``...) and keeps it (``functools.cache``); never one lookup per request, and
+    never a cache keyed by the ``query`` itself, which a caller may build anew each time.
     """
+    locked = None
     if lock is not None:
         locked = query.where(BoardMember.role.in_(roles_for(action))).with_for_update(
             of=of, **_FOR_UPDATE_ARGS[lock]
         )
-        row = (await db.execute(locked)).one_or_none()
+    return MemberLookup(query, locked, action)
+
+
+async def load_for_member(
+    db: AsyncSession, lookup: MemberLookup, gone: str, params: dict[str, Any]
+) -> Row[Any]:
+    """The one row of ``lookup`` for the bind parameters ``params``. ``NotFound(gone)`` when there
+    is none, ``Forbidden`` when the role does not allow ``lookup.action``.
+
+    With a lock, that row stays locked in that mode until the commit, and the query takes only a
+    role that allows the action: a member who may not do it neither takes the lock nor waits for
+    anyone else's. Only when that finds nothing does the query run again without lock and role,
+    to tell a missing row (404) from a missing permission (403); if the role allows the action by
+    then, something changed in between (a role, a move), which is a 404 too, so the page
+    reloads.
+    """
+    if lookup.locked is not None:
+        row = (await db.execute(lookup.locked, params)).one_or_none()
         if row is not None:
             return row
-    row = (await db.execute(query)).one_or_none()
+    row = (await db.execute(lookup.query, params)).one_or_none()
     if row is None:
         raise NotFound(gone)
-    check_permission(row.role, action)
-    if lock is not None:
+    check_permission(row.role, lookup.action)
+    if lookup.locked is not None:
         raise NotFound(gone)
     return row
+
+
+@cache
+def _board_lookup(archived: bool | None, action: Action, lock: RowLock | None) -> MemberLookup:
+    query = (
+        select(Board, BoardMember.role)
+        .join(BoardMember, BoardMember.board_id == Board.id)
+        .where(
+            Board.id == bindparam("board_id", type_=BigInteger),
+            BoardMember.user_id == bindparam("user_id", type_=BigInteger),
+            *_board_state(archived),
+        )
+    )
+    return member_lookup(query, action, lock=lock, of=Board)
 
 
 async def require_board(
@@ -107,10 +141,10 @@ async def require_board(
     """
     if not is_possible_id(board_id):
         raise NotFound(BOARD_GONE)
-    query = (
-        select(Board, BoardMember.role)
-        .join(BoardMember, BoardMember.board_id == Board.id)
-        .where(Board.id == board_id, BoardMember.user_id == user.id, *_board_state(archived))
+    board, role = await load_for_member(
+        db,
+        _board_lookup(archived, action, lock),
+        BOARD_GONE,
+        {"board_id": board_id, "user_id": user.id},
     )
-    board, role = await load_for_member(db, query, action, BOARD_GONE, lock=lock, of=Board)
     return board, role
