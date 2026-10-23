@@ -99,9 +99,27 @@ def test_touch_targets_at_least_44px_on_phone(logged_in_page_mobile, seeded_boar
     open_board(page, seeded_board)
 
     at_least_44px(page.locator("label:has(> input[type=checkbox])"))  # where a tick lands
-    at_least_44px(page.locator("summary"))  # the category menus
+    at_least_44px(page.locator("summary"))  # the sort and category menus
     at_least_44px(page.get_by_role("button", name="Add", exact=True))
     assert too_small_targets(page) == []
+
+
+def test_sort_menu_fits_a_phone(logged_in_page_mobile, seeded_board, open_board):
+    page = logged_in_page_mobile
+    open_board(page, seeded_board)
+    category(page, "Dairy").get_by_label("Sort Dairy").click()
+    menu = (
+        category(page, "Dairy")
+        .locator("details", has=page.get_by_label("Sort Dairy"))
+        .locator(".menu")
+    )
+    expect(menu).to_be_visible()
+
+    assert too_small_targets(page) == []  # the options (through their labels) and the buttons
+    box = menu.bounding_box()
+    width = page.viewport_size["width"]
+    assert box["x"] >= 0 and box["x"] + box["width"] <= width, box
+    assert page.evaluate("document.scrollingElement.scrollWidth <= window.innerWidth")
 
 
 def test_desktop_shows_three_columns(logged_in_page_with_seed):
@@ -180,10 +198,14 @@ def test_theme_follows_the_system_and_stays_readable(
     )
     assert page_is_dark is (scheme == "dark"), body
 
-    menu = category(page, "Dairy").locator("summary")
+    menu = category(page, "Dairy").get_by_label("Category actions")
     menu.click()  # the category menu, open
     assert page.evaluate(LOW_CONTRAST_TEXT, AA) == []
     menu.click()
+    sort_menu = category(page, "Dairy").get_by_label("Sort Dairy")
+    sort_menu.click()  # and the sort menu: its legends, options and buttons
+    assert page.evaluate(LOW_CONTRAST_TEXT, AA) == []
+    sort_menu.click()
     page.get_by_role("button", name="Bread", exact=True).click()  # the item modal
     expect(page.get_by_role("dialog")).to_be_visible()
     assert page.evaluate(LOW_CONTRAST_TEXT, AA) == []

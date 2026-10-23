@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from easytodo.boards import service
 from easytodo.boards.permissions import Action
 from easytodo.boards.service import get_board_view, list_boards
-from easytodo.models import Board, BoardMember, BoardRole, User
+from easytodo.models import Board, BoardMember, BoardRole, CategorySortPref, User
 from easytodo.realtime.events import BoardEvent, EventType, current_origin
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
 
@@ -367,6 +367,7 @@ async def test_board_view_uses_two_queries(db, monkeypatch):
     fruit = await create_category(db, board, "Fruit", position=0)
     await create_category(db, board, "Empty", position=2)
     await create_item(db, dairy, "milk")
+    await create_item(db, dairy, "butter")
     await create_item(db, fruit, "banana", is_done=True)
     await create_item(db, fruit, "Apple")
     await create_item(db, fruit, "cherry")
@@ -374,6 +375,13 @@ async def test_board_view_uses_two_queries(db, monkeypatch):
     await create_item(db, archived, "Not on the board any more")
     elsewhere = await create_category(db, await create_board(db, owner, "Other"), "Elsewhere")
     await create_item(db, elsewhere, "Not on this board")
+    # The owner's own order for Dairy (Z-A), which the board view reads in the same two queries.
+    db.add(
+        CategorySortPref(
+            user_id=owner.id, category_id=dairy.id, field="name", descending=True, open_first=True
+        )
+    )
+    await db.commit()
 
     authorized: list[Action] = []
     require_board = service.require_board
@@ -394,7 +402,7 @@ async def test_board_view_uses_two_queries(db, monkeypatch):
     assert (view.board.id, view.role) == (board.id, BoardRole.OWNER)
     assert [(c.category.name, [i.item.name for i in c.items]) for c in view.categories] == [
         ("Fruit", ["Apple", "cherry", "banana"]),  # open first, then by name ignoring case
-        ("Dairy", ["milk"]),
+        ("Dairy", ["milk", "butter"]),  # its own order: Z-A
         ("Empty", []),
     ]
 

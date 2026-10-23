@@ -621,3 +621,49 @@ def test_socket_refused_at_the_wrong_address_says_where_to_open_the_app(
     page.wait_for_timeout(SETTLE_MS)
     assert page.url.endswith(f"/boards/{board_id}")  # stays, not sent to the board list
     assert len(sockets) == 1  # and not retried
+
+
+def test_sort_order_is_personal_on_a_shared_board(
+    logged_in_page, signed_in_as, seed, user, open_board
+):
+    async def make(db):
+        vic = await create_user(db, "vic@example.com")
+        board = await create_board(db, user, "Groceries", members={vic: BoardRole.EDITOR})
+        dairy = await create_category(db, board, "Dairy")
+        await create_item(db, dairy, "Butter")
+        await create_item(db, dairy, "Milk")
+        return board.id
+
+    board_id = seed(make)
+    dave, vic = logged_in_page, signed_in_as("vic@example.com")
+    for page in (dave, vic):
+        open_board(page, board_id)
+
+    dairy_sort = category(dave, "Dairy").get_by_label("Sort Dairy")
+    dairy_sort.click()
+    category(dave, "Dairy").get_by_role("radio", name="Z–A / newest first", exact=True).check()
+    category(dave, "Dairy").get_by_role("button", name="Apply", exact=True).click()
+    expect(items_of(dave, "Dairy")).to_have_text([re.compile("Milk"), re.compile("Butter")])
+    vic.wait_for_timeout(SETTLE_MS)
+    expect(items_of(vic, "Dairy")).to_have_text([re.compile("Butter"), re.compile("Milk")])
+
+    add_item(vic, "Dairy", "Cheese")  # each gets it in the order they chose
+    expect(items_of(vic, "Dairy")).to_have_text(
+        [re.compile("Butter"), re.compile("Cheese"), re.compile("Milk")]
+    )
+    expect(items_of(dave, "Dairy")).to_have_text(
+        [re.compile("Milk"), re.compile("Cheese"), re.compile("Butter")], timeout=LIVE_UPDATE_MS
+    )
+
+    category(vic, "Dairy").get_by_label("Sort Dairy").click()
+    add_item(dave, "Dairy", "Cream")
+    vic.wait_for_timeout(SETTLE_MS)
+    expect(category(vic, "Dairy").get_by_role("button", name="Apply")).to_be_visible()  # still open
+    expect(items_of(vic, "Dairy").filter(has_text="Cream")).to_have_count(0)
+
+    vic.keyboard.press("Escape")
+
+    expect(items_of(vic, "Dairy")).to_have_text(
+        [re.compile(name) for name in ("Butter", "Cheese", "Cream", "Milk")],
+        timeout=LIVE_UPDATE_MS,
+    )

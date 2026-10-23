@@ -18,6 +18,7 @@ from easytodo.auth.routes import router as auth_router
 from easytodo.boards.invite_routes import router as invite_router
 from easytodo.boards.routes import router as boards_router
 from easytodo.config import Settings, get_settings
+from easytodo.content.prefs_routes import router as sort_router
 from easytodo.content.routes import router as content_router
 from easytodo.db import create_engine
 from easytodo.errors import install_error_handlers
@@ -104,6 +105,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(boards_router)
     app.include_router(invite_router)
     app.include_router(content_router)
+    app.include_router(sort_router)
     app.include_router(realtime_router)
     app.include_router(admin_router)
     app.mount("/static", CachedStaticFiles(directory=STATIC_DIR), name="static")

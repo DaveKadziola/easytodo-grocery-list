@@ -31,7 +31,12 @@ from easytodo.boards.permissions import (
     load_for_member,
     require_board,
 )
-from easytodo.boards.service import CategoryView, select_item_views
+from easytodo.boards.service import (
+    CategoryView,
+    select_item_views,
+    select_sort_pref,
+    sort_choice,
+)
 from easytodo.content.validation import (
     CATEGORY_NAME_MAX_LENGTH,
     ITEM_NAME_MAX_LENGTH,
@@ -335,9 +340,12 @@ async def reorder_categories(
 async def get_category_view(
     db: AsyncSession, category_id: int, user: User
 ) -> tuple[CategoryView, BoardRole]:
-    """The category with its items (open first, then by name) and ``user``'s role."""
+    """The category with its items in ``user``'s order for it, and ``user``'s role: three
+    queries (the category, the items and the sort row, which an empty category needs too)."""
     category, role = await load_category(db, category_id, user, Action.VIEW)
-    return CategoryView(category, await select_item_views(db, user, category_id=category.id)), role
+    items = await select_item_views(db, user, category_id=category.id)
+    pref = await select_sort_pref(db, user, category.id)
+    return CategoryView(category, items, sort_choice(user, pref)), role
 
 
 async def create_item(

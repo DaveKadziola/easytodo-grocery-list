@@ -10,7 +10,21 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import BigInteger, ColumnElement, ScalarSelect, Select, bindparam, func, select
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    ColumnElement,
+    ScalarSelect,
+    Select,
+    String,
+    and_,
+    bindparam,
+    case,
+    false,
+    func,
+    not_,
+    select,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -19,11 +33,13 @@ from easytodo.content.validation import clean_name
 from easytodo.display import display_name
 from easytodo.errors import Conflict, Forbidden, NotFound, ValidationFailed
 from easytodo.models import (
+    SORT_FIELDS,
     Attachment,
     Board,
     BoardMember,
     BoardRole,
     Category,
+    CategorySortPref,
     ChecklistEntry,
     Item,
     User,
@@ -75,9 +91,21 @@ class ItemView:
 
 
 @dataclass(frozen=True)
+class SortChoice:
+    """How one user sees one category: ``custom`` when they chose it for that category, else
+    their account's default."""
+
+    field: str  # one of SORT_FIELDS
+    descending: bool
+    open_first: bool
+    custom: bool
+
+
+@dataclass(frozen=True)
 class CategoryView:
     category: Category
     items: list[ItemView]
+    sort: SortChoice
 
 
 @dataclass(frozen=True)
@@ -243,21 +271,71 @@ async def delete_board(db: AsyncSession, board_id: int, user: User, confirm_name
     await commit_and_publish(db)  # nobody can have an archived board open
 
 
-def item_order(user: User) -> list[ColumnElement]:
-    """How items are listed in a category, on the board page and in every fragment alike: open
-    ones first, then by name ignoring case."""
-    return [Item.is_done, func.lower(Item.name), Item.id]
+def sort_choice(user: User, pref: CategorySortPref | None) -> SortChoice:
+    """``user``'s order for a category: ``pref``, their own choice for it, wins over the default
+    of their account."""
+    if pref is not None:
+        return SortChoice(pref.field, pref.descending, pref.open_first, custom=True)
+    return SortChoice(user.sort_field, user.sort_descending, user.sort_open_first, custom=False)
+
+
+# The user's own row for a category, when they have one (select_item_views joins it).
+_SORT_PREF = aliased(CategorySortPref, name="pref")
+# What each sort field orders by, ascending.
+_SORT_COLUMNS: dict[str, ColumnElement] = {
+    "name": func.lower(Item.name),
+    "created": Item.created_at,
+    "updated": Item.updated_at,
+}
+
+
+# The account's default order, as the parameters the item statements take (the user's values go
+# in per call, so that the statements and their SQL are the same for everyone).
+_DEFAULT_FIELD = bindparam("sort_field", type_=String)
+_DEFAULT_DESCENDING = bindparam("sort_descending", type_=Boolean)
+_DEFAULT_OPEN_FIRST = bindparam("sort_open_first", type_=Boolean)
+
+
+def _item_order() -> list[ColumnElement]:
+    """How items are listed in a category, on the board page and in every fragment alike: in the
+    user's order for the category (their row in ``_SORT_PREF``, which the statement joins), else
+    in their account's default.
+
+    The field and the direction pick one of the CASE terms; the others are NULL for every row,
+    so they order nothing. Ties go by id.
+    """
+    field = func.coalesce(_SORT_PREF.field, _DEFAULT_FIELD)
+    descending = func.coalesce(_SORT_PREF.descending, _DEFAULT_DESCENDING)
+    open_first = func.coalesce(_SORT_PREF.open_first, _DEFAULT_OPEN_FIRST)
+    order: list[ColumnElement] = [case((open_first, Item.is_done), else_=false())]
+    for name in SORT_FIELDS:  # a field without a column in _SORT_COLUMNS fails here, at import
+        column = _SORT_COLUMNS[name]
+        order.append(case((and_(field == name, not_(descending)), column)))
+        order.append(case((and_(field == name, descending), column)).desc())
+    order.append(Item.id)
+    return order
+
+
+def _account_sort(user: User) -> dict[str, Any]:
+    """The parameters of the item statements that carry ``user``'s account default."""
+    return {
+        "sort_field": user.sort_field,
+        "sort_descending": user.sort_descending,
+        "sort_open_first": user.sort_open_first,
+    }
 
 
 _AUTHOR = aliased(User)
 _BOARD_ID = bindparam("board_id", type_=BigInteger)
 _CATEGORY_ID = bindparam("category_id", type_=BigInteger)
+_USER_ID = bindparam("user_id", type_=BigInteger)
 
 
 def _item_views_query(board_ref: ColumnElement | ScalarSelect) -> Select[Any]:
     """The items with their author's columns, whether the board is shared (the board ``board_ref``
     has more than one member) and the counts of checklist entries (done, all) and attachments;
-    in no scope yet, and in no order."""
+    joined with the viewer's own sort row of each item's category (the ``user_id`` parameter), for
+    the order; in no scope yet, and in no order."""
     # Not tied to an item's row: PostgreSQL counts the members once, not for every item.
     shared = select(func.count()).where(BoardMember.board_id == board_ref).scalar_subquery() > 1
     entries = (
@@ -277,34 +355,47 @@ def _item_views_query(board_ref: ColumnElement | ScalarSelect) -> Select[Any]:
         )
         .join(Category, Category.id == Item.category_id)
         .outerjoin(_AUTHOR, _AUTHOR.id == Item.created_by)
+        # The user in the ON clause, not in WHERE: an item of a category without a row stays.
+        .outerjoin(
+            _SORT_PREF,
+            and_(_SORT_PREF.category_id == Item.category_id, _SORT_PREF.user_id == _USER_ID),
+        )
         .where(Category.archived_at.is_(None), Item.deleted_at.is_(None))
     )
 
 
-# Built once, here: building such a statement takes longer than running it, and every board and
-# category view runs one. Only the order is added per call.
-_BOARD_ITEMS = _item_views_query(_BOARD_ID).where(Item.board_id == _BOARD_ID)
+# Built once, here, with their order: building such a statement and working out its cache key
+# takes longer than running it (the order alone, 0.4 ms), and every board and category view runs
+# one. Per call only the values of the parameters change.
+_BOARD_ITEMS = (
+    _item_views_query(_BOARD_ID).where(Item.board_id == _BOARD_ID).order_by(*_item_order())
+)
 # An alias of its own: the subquery would correlate to the joined ``Category`` and have no table.
 _in_category = aliased(Category)
-_CATEGORY_ITEMS = _item_views_query(
-    select(_in_category.board_id).where(_in_category.id == _CATEGORY_ID).scalar_subquery()
-).where(Item.category_id == _CATEGORY_ID)
+_CATEGORY_ITEMS = (
+    _item_views_query(
+        select(_in_category.board_id).where(_in_category.id == _CATEGORY_ID).scalar_subquery()
+    )
+    .where(Item.category_id == _CATEGORY_ID)
+    .order_by(*_item_order())
+)
 
 
 async def select_item_views(
     db: AsyncSession, user: User, *, board_id: int | None = None, category_id: int | None = None
 ) -> list[ItemView]:
-    """The items of a board (all its active categories) or of one category, in ``item_order``:
-    not deleted, and not in an archived category. One statement, and no permission check: the
-    caller has found the board or category for ``user`` first (``require_board``,
-    ``load_category``). Exactly one of ``board_id`` and ``category_id`` is given."""
+    """The items of a board (all its active categories) or of one category, in ``user``'s order
+    for each category (see ``_item_order``): not deleted, and not in an archived category. One
+    statement, and no permission check: the caller has found the board or category for ``user``
+    first (``require_board``, ``load_category``). Exactly one of ``board_id`` and ``category_id``
+    is given."""
     if (board_id is None) == (category_id is None):
         raise TypeError("Give exactly one of board_id and category_id.")
     if board_id is not None:
         query, params = _BOARD_ITEMS, {"board_id": board_id}
     else:
         query, params = _CATEGORY_ITEMS, {"category_id": category_id}
-    rows = await db.execute(query.order_by(*item_order(user)), params)
+    rows = await db.execute(query, params | {"user_id": user.id} | _account_sort(user))
 
     authors: dict[int, Author] = {}  # one Author per person
     views = []
@@ -318,25 +409,53 @@ async def select_item_views(
     return views
 
 
-async def get_board_view(db: AsyncSession, board_id: int, user: User) -> BoardView:
-    """The board with its active categories (by position) and their items (open first, then by
-    name).
+_OWN_SORT = (
+    select(CategorySortPref)
+    .where(CategorySortPref.user_id == _USER_ID, CategorySortPref.category_id == _CATEGORY_ID)
+    .execution_options(populate_existing=True)
+)
 
-    Two queries after the permission check: the categories and the items in them
-    (``select_item_views``).
+
+async def select_sort_pref(
+    db: AsyncSession, user: User, category_id: int
+) -> CategorySortPref | None:
+    """``user``'s own sort row for the category, if they have made one; no permission check, as
+    for ``select_item_views``. Read afresh (populate_existing): the rows are written with Core
+    statements, which leave the identity map as it was."""
+    return await db.scalar(_OWN_SORT, {"user_id": user.id, "category_id": category_id})
+
+
+# The board's active categories with the viewer's own sort row of each, built once like the item
+# statements above. populate_existing: a row the session loaded earlier may be out of date (the
+# rows are written with Core statements, which leave the identity map as it was).
+_BOARD_CATEGORIES = (
+    select(Category, _SORT_PREF)
+    .outerjoin(
+        _SORT_PREF, and_(_SORT_PREF.category_id == Category.id, _SORT_PREF.user_id == _USER_ID)
+    )
+    .where(Category.board_id == _BOARD_ID, Category.archived_at.is_(None))
+    .order_by(Category.position, Category.id)
+    .execution_options(populate_existing=True)
+)
+
+
+async def get_board_view(db: AsyncSession, board_id: int, user: User) -> BoardView:
+    """The board with its active categories (by position) and their items, each category in
+    ``user``'s order for it (``SortChoice``).
+
+    Two queries after the permission check: the categories with ``user``'s sort rows, and the
+    items in them (``select_item_views``).
     """
     board, role = await require_board(db, board_id, user, Action.VIEW)
-    categories = list(
-        await db.scalars(
-            select(Category)
-            .where(Category.board_id == board.id, Category.archived_at.is_(None))
-            .order_by(Category.position, Category.id)
-        )
-    )
+    rows = await db.execute(_BOARD_CATEGORIES, {"board_id": board.id, "user_id": user.id})
+    categories = rows.all()
     by_category: dict[int, list[ItemView]] = {}
     for item_view in await select_item_views(db, user, board_id=board.id):
         by_category.setdefault(item_view.item.category_id, []).append(item_view)
-    views = [CategoryView(c, by_category.get(c.id, [])) for c in categories]
+    views = [
+        CategoryView(c, by_category.get(c.id, []), sort_choice(user, pref))
+        for c, pref in categories
+    ]
     return BoardView(board, role, views)
 
 

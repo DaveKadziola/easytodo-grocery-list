@@ -1,9 +1,12 @@
-{# One category: the "Add item" field on top, then its items (open first, done ones last). Swapped
-   as a whole by GET /categories/{id} and by every change to it or its items.
-   Context: category_view (CategoryView), role (the member's BoardRole). -#}
+{# One category: the "Add item" field on top, then its items in the member's order (by default
+   open first, done ones last). Swapped as a whole by GET /categories/{id} and by every change to
+   it or its items, and by the member's own sort menu on it.
+   Context: category_view (CategoryView, with the member's own sort order for it), role (the
+   member's BoardRole). -#}
 {% from "partials/_avatar.html" import avatar %}
 {% set category = category_view.category %}
 {% set can_edit = can(role, Action.EDIT_CONTENT) %}
+{% set sort = category_view.sort %}
 {% set done_count = category_view.items|selectattr("item.is_done")|list|length %}
 <section id="category-{{ category.id }}" data-category-id="{{ category.id }}" data-category-name="{{ category.name }}" class="card mb-6 break-inside-avoid p-4 sm:p-5">
   <div class="flex items-start gap-1">
@@ -13,6 +16,32 @@
     <h2 class="min-w-0 flex-1 break-words py-2 text-lg font-semibold">{{ category.name }}</h2>
     {#- Folds the items away on this device only (board.js keeps it in localStorage). #}
     <button type="button" class="btn-icon shrink-0 text-slate-600 dark:text-slate-400" data-collapse aria-expanded="true" aria-controls="category-{{ category.id }}-body" aria-label="Hide items" title="Hide or show items"><span aria-hidden="true" class="collapse-icon">▾</span></button>
+    {#- The member's own order for this category, for every role: it changes nothing on the board for anyone else. #}
+    <details class="relative shrink-0">
+      <summary class="btn-icon cursor-pointer list-none text-slate-600 dark:text-slate-400 [&::-webkit-details-marker]:hidden{% if sort.custom %} sort-custom{% endif %}" title="{{ 'Custom order' if sort.custom else 'Sort' }}" aria-label="Sort {{ category.name }}">⇅</summary>
+      <div class="menu">
+        <form hx-post="/categories/{{ category.id }}/sort" hx-target="#category-{{ category.id }}" class="space-y-2 p-2">
+          <fieldset>
+            <legend class="label px-3 pt-2">Sort by</legend>
+            <label class="menu-item gap-3"><input type="radio" class="size-5 accent-emerald-600" name="sort_field" value="name"{% if sort.field == "name" %} checked{% endif %}>Name</label>
+            <label class="menu-item gap-3"><input type="radio" class="size-5 accent-emerald-600" name="sort_field" value="created"{% if sort.field == "created" %} checked{% endif %}>Date added</label>
+            <label class="menu-item gap-3"><input type="radio" class="size-5 accent-emerald-600" name="sort_field" value="updated"{% if sort.field == "updated" %} checked{% endif %}>Date modified</label>
+          </fieldset>
+          <fieldset>
+            <legend class="label px-3 pt-2">Order</legend>
+            <label class="menu-item gap-3"><input type="radio" class="size-5 accent-emerald-600" name="sort_direction" value="asc"{% if not sort.descending %} checked{% endif %}>A–Z / oldest first</label>
+            <label class="menu-item gap-3"><input type="radio" class="size-5 accent-emerald-600" name="sort_direction" value="desc"{% if sort.descending %} checked{% endif %}>Z–A / newest first</label>
+          </fieldset>
+          <fieldset>
+            <legend class="label px-3 pt-2">Open items first</legend>
+            <label class="menu-item gap-3"><input type="radio" class="size-5 accent-emerald-600" name="sort_open_first" value="true"{% if sort.open_first %} checked{% endif %}>Yes</label>
+            <label class="menu-item gap-3"><input type="radio" class="size-5 accent-emerald-600" name="sort_open_first" value="false"{% if not sort.open_first %} checked{% endif %}>No</label>
+          </fieldset>
+          <button type="submit" class="btn-secondary w-full">Apply</button>
+        </form>
+        <button type="button" class="menu-item" hx-post="/categories/{{ category.id }}/sort/reset" hx-target="#category-{{ category.id }}">Use my default</button>
+      </div>
+    </details>
     {% if can_edit %}
     <details class="relative shrink-0">
       <summary class="btn-icon cursor-pointer list-none text-slate-600 dark:text-slate-400 [&::-webkit-details-marker]:hidden" title="Category actions" aria-label="Category actions">⋮</summary>

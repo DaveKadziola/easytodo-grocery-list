@@ -89,6 +89,13 @@
     @apply dark:hover:bg-slate-700;
   }
 
+  /* A sort button of a category that has an order of its own: a dot in its corner, so that the
+     state shows without the title (a phone has none). */
+  .sort-custom {
+    @apply relative after:absolute after:top-2 after:right-2 after:size-2 after:rounded-full after:bg-emerald-600 after:content-[''];
+    @apply dark:after:bg-emerald-400;
+  }
+
   /* Where a dragged item or category will land. */
   .sortable-ghost {
     @apply opacity-40;

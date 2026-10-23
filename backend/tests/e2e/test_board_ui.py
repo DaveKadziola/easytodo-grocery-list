@@ -56,6 +56,18 @@ def describe(seed, item_name: str, description: str) -> None:
     seed(run)
 
 
+def sort_dairy(page: Page, order: str) -> None:
+    """Pick ``order`` ("Z–A / newest first", ...) in the "Sort Dairy" menu and press "Apply"; returns
+    once the category is back with its order marked as the user's own."""
+    dairy = category(page, "Dairy")
+    dairy.get_by_label("Sort Dairy").click()
+    dairy.get_by_role("radio", name=order, exact=True).check()
+    with page.expect_response(re.compile(r"/categories/\d+/sort$")) as saved:
+        dairy.get_by_role("button", name="Apply", exact=True).click()
+    assert saved.value.status == 200
+    expect(dairy.get_by_label("Sort Dairy")).to_have_class(re.compile(r"\bsort-custom\b"))
+
+
 def too_small_targets(page: Page) -> list[str]:
     return page.locator("#board-content").evaluate(
         """(board, selector) => Array.from(board.querySelectorAll(selector))
@@ -219,7 +231,8 @@ def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, ope
     expect(dialog.get_by_label("Name")).to_have_value("Milk")
     dialog.get_by_role("button", name="Cancel").click()
     expect(dialog).to_be_hidden()
-    category(page, "Dairy").locator("summary").click()
+    sort_dairy(page, "Z–A / newest first")  # the sort menu: its form and its answer, too
+    category(page, "Dairy").get_by_label("Category actions").click()
     expect(category(page, "Dairy").get_by_role("button", name="Clear done (1)")).to_be_visible()
     seed_board(seed, user, {"Tools": ["Hammer"]}, name="Old list", archived=True)
     page.goto("/boards/archived")
@@ -397,16 +410,16 @@ def test_category_menu_renames_clears_done_and_archives(logged_in_page, seed, us
     )
     open_board(page, board_id)
 
-    category(page, "Dairy").locator("summary").click()
+    category(page, "Dairy").get_by_label("Category actions").click()
     category(page, "Dairy").get_by_label("Category name").fill("Fridge")
     category(page, "Dairy").get_by_role("button", name="Rename").click()
     expect(category(page, "Fridge")).to_be_visible()
 
-    category(page, "Fridge").locator("summary").click()
+    category(page, "Fridge").get_by_label("Category actions").click()
     category(page, "Fridge").get_by_role("button", name="Clear done").click()
     expect(items_of(page, "Fridge")).to_have_text([re.compile("Yogurt")])
 
-    category(page, "Fridge").locator("summary").click()
+    category(page, "Fridge").get_by_label("Category actions").click()
     confirms: list[str] = []
     page.once("dialog", lambda d: (confirms.append(d.message), d.accept()))
     category(page, "Fridge").get_by_role("button", name="Archive category").click()
@@ -730,7 +743,10 @@ def test_menus_close_on_esc_and_outside_clicks_one_open_at_a_time(
     expect(open_menus).to_have_count(1)
     category(page, "Bakery").get_by_label("Category actions").click()
     expect(open_menus).to_have_count(1)  # the other one closed
-    expect(category(page, "Bakery").locator("details")).to_have_attribute("open", "")
+    bakery_actions = category(page, "Bakery").locator(
+        "details", has=page.get_by_label("Category actions")
+    )
+    expect(bakery_actions).to_have_attribute("open", "")
 
     page.keyboard.press("Escape")
     expect(open_menus).to_have_count(0)
@@ -740,6 +756,15 @@ def test_menus_close_on_esc_and_outside_clicks_one_open_at_a_time(
     expect(open_menus).to_have_count(1)
     page.get_by_role("heading", level=1).click()  # anywhere outside it
     expect(open_menus).to_have_count(0)
+
+    # The sort menu is one of them: opening it closes the actions menu, and the other way round.
+    category(page, "Dairy").get_by_label("Sort Dairy").click()
+    expect(open_menus).to_have_count(1)
+    dairy_menu.click()
+    expect(open_menus).to_have_count(1)
+    expect(category(page, "Dairy").locator("details[open]")).to_have_count(1)
+    expect(category(page, "Dairy").get_by_role("button", name="Rename")).to_be_visible()
+    expect(category(page, "Dairy").get_by_role("button", name="Apply")).to_be_hidden()
 
 
 def test_folded_category_stays_folded_on_this_device(logged_in_page, seed, user, open_board):
@@ -760,3 +785,48 @@ def test_folded_category_stays_folded_on_this_device(logged_in_page, seed, user,
     expect(page.get_by_role("checkbox", name="Milk")).to_be_visible()
     page.reload()
     expect(page.get_by_role("checkbox", name="Milk")).to_be_visible()
+
+
+def test_sort_menu_reorders_one_category_and_remembers_it(logged_in_page, seed, user, open_board):
+    page = logged_in_page
+    problems = watch_console(page)
+    board_id = seed_board(
+        seed, user, {"Dairy": ["Butter", "Milk", "Yogurt"], "Bakery": ["Bagel", "Bread"]}
+    )
+    open_board(page, board_id)
+    dairy_sort = category(page, "Dairy").get_by_label("Sort Dairy")
+    expect(dairy_sort).not_to_have_class(re.compile("sort-custom"))
+    expect(dairy_sort).to_have_attribute("title", "Sort")
+
+    sort_dairy(page, "Z–A / newest first")
+
+    expect(items_of(page, "Dairy")).to_have_text(
+        [re.compile("Yogurt"), re.compile("Milk"), re.compile("Butter")]
+    )
+    expect(items_of(page, "Bakery")).to_have_text([re.compile("Bagel"), re.compile("Bread")])
+    expect(category(page, "Bakery").get_by_label("Sort Bakery")).not_to_have_class(
+        re.compile("sort-custom")
+    )
+    expect(dairy_sort).to_have_attribute("title", "Custom order")
+    expect(page.locator("details[open]")).to_have_count(0)  # the menu closed with the swap
+
+    page.reload()  # kept for this account, not only for this page
+    expect(items_of(page, "Dairy")).to_have_text(
+        [re.compile("Yogurt"), re.compile("Milk"), re.compile("Butter")]
+    )
+    expect(dairy_sort).to_have_class(re.compile("sort-custom"))
+    dairy_sort.click()  # the menu shows the choice
+    expect(category(page, "Dairy").get_by_role("radio", name="Z–A / newest first")).to_be_checked()
+    expect(category(page, "Dairy").get_by_role("radio", name="Name", exact=True)).to_be_checked()
+
+    category(page, "Dairy").get_by_role("button", name="Use my default").click()
+
+    expect(items_of(page, "Dairy")).to_have_text(
+        [re.compile("Butter"), re.compile("Milk"), re.compile("Yogurt")]
+    )
+    expect(dairy_sort).not_to_have_class(re.compile("sort-custom"))
+    page.reload()
+    expect(items_of(page, "Dairy")).to_have_text(
+        [re.compile("Butter"), re.compile("Milk"), re.compile("Yogurt")]
+    )
+    assert problems == []
