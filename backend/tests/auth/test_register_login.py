@@ -270,6 +270,19 @@ async def test_a_successful_login_runs_three_statements(app, client, db, weak_ha
     assert len(statements) == 3, statements
 
 
+@WEAK_OR_NOT
+async def test_a_wrong_password_runs_two_statements(app, client, db, weak_hash):
+    await create_dave(db, weak_hash=weak_hash)  # a wrong password is never rehashed
+    await client.get("/login")
+
+    with count_queries(SimpleNamespace(bind=app.state.engine)) as statements:
+        r = await post_form(client, "/login", email="dave@example.com", password=WRONG_PASSWORD)
+
+    assert r.status_code == 400
+    # The user, the wrong attempt counted (one atomic update; the lock is a third, on the tenth).
+    assert len(statements) == 2, statements
+
+
 async def test_successful_login_resets_failures_and_rehashes(client, db):
     weak_hash = PasswordHasher(time_cost=1, memory_cost=8192, parallelism=1).hash(DEFAULT_PASSWORD)
     user = await create_user(db, "dave@example.com")

@@ -74,15 +74,21 @@ async def authenticate(db: AsyncSession, email: str, password: str) -> User:
     can be locked, or its password reset or changed (which signs it out everywhere), before this
     check is through. So the connection goes back to the pool for the checks, and the update that
     signs in at the end writes only if the account is still unlocked and still has the password
-    hash that was checked (``user`` stays loaded after the commit, ``expire_on_commit=False``)."""
+    hash that was checked (``user`` stays loaded after the commit, ``expire_on_commit=False``).
+
+    Accepted: when two sign-ins verify the same hash of old parameters at once, the one that
+    writes second finds it rehashed by the first and gets "Invalid email or password." once; a
+    retry succeeds."""
     if len(password) > MAX_PASSWORD_LENGTH:  # refuse before hashing an arbitrarily long input
         raise InvalidCredentials()
     user = await _find_user(db, email)
-    await db.commit()  # no transaction, so no connection, while the password is checked
     if user is None:
+        await db.commit()  # no transaction, so no connection, while the password is checked
         await verify_password_async(DUMMY_HASH, password)
         raise InvalidCredentials()
+    # Read before the commit, as in change_password; the same hash is what the update below checks.
     user_id, verified_hash = user.id, user.password_hash
+    await db.commit()  # no transaction, so no connection, while the password is checked
     now = datetime.now(UTC)
     if user.locked_until is not None and user.locked_until > now:
         raise AccountLocked()

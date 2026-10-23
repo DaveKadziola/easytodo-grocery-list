@@ -108,6 +108,10 @@ async def change_password(
     new_password: FormField = "",
     new_password_confirm: FormField = "",
 ) -> Response:
+    """Set the new password and sign every other device out.
+
+    Accepted: when a sign-in rehashes the old password at the same time, the update below finds
+    the hash changed and this answers "Current password is incorrect." once; a retry succeeds."""
     # The hash the password is checked against. The checks and the hash take their time on threads,
     # so the connection goes back to the pool meanwhile, and a reset or change that commits in that
     # time must not be undone: the update below writes only while this is still the user's hash.

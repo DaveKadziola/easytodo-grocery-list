@@ -163,17 +163,23 @@ async def test_overlong_current_password_is_refused_before_hashing(client, db, m
     assert calls == []
 
 
-async def test_a_reset_during_the_password_check_is_not_undone(client_factory, db, monkeypatch):
+@pytest.mark.parametrize("forced", [False, True], ids=["plain", "forced"])
+async def test_a_reset_during_the_password_check_is_not_undone(
+    client_factory, db, monkeypatch, forced
+):
     # A reset that commits while the current password is being checked has signed every device
     # out and set a password of its own: the change must neither overwrite that nor revoke more.
-    await create_user(db, EMAIL)
+    # A forced change shows what the refused update leaves in the session: the 400 page is
+    # rendered from the user object, which must not be given the values of the update that wrote
+    # nothing (``synchronize_session="fetch"``), or it would drop the forced-change page.
+    await create_user(db, EMAIL, must_change_password=forced)
     a, b = await sign_in(await client_factory()), await sign_in(await client_factory())
     reset_hash = hash_password("a-passphrase-from-a-reset")
 
     async def reset_meanwhile(hash: str, pw: str) -> bool:
         await db.execute(update(User).values(password_hash=reset_hash))
         await db.commit()
-        return True
+        return pw == DEFAULT_PASSWORD  # the current password is right; the new one is not the old
 
     monkeypatch.setattr(account_routes, "verify_password_async", reset_meanwhile)
     r = await a.post("/account/password", data=change_form())
@@ -181,10 +187,12 @@ async def test_a_reset_during_the_password_check_is_not_undone(client_factory, d
     assert r.status_code == 400
     assert "Current password is incorrect." in r.text
     assert "dave@example.com" in r.text  # the page is the usual one, with the signed-in header
+    assert ("You must change your password before you continue." in r.text) is forced
+    assert await db.scalar(select(User.must_change_password)) is forced
     assert FLASH_COOKIE not in r.headers.get("set-cookie", "")
     assert await password_hash(db) == reset_hash
     assert len(await session_ids(db)) == 2
-    assert (await b.get("/account")).status_code == 200
+    assert (await b.get("/account/password" if forced else "/account")).status_code == 200
 
 
 @pytest.mark.parametrize("forced", [False, True], ids=["plain", "forced"])
