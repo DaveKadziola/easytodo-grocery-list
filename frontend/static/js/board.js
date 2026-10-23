@@ -776,6 +776,11 @@
         if (successful || status === 403 || status === 404) this.close();
       },
 
+      // @change on the board select: the alert was about the board picked before.
+      boardPicked() {
+        this.taken = false;
+      },
+
       // @category-name-taken (the 409's HX-Trigger, which htmx sends in kebab-case too): the field
       // gets the free name the server found, selected so that typing replaces it.
       nameTaken(event) {

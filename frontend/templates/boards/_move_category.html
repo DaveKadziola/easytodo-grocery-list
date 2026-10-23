@@ -4,8 +4,8 @@
    name is as text (x-text, .value), never written into a script. It is shown and hidden with its
    hidden attribute ("closed"), as the item modal is (see _item_modal.html), and while it is open
    the page behind is inert. A name that is taken on the target board stays in the dialog: the
-   field gets the free name the server suggests, and the alert says why. Esc, or a tap on the
-   dimmed page, closes it; Tab keeps to its controls.
+   field gets the free name the server suggests, and the alert says why, until another board is
+   picked. Esc, or a tap on the dimmed page, closes it; Tab keeps to its controls.
    Context: move_targets (the BoardChoice list of the boards to move to, not empty). -#}
 <div id="move-category" x-data="moveCategory" hidden :hidden="closed" class="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/50 dark:bg-black/60 sm:items-center sm:p-4" @click.self="close" @keydown.escape="close" @move-category.window="openFor" @category-name-taken="nameTaken" @htmx:after-request="afterRequest">
   <div role="dialog" aria-modal="true" aria-labelledby="move-category-title" tabindex="-1" class="max-h-dvh w-full max-w-md overflow-y-auto rounded-t-2xl bg-white dark:bg-slate-900 p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-xl focus:outline-none sm:rounded-2xl" @keydown.tab="trapFocus">
@@ -14,7 +14,7 @@
     <form x-ref="form" @submit.prevent="move" class="mt-4 space-y-4">
       <div>
         <label for="move-category-board" class="label">Board</label>
-        <select id="move-category-board" name="board_id" x-ref="board" class="input">
+        <select id="move-category-board" name="board_id" x-ref="board" class="input" @change="boardPicked">
           {% for s in move_targets %}
           <option value="{{ s.id }}">{{ s.name }}</option>
           {% endfor %}

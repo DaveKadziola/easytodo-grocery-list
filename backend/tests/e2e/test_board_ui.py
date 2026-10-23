@@ -928,8 +928,41 @@ def test_move_category_to_a_board_with_the_same_name(logged_in_page_mobile, seed
     assert moved.value.status == 200
     expect(dialog).to_be_hidden()
     expect(category(page, "Dairy")).to_have_count(0)
-    expect(page.locator("#toasts")).to_have_text("Moved to “Weekend”.")
+    expect(page.locator("#toasts")).to_contain_text(
+        "Moved to “Weekend”."
+    )  # the 409's may still show
     page.goto(f"/boards/{weekend}")
     expect(page.locator("section[data-category-id] h2")).to_have_text(["Dairy", "Dairy (2)"])
     expect(items_of(page, "Dairy (2)")).to_have_text([re.compile("Milk")])
     assert all("409" in problem for problem in problems), problems  # the one refused move
+
+
+def test_taken_name_alert_goes_when_another_board_is_picked(logged_in_page, seed, user, open_board):
+    page = logged_in_page
+
+    async def make(db) -> int:
+        groceries = await create_board(db, user, "Groceries")
+        await create_item(db, await create_category(db, groceries, "Dairy"), "Milk")
+        weekend = await create_board(db, user, "Weekend")
+        await create_category(db, weekend, "Dairy")
+        await create_board(db, user, "Hardware")  # no "Dairy" there
+        return groceries.id
+
+    open_board(page, seed(make))
+    category(page, "Dairy").get_by_label("Category actions").click()
+    category(page, "Dairy").get_by_role("button", name="Move to board…").click()
+    dialog = page.get_by_role("dialog", name="Move to board")
+    expect(dialog.locator("select option")).to_have_text(["Hardware", "Weekend"])
+    dialog.get_by_label("Board").select_option(label="Weekend")
+    taken = dialog.locator("#move-category-taken")
+    expect(taken).to_be_hidden()
+
+    dialog.get_by_role("button", name="Move", exact=True).click()
+
+    expect(dialog.get_by_label("Category name")).to_have_value("Dairy (2)")
+    expect(taken).to_be_visible()  # said about Weekend
+
+    dialog.get_by_label("Board").select_option(label="Hardware")
+
+    expect(taken).to_be_hidden()  # not about Hardware
+    expect(dialog).to_be_visible()

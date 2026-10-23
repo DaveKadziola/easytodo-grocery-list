@@ -19,8 +19,13 @@ from helpers import NASTY, NASTY_ESCAPED, toast_message, wait_until_a_query_wait
 from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from easytodo.content import service
-from easytodo.content.service import CATEGORY_GONE, NAME_TAKEN_ON_TARGET, SAME_BOARD
+from easytodo.content import routes, service
+from easytodo.content.service import (
+    CATEGORY_GONE,
+    CATEGORY_NAME_TAKEN,
+    NAME_TAKEN_ON_TARGET,
+    SAME_BOARD,
+)
 from easytodo.models import Board, BoardRole, Category, CategorySortPref, Item, User
 from easytodo.realtime.events import BoardEvent, EventType
 from easytodo.security.csrf import CSRF_HEADER
@@ -326,6 +331,142 @@ async def test_target_deleted_meanwhile_is_404_not_500(
     assert r.status_code == 404
     assert toast_message(r) == BOARD_GONE
     assert await board_and_name_of(db, category) == (board.id, "Dairy")  # still where it was
+
+
+async def test_target_deleted_after_the_move_still_says_it_was_moved(
+    editor_client, board, category, target_board, db, monkeypatch, _db_engine
+):
+    """The move is committed when the board that took the category goes (another device deleted
+    it before the answer names it): the toast says "another board" rather than failing."""
+    move = routes.move_category
+
+    async def move_then_delete_the_target(*args, **kwargs):
+        moved = await move(*args, **kwargs)
+        async with AsyncSession(_db_engine) as other:
+            await other.execute(delete(Board).where(Board.id == target_board.id))
+            await other.commit()
+        return moved
+
+    monkeypatch.setattr(routes, "move_category", move_then_delete_the_target)
+
+    r = await editor_client.post(
+        f"/categories/{category.id}/move", data=move_form(target_board), headers=HX
+    )
+
+    assert r.status_code == 200
+    assert json.loads(r.headers["hx-trigger"]) == {
+        "toast": {"level": "info", "message": "Moved to another board."}
+    }
+
+
+async def test_second_of_two_moves_of_the_same_category_is_404_not_500(
+    editor_client, category, target_board, db
+):
+    """Another device's move of the category, not committed yet, holds its row: ours waits, then
+    finds the category on another board, which is a 404 with a resync like any change that lost
+    a race."""
+    async with db.bind.connect() as other_device:
+        transaction = await other_device.begin()
+        await other_device.execute(
+            text("UPDATE categories SET board_id = :board, position = 7 WHERE id = :id"),
+            {"board": target_board.id, "id": category.id},
+        )
+        move = asyncio.create_task(
+            editor_client.post(
+                f"/categories/{category.id}/move", data=move_form(target_board), headers=HX
+            )
+        )
+        await wait_until_a_query_waits_for_a_lock(db)
+        await transaction.commit()
+        r = await move
+
+    assert r.status_code == 404
+    assert json.loads(r.headers["hx-trigger"]) == {
+        "toast": {"level": "error", "message": CATEGORY_GONE},
+        "resync": True,
+    }
+    assert await board_and_name_of(db, category) == (target_board.id, "Dairy")  # the other's move
+
+
+async def test_move_waits_for_an_item_being_added_and_takes_it_along(
+    editor_client, board, category, item, target_board, db
+):
+    """An item added to the category at the same time (not committed yet) holds the category's
+    key: the move waits for it, and the new item lands on the target board with the rest."""
+    async with db.bind.connect() as other_device:
+        transaction = await other_device.begin()
+        await other_device.execute(
+            text(
+                "INSERT INTO items (board_id, category_id, name) VALUES (:board, :category, 'Late')"
+            ),
+            {"board": board.id, "category": category.id},
+        )
+        move = asyncio.create_task(
+            editor_client.post(
+                f"/categories/{category.id}/move", data=move_form(target_board), headers=HX
+            )
+        )
+        await wait_until_a_query_waits_for_a_lock(db)
+        await transaction.commit()
+        r = await move
+
+    assert r.status_code == 200
+    items = (await db.execute(select(Item.name, Item.board_id).order_by(Item.id))).all()
+    assert [tuple(row) for row in items] == [
+        ("Milk", target_board.id),
+        ("Late", target_board.id),
+    ]
+
+
+async def test_move_waits_for_a_tick_and_keeps_it(editor_client, category, item, target_board, db):
+    """A tick on an item of the category (not committed yet) holds the item: the move waits for it,
+    and the item arrives on the target board ticked."""
+    async with db.bind.connect() as other_device:
+        transaction = await other_device.begin()
+        await other_device.execute(
+            text("UPDATE items SET is_done = true WHERE id = :id"), {"id": item.id}
+        )
+        move = asyncio.create_task(
+            editor_client.post(
+                f"/categories/{category.id}/move", data=move_form(target_board), headers=HX
+            )
+        )
+        await wait_until_a_query_waits_for_a_lock(db)
+        await transaction.commit()
+        r = await move
+
+    assert r.status_code == 200
+    items = (await db.execute(select(Item.name, Item.board_id, Item.is_done))).all()
+    assert [tuple(row) for row in items] == [("Milk", target_board.id, True)]
+
+
+async def test_name_taken_at_commit_is_a_plain_409_and_nothing_moves(
+    editor_client, board, category, target_board, db
+):
+    """Another device adds a category of that name to the target board (not committed yet) after
+    the move found the name free: the unique index refuses it at the update. That is the ordinary
+    "name taken" 409, without the suggestion (there was none to make), and nothing moves."""
+    async with db.bind.connect() as other_device:
+        transaction = await other_device.begin()
+        await other_device.execute(
+            text("INSERT INTO categories (board_id, name, position) VALUES (:board, 'Dairy', 0)"),
+            {"board": target_board.id},
+        )
+        move = asyncio.create_task(
+            editor_client.post(
+                f"/categories/{category.id}/move", data=move_form(target_board), headers=HX
+            )
+        )
+        await wait_until_a_query_waits_for_a_lock(db)
+        await transaction.commit()
+        r = await move
+
+    assert r.status_code == 409
+    assert r.headers["hx-reswap"] == "none"
+    assert json.loads(r.headers["hx-trigger"]) == {  # no categoryNameTaken, no resync
+        "toast": {"level": "error", "message": CATEGORY_NAME_TAKEN}
+    }
+    assert await board_and_name_of(db, category) == (board.id, "Dairy")
 
 
 async def test_move_menu_and_dialog_markup(

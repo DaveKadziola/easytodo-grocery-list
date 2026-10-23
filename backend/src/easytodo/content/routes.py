@@ -151,7 +151,9 @@ async def move_to_board(
     # By primary key: the session's identity map no longer holds the Board the permission check
     # loaded (it is weak, and nothing refers to it any more), so this is one more statement.
     target = await db.get(Board, category.board_id)
-    toast = {"toast": {"level": "info", "message": f"Moved to “{target.name}”."}}
+    # The move is done and committed: a board deleted since is no reason to answer with an error.
+    where = "another board" if target is None else f"“{target.name}”"
+    toast = {"toast": {"level": "info", "message": f"Moved to {where}."}}
     return Response(headers={"HX-Trigger": json.dumps(toast)})
 
 
