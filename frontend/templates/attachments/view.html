@@ -1,0 +1,29 @@
+{# One attached file, on a page of its own: a picture (a HEIC photo as its JPEG preview), a text
+   file as plain text, or a Markdown file rendered (without raw HTML and without any link that
+   runs script, see attachments.service.render_markdown). A PDF has no page: the browser shows it
+   (attachments.routes). The file's name is a member's text, escaped like any other value.
+   Context: attachment (Attachment), board_id, and text (a str, for a text file) or markdown
+   (Markup that is already safe, for a Markdown file). -#}
+{% extends "base.html" %}
+{% block title %}{{ attachment.filename }} · EasyToDo{% endblock %}
+{% block content %}
+<div class="mx-auto w-full max-w-3xl space-y-4">
+  <div>
+    <a href="/boards/{{ board_id }}" class="link inline-flex min-h-11 items-center text-sm">Back to the board</a>
+    <h1 class="break-words text-2xl font-semibold">{{ attachment.filename }}</h1>
+    <p class="text-sm text-slate-600 dark:text-slate-400">{{ attachment.size_bytes|filesizeformat(true) }}</p>
+  </div>
+
+  {% if attachment.kind == "image" %}
+  <img src="/attachments/{{ attachment.id }}/{{ 'preview' if attachment.content_type == 'image/heic' else 'file' }}" alt="{{ attachment.filename }}" class="mx-auto h-auto max-w-full rounded-lg">
+  {% elif attachment.kind == "markdown" %}
+  <div class="markdown card">{{ markdown }}</div>
+  {% else %}
+  {#- The newline after <pre> is dropped by the browser: it is there so that a text that starts with a line break keeps it. #}
+  <pre class="card overflow-x-auto whitespace-pre-wrap break-words font-mono text-sm">
+{{ text }}</pre>
+  {% endif %}
+
+  <p><a href="/attachments/{{ attachment.id }}/file?download=1" class="btn-secondary">Download</a></p>
+</div>
+{% endblock %}

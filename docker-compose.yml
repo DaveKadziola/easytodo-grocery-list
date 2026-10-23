@@ -1,5 +1,5 @@
-# A fixed project name: the volumes (pgdata holds the database) keep their names whatever the
-# checkout directory is called, so a re-clone or a renamed directory finds the same data.
+# A fixed project name: the volumes (pgdata holds the database, attachments the files attached to
+# items) keep their names whatever the checkout directory is called, so a re-clone or a renamed directory finds the same data.
 name: easytodo
 
 # Every service's log is rotated (at most 3 files of 10 MB each), so an always-on server's
@@ -36,6 +36,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      # The files attached to items (EASYTODO_ATTACHMENTS_DIR); back it up with the database.
+      - attachments:/app/backend/data/attachments
     ports:
       # Published on every host interface, or only on EASYTODO_BIND when it is set (127.0.0.1
       # with the proxy profile below, so that only Caddy and this machine reach the app).
@@ -68,5 +71,6 @@ services:
 
 volumes:
   pgdata:
+  attachments:
   caddy_data:
   caddy_config:

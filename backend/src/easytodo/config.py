@@ -1,5 +1,6 @@
 import re
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -65,6 +66,12 @@ class Settings(BaseSettings):
     smtp_from: str = "EasyToDo <noreply@localhost>"
     smtp_starttls: bool = True
     forwarded_allow_ips: str = "127.0.0.1"
+    # Where attached files are kept (relative to the working directory, unless absolute), and the
+    # limits on them: bytes per file, files per task and bytes in all.
+    attachments_dir: Path = Path("data/attachments")
+    attachment_max_bytes: int = 10 * 1024 * 1024
+    attachments_per_item: int = 20
+    attachments_total_bytes: int = 2 * 1024**3
 
     @field_validator("extra_origins", mode="before")
     @classmethod

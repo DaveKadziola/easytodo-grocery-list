@@ -138,6 +138,10 @@ each line. After a change, `docker compose up -d` applies it.
 | `EASYTODO_EXTRA_ORIGINS` | none | More addresses the app is opened at, comma-separated, e.g. `http://localhost:8000, http://192.168.1.20:8000`: form submissions and live updates work there too. Mail and invite links still use `EASYTODO_PUBLIC_URL`. An `https://` `EASYTODO_PUBLIC_URL` cannot be combined with `http://` extras (the app refuses to start): its session cookie is `Secure`, so the browser never sends it to an http address and signing in there would loop. |
 | `EASYTODO_REGISTRATION_OPEN` | `true` | `false` closes `/register`, except from a valid invite link. An e-mail invite works only for its own address; a link invite lets anyone who has the link create an account until it expires (7 days) or is revoked, so revoke links you no longer need. Admins can still create accounts. |
 | `EASYTODO_SESSION_TTL_DAYS` | `30` | How long a sign-in stays valid, in days. |
+| `EASYTODO_ATTACHMENTS_DIR` | `data/attachments` | Where the files attached to items are kept (images, PDF, `.txt`, `.md`). In the image it is `/app/backend/data/attachments`, on the `attachments` volume: leave it as it is with docker compose. |
+| `EASYTODO_ATTACHMENT_MAX_BYTES` | `10485760` | The largest file that can be attached, in bytes (10 MiB). |
+| `EASYTODO_ATTACHMENTS_PER_ITEM` | `20` | How many files one task can have. |
+| `EASYTODO_ATTACHMENTS_TOTAL_BYTES` | `2147483648` | All attached files of the instance together, in bytes (2 GiB). Beyond it no file is accepted until some are deleted; the admin page shows how much is used. |
 | `EASYTODO_MAIL_BACKEND` | `console` | `console` writes mails to the app's log and sends nothing. `smtp` sends them (see SMTP below). |
 | `EASYTODO_SMTP_HOST` | none | SMTP server. |
 | `EASYTODO_SMTP_PORT` | `587` | SMTP port. |
@@ -209,27 +213,37 @@ contains a `$`, wrap it in single quotes, as explained above.
 
 ## Backup and restore
 
-The data lives in the `pgdata` volume of the `db` service. Back it up with `pg_dump`, from the
-repository root, into `backups/` (git-ignored; the dumps are readable by your user only, as they
-hold every account's password hash), and copy the dumps off the server:
+The data lives in two volumes: `pgdata` (the database, in the `db` service) and `attachments` (the
+files attached to items, in the `app` service). Back up both, from the repository root, into
+`backups/` (git-ignored; the dumps are readable by your user only, as they hold every account's
+password hash), and copy the backups off the server. Take them at about the same time: the
+database says which files exist.
 
 ```sh
 mkdir -p backups
 (umask 077 && docker compose exec -T db pg_dump -U easytodo -d easytodo -Fc > backups/easytodo-$(date +%F).dump)
+(umask 077 && docker compose exec -T app tar -C /app/backend/data/attachments -cf - . > backups/attachments-$(date +%F).tar)
 ```
 
-Restore a dump:
+Restore a dump and the files of the same day, in this order: stop the app, restore the database,
+restore the files (the app stays stopped), start the app:
 
 ```sh
 docker compose stop app
 docker compose exec -T db pg_restore -U easytodo -d easytodo --clean --if-exists < backups/easytodo-2026-10-21.dump
+docker compose run --rm --no-deps -T --entrypoint tar app -C /app/backend/data/attachments -xf - < backups/attachments-2026-10-21.tar
 docker compose start app
 ```
+
+A file the restored database does not know (it was attached after the dump) is removed by the
+app's nightly purge of files without a row; `tar` keeps the files' old modification times, so a
+restore does not make them look new. A row whose file is missing from the backup shows "This
+attachment no longer exists." instead of the file.
 
 Keep a copy of `EASYTODO_SECRET_KEY` too, in a safe place but not next to the dumps (a password
 manager, say): without it, the 2FA secrets in a restored database cannot be read, and with it
 anyone holding a dump can read them. Never run `docker compose down -v`: `-v` deletes the
-database volume.
+database and attachments volumes.
 
 ## Local development
 

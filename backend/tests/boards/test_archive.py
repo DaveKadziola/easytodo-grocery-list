@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from content.test_isolation import ROUTES, fill
 from factories import (
+    create_attachment,
     create_board,
     create_category,
     create_checklist_entry,
@@ -38,6 +39,7 @@ from easytodo.boards.service import (
     list_boards,
 )
 from easytodo.models import (
+    Attachment,
     Board,
     BoardInvite,
     BoardMember,
@@ -58,8 +60,8 @@ ARCHIVE_ROUTES = {("POST", "/boards/{board}/restore"), ("DELETE", "/boards/{boar
 
 
 async def rows(db) -> tuple[list, ...]:
-    """Every board, membership, invite, category, item and checklist entry row, to show what
-    changed."""
+    """Every board, membership, invite, category, item, checklist entry and attachment row, to
+    show what changed."""
     queries = (
         select(Board.id, Board.name, Board.owner_id, Board.archived_at).order_by(Board.id),
         select(BoardMember.board_id, BoardMember.user_id, BoardMember.role).order_by(
@@ -75,6 +77,9 @@ async def rows(db) -> tuple[list, ...]:
         select(
             ChecklistEntry.id, ChecklistEntry.item_id, ChecklistEntry.text, ChecklistEntry.is_done
         ).order_by(ChecklistEntry.id),
+        select(
+            Attachment.id, Attachment.item_id, Attachment.filename, Attachment.storage_key
+        ).order_by(Attachment.id),
     )
     return tuple([(await db.execute(query)).all() for query in queries])
 
@@ -199,6 +204,8 @@ async def test_archived_board_is_404_everywhere(  # Review Focus 1
     bakery = await create_category(db, board, "Bakery", position=1)
     milk = await create_item(db, dairy, "Milk")
     entry = await create_checklist_entry(db, milk, "Skim")
+    # No file in the store: the answer is 404 before the file is looked for.
+    attachment = await create_attachment(db, milk)
     editor = await user_named(db, "editor@example.com")
     invite_id = await db.scalar(select(BoardInvite.id))
     owner_client = await signed_in(client_factory, "owner@example.com")
@@ -214,6 +221,7 @@ async def test_archived_board_is_404_everywhere(  # Review Focus 1
         "other_category": bakery.id,
         "item": milk.id,
         "entry": entry.id,
+        "attachment": attachment.id,
     }
     requests = [fill(route, **ids) for route in ROUTES]
     form = {"name": "Hijacked", "role": "viewer"}  # a role, or the sharing routes answer 422

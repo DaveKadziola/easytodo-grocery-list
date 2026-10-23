@@ -24,11 +24,13 @@ from easytodo.content.service import get_category_view
 from easytodo.models import BoardRole, CategorySortPref
 
 HX = {"HX-Request": "true"}
-# An item with a checklist and an author: the count and the avatar in the box at the end of the row.
+# An item with a checklist, a file and an author: the checklist count, the file count and the avatar
+# in the box at the end of the row.
 COUNT_BEFORE_THE_AVATAR = re.compile(
     r'<div class="shrink-0 py-2\.5 pl-2 \*:align-top">'
     r'<span class="checklist-count text-slate-600 dark:text-slate-400"'
     r' title="2 of 3 checklist entries done">2/3</span>'
+    r' <span class="attachment-count" title="1 attachment"><span aria-hidden="true">📎</span> 1</span>'
     r' <span class="avatar[^"]*" aria-hidden="true" title="owner">O</span></div>\s*</li>'
 )
 
@@ -194,7 +196,7 @@ async def test_item_row_macro_renders_like_before(client_factory, db, shared):
         f'<button type="button" id="item-{milk.id}-name" class="item-name" data-name="Milk" '
         'data-description="" @click="openItem">Milk</button>'
     ) in milk_row
-    # Milk has three steps, two done: their count comes first in the box of the avatar.
+    # Milk has three steps, two done, and a file: their counts come first in the box of the avatar.
     assert not AVATAR_AFTER_THE_NAME.search(milk_row)
     assert COUNT_BEFORE_THE_AVATAR.search(milk_row)
     bread_row = row_of(html, bread)

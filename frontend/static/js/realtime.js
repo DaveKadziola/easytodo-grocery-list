@@ -93,16 +93,23 @@
     );
   }
 
+  // Whether a file is chosen in the details' form and not uploaded yet: a new copy of the form
+  // would not have it (a browser does not let a page set a file field).
+  function fileChosen(details) {
+    const input = details.querySelector("#attachment-file");
+    return input !== null && input.files.length > 0;
+  }
+
   // Whether replacing the open item's details now would get in the user's way: not the modal (it
   // is open), nor a menu, but a finger down, one of this tab's own requests, a drag (a native one
-  // ends the pointer: pointercancel) or typing in the details.
+  // ends the pointer: pointercancel), typing in the details or a file chosen and not sent.
   function detailsBusy() {
     const details = document.getElementById("item-details");
     return (
       pointersDown.size > 0 ||
       ownRequests.size > 0 ||
       board().isDragging() ||
-      (details !== null && typingIn(details))
+      (details !== null && (typingIn(details) || fileChosen(details)))
     );
   }
 

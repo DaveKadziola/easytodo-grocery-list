@@ -10,10 +10,12 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES
 from starlette.responses import Response
 from starlette.types import Scope
 
 from easytodo.admin.routes import router as admin_router
+from easytodo.attachments.storage import AttachmentStore
 from easytodo.auth.account_routes import router as account_router
 from easytodo.auth.routes import router as auth_router
 from easytodo.boards.invite_routes import router as invite_router
@@ -28,6 +30,7 @@ from easytodo.middleware import (
     ClientIdMiddleware,
     CsrfCookieMiddleware,
     SecurityHeadersMiddleware,
+    UploadSizeLimitMiddleware,
 )
 from easytodo.realtime.hub import Hub
 from easytodo.realtime.listener import EventListener, listener_dsn
@@ -37,6 +40,8 @@ from easytodo.security.ratelimit import RateLimiter
 from easytodo.web import STATIC_DIR
 
 IMMUTABLE = "public, max-age=31536000, immutable"
+# Already compressed, like the pictures GZipMiddleware leaves alone: a PDF and a HEIC photo.
+NOT_WORTH_COMPRESSING = (*DEFAULT_EXCLUDED_CONTENT_TYPES, "application/pdf", "image/heic")
 
 
 class CachedStaticFiles(StaticFiles):
@@ -70,6 +75,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = engine
         app.state.sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         app.state.mailer = get_mailer(settings)
+        app.state.attachment_store = AttachmentStore(settings.attachments_dir)
         # This worker's board sockets, and the LISTEN connection that feeds them every event.
         app.state.hub = hub = Hub()
         listener = EventListener(
@@ -99,7 +105,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.rate_limiter = RateLimiter()
     install_error_handlers(app)
     app.add_middleware(ClientIdMiddleware)
-    app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=6)
+    app.add_middleware(
+        GZipMiddleware,
+        minimum_size=1000,
+        compresslevel=6,
+        exclude_content_types=NOT_WORTH_COMPRESSING,
+    )
+    app.add_middleware(UploadSizeLimitMiddleware, settings=settings)
     app.add_middleware(CsrfCookieMiddleware, settings=settings)
     app.add_middleware(SecurityHeadersMiddleware, settings=settings)  # outermost
 

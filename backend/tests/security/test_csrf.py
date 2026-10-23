@@ -2,6 +2,7 @@ import json
 
 import httpx
 from fastapi import FastAPI
+from starlette.datastructures import FormData
 
 from easytodo.main import create_app
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_FIELD, CSRF_HEADER, verify_csrf
@@ -226,3 +227,53 @@ async def test_create_app_applies_csrf_to_every_route(settings):
         assert r.status_code == 403 and "Open the app at http://testserver." in r.text
         r = await c.post("/probe", headers={CSRF_HEADER: token, "Origin": "http://testserver"})
         assert r.status_code == 200
+
+
+TWO_MEGABYTES = b"x" * 2 * 1024 * 1024  # more than a form keeps in memory: it goes to a temp file
+
+
+async def test_csrf_check_closes_the_form_it_read(csrf_app_client, mini_app):  # triage #16
+    token = await _token(csrf_app_client)
+
+    r = await csrf_app_client.post(  # a plain form post: the token is a field, not the header
+        "/form-seen", data={CSRF_FIELD: token}, files={"file": ("big.bin", TWO_MEGABYTES)}
+    )
+
+    assert r.status_code == 200
+    upload = mini_app.state.form_seen["file"]
+    assert upload.size == len(TWO_MEGABYTES)
+    assert upload.file.closed
+
+
+async def test_csrf_check_closes_the_form_it_refused(csrf_app_client, monkeypatch):
+    await _token(csrf_app_client)
+    closed: list[FormData] = []
+    close = FormData.close
+
+    async def spying_close(self):
+        closed.append(self)
+        await close(self)
+
+    monkeypatch.setattr(FormData, "close", spying_close)
+
+    r = await csrf_app_client.post(
+        "/form-seen", data={CSRF_FIELD: "forged"}, files={"file": ("big.bin", TWO_MEGABYTES)}
+    )
+
+    assert r.status_code == 403
+    assert len(closed) == 1 and closed[0]["file"].file.closed
+
+
+async def test_a_request_with_the_header_does_not_read_the_form(csrf_app_client, monkeypatch):
+    token = await _token(csrf_app_client)
+    closed: list[FormData] = []
+
+    async def spying_close(self):
+        closed.append(self)
+
+    monkeypatch.setattr(FormData, "close", spying_close)
+
+    r = await csrf_app_client.post("/submit", headers={CSRF_HEADER: token})
+
+    assert r.status_code == 200
+    assert closed == []

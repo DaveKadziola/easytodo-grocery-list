@@ -5,6 +5,7 @@
    item (hundreds on a big board). So the row sees nothing of the page: what it needs besides
    iv and can_edit, pass as one more argument. -#}
 {% from "partials/_avatar.html" import avatar %}
+{% from "partials/_attachment_count.html" import attachment_count %}
 {% from "partials/_checklist_count.html" import checklist_count %}
 {% macro item_row(iv, can_edit) -%}
 {% set item = iv.item %}
@@ -18,9 +19,9 @@
     <button type="button" id="item-{{ item.id }}-name" class="item-name" data-name="{{ item.name }}" data-description="{{ item.description or '' }}" @click="openItem">{{ item.name }}</button>
     {% if item.description %}<p class="-mt-1.5 whitespace-pre-line break-words pb-2 text-sm text-slate-600 dark:text-slate-400">{{ item.description }}</p>{% endif %}
   </div>
-  {#- A block around the inline-flex checklist count and avatar, not a flex box: the <li>'s line-through reaches the text of a flex item, but not that of an inline-flex one. *:align-top keeps the row 44 px high. The count comes first; the space between it and the avatar is a space between two inline boxes. #}
-  {% if iv.show_author or iv.checklist_total %}
-  <div class="shrink-0 py-2.5 pl-2 *:align-top">{% if iv.checklist_total %}{{ checklist_count(iv.checklist_done, iv.checklist_total) }}{% endif %}{% if iv.checklist_total and iv.show_author %} {% endif %}{% if iv.show_author %}{{ avatar(iv.author.user_id, iv.author.name) }}{% endif %}</div>
+  {#- A block around the inline-flex checklist count, attachment count and avatar, not a flex box: the <li>'s line-through reaches the text of a flex item, but not that of an inline-flex one. *:align-top keeps the row 44 px high. In that order; the spaces between them are spaces between inline boxes. #}
+  {% if iv.show_author or iv.checklist_total or iv.attachment_count %}
+  <div class="shrink-0 py-2.5 pl-2 *:align-top">{% if iv.checklist_total %}{{ checklist_count(iv.checklist_done, iv.checklist_total) }}{% endif %}{% if iv.checklist_total and iv.attachment_count %} {% endif %}{% if iv.attachment_count %}{{ attachment_count(iv.attachment_count) }}{% endif %}{% if (iv.checklist_total or iv.attachment_count) and iv.show_author %} {% endif %}{% if iv.show_author %}{{ avatar(iv.author.user_id, iv.author.name) }}{% endif %}</div>
   {% endif %}
 </li>
 {%- endmacro %}

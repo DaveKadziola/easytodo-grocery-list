@@ -68,8 +68,12 @@ COPY frontend/ /app/frontend/
 COPY --from=css /build/frontend/static/css/app.css /app/frontend/static/css/app.css
 COPY --chmod=755 deploy/entrypoint.sh /app/entrypoint.sh
 
+# The files attached to items (EASYTODO_ATTACHMENTS_DIR, relative to /app/backend): a volume in
+# docker-compose.yml, which starts out with this directory's owner, so that the app can write there.
 RUN groupadd --gid 10001 app \
-    && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
+    && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /app/backend/data/attachments \
+    && chown app:app /app/backend/data/attachments
 USER app
 
 EXPOSE 8000

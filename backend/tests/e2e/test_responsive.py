@@ -359,12 +359,15 @@ def test_item_modal_keeps_the_keyboard_inside_and_closes_on_escape(logged_in_pag
         dialog.get_by_role("button", name="Delete Rye"),
         dialog.get_by_label("Add entry"),
         dialog.get_by_role("button", name="Add", exact=True),
+        # Then the attachments' form (the file field is one stop: "Choose file" in it).
+        dialog.get_by_label("Add a file"),
+        dialog.get_by_role("button", name="Upload"),
         name,  # round again: never out to the page behind
     ):
         page.keyboard.press("Tab")
         expect(control).to_be_focused()
     page.keyboard.press("Shift+Tab")
-    expect(dialog.get_by_role("button", name="Add", exact=True)).to_be_focused()
+    expect(dialog.get_by_role("button", name="Upload")).to_be_focused()
 
     page.keyboard.press("Escape")
 
@@ -406,6 +409,8 @@ def test_item_modal_focus_trap_skips_what_cannot_take_focus(logged_in_page_with_
     for control in (
         dialog.get_by_label("Add entry"),
         dialog.get_by_role("button", name="Add", exact=True),
+        dialog.get_by_label("Add a file"),
+        dialog.get_by_role("button", name="Upload"),
         link,
     ):
         page.keyboard.press("Tab")

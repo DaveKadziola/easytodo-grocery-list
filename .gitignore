@@ -9,3 +9,5 @@ bin/
 # Database backups (README: Backups).
 backups/
 *.dump
+# Files attached to items, when the app runs from backend/ (EASYTODO_ATTACHMENTS_DIR).
+backend/data/

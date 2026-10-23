@@ -119,6 +119,29 @@ def _load_lookup(
     return member_lookup(query, action, lock=lock, of=model)
 
 
+def item_child_query(model: type[ChecklistEntry | Attachment], id_name: str) -> Select:
+    """The query for one row of ``model``, a table with an ``item_id`` (a checklist entry, an
+    attachment), with its item and ``BoardMember.role``, joined with the user's own membership.
+    ``id_name`` and ``user_id`` are the bind parameters, ``load_for_member`` has their values.
+    Like ``_load_lookup`` for an item, it leaves out a row whose item is deleted or in an archived
+    category or board; change the rules together. The caller builds the lookup (``member_lookup``)
+    once for each action and lock."""
+    return (
+        select(model, Item, BoardMember.role)
+        .join(Item, Item.id == model.item_id)
+        .join(Category, Category.id == Item.category_id)
+        .join(Board, Board.id == Item.board_id)
+        .join(BoardMember, BoardMember.board_id == Item.board_id)
+        .where(
+            model.id == bindparam(id_name, type_=BigInteger),
+            BoardMember.user_id == bindparam("user_id", type_=BigInteger),
+            Item.deleted_at.is_(None),
+            Category.archived_at.is_(None),
+            Board.archived_at.is_(None),
+        )
+    )
+
+
 async def _load[M: (Category, Item)](
     db: AsyncSession,
     model: type[M],
@@ -398,6 +421,14 @@ async def get_category_view(
 
 
 @dataclass(frozen=True)
+class AttachmentView:
+    """An attached file and who uploaded it (``None`` when that account is gone)."""
+
+    attachment: Attachment
+    uploader: Author | None
+
+
+@dataclass(frozen=True)
 class ItemDetails:
     """What an item's details show to a member: the item, their role, who added it (``None``
     when that account is gone) and whether to name them (only on a board with more than one
@@ -408,7 +439,7 @@ class ItemDetails:
     author: Author | None
     show_author: bool
     entries: list[ChecklistEntry]
-    attachments: list[Attachment]
+    attachments: list[AttachmentView]
 
 
 _ITEM_ID = bindparam("item_id", type_=BigInteger)
@@ -433,11 +464,24 @@ _DETAILS_OF_ITEM = (
     .where(Item.id == _ITEM_ID, Item.deleted_at.is_(None))
     .order_by(ChecklistEntry.position, ChecklistEntry.id)
 )
+# The files, one row each, with their uploader's columns (all NULL once that account is gone).
 _FILES_OF_ITEM = (
-    select(Attachment)
+    select(
+        Attachment,
+        User.id.label("uploader_id"),
+        User.email.label("uploader_email"),
+        User.display_name.label("uploader_name"),
+    )
+    .select_from(Attachment)
+    .outerjoin(User, User.id == Attachment.uploaded_by)
     .where(Attachment.item_id == _ITEM_ID)
     .order_by(Attachment.created_at, Attachment.id)
 )
+
+
+def _author(user_id: int | None, email: str | None, name: str | None) -> Author | None:
+    """The person with these columns, ``None`` for the NULLs of an account that is gone."""
+    return None if user_id is None else Author(user_id, display_name(email, name))
 
 
 async def get_item_details(db: AsyncSession, item_id: int, user: User) -> ItemDetails:
@@ -453,13 +497,17 @@ async def get_item_details(db: AsyncSession, item_id: int, user: User) -> ItemDe
     if not rows:
         raise NotFound(ITEM_GONE)
     first = rows[0]  # the author and whether the board is shared are the same in every row
-    author = None
-    if first.author_id is not None:
-        author = Author(first.author_id, display_name(first.author_email, first.author_name))
+    author = _author(first.author_id, first.author_email, first.author_name)
     entries = [row.ChecklistEntry for row in rows if row.ChecklistEntry is not None]
-    attachments = (await db.scalars(_FILES_OF_ITEM, {"item_id": item.id})).all()
+    files = (await db.execute(_FILES_OF_ITEM, {"item_id": item.id})).all()
+    attachments = [
+        AttachmentView(
+            row.Attachment, _author(row.uploader_id, row.uploader_email, row.uploader_name)
+        )
+        for row in files
+    ]
     return ItemDetails(
-        item, role, author, author is not None and first.shared, entries, list(attachments)
+        item, role, author, author is not None and first.shared, entries, attachments
     )
 
 

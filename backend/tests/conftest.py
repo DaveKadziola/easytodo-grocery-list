@@ -1,5 +1,8 @@
 import asyncio
+import atexit
 import os
+import shutil
+import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -79,12 +82,19 @@ def _no_gc_freeze(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("easytodo.main._freeze_startup_heap", lambda: None)
 
 
+# Where the files of attachments go unless a test says otherwise: one directory for the session,
+# removed when it ends, so no test writes into the working directory.
+SESSION_ATTACHMENTS_DIR = Path(tempfile.mkdtemp(prefix="easytodo-attachments-"))
+atexit.register(shutil.rmtree, SESSION_ATTACHMENTS_DIR, ignore_errors=True)
+
+
 def _test_settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "database_url": TEST_DATABASE_URL,
         "secret_key": "x" * 40,
         "public_url": BASE_URL,
         "env": "test",
+        "attachments_dir": SESSION_ATTACHMENTS_DIR,
     }
     return Settings(_env_file=None, **(values | overrides))
 

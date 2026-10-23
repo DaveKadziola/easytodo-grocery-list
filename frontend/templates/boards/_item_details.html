@@ -1,13 +1,14 @@
 {# An item's details, the fragment GET /items/{id}/details answers with: it replaces the (empty)
    #item-details in the slot of the editor's item modal or of the viewer's dialog, and again
-   whenever an event names the item (static/js/realtime.js). Every checklist route answers with it
-   too. Read-only markup for a member who may not edit.
+   whenever an event names the item (static/js/realtime.js). Every checklist and attachment route
+   answers with it too. Read-only markup for a member who may not edit.
    Context: details (ItemDetails). Who added the item is named only on a shared board.
    Nothing in it may look like an item or a category of the board (data-item-id,
    data-category-*, id="item-<n>"): the board's scripts look for those on the whole page. -#}
 {% from "partials/_checklist_count.html" import checklist_count %}
 {% set item = details.item %}
 {% set entries = details.entries %}
+{% set files = details.attachments %}
 {% set can_edit = can(details.role, Action.EDIT_CONTENT) %}
 <div id="item-details" data-details-item-id="{{ item.id }}" class="mt-6 space-y-4 border-t border-slate-200 pt-4 dark:border-slate-700">
   <p class="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600 dark:text-slate-400">
@@ -62,5 +63,43 @@
     </ul>
     {% endif %}
   </section>
-  {#- The attached files go here: <section id="item-attachments"> (details.attachments). #}
+  {#- The attached files: an editor deletes one and adds another (the form's answer, like every other request here, replaces #item-details); a viewer sees the list and opens the files. A picture shows as its thumbnail, a PDF opens in the browser's viewer in a new tab, and the other files on a page of their own (/attachments/{id}). #}
+  <section id="item-attachments"{% if can_edit %} hx-target="#item-details" hx-swap="outerHTML"{% endif %}>
+    <div class="mb-1 flex items-center gap-2 font-semibold">
+      <h3 id="item-attachments-title">Attachments</h3>
+      {% if files %}<span class="text-sm font-normal text-slate-600 dark:text-slate-400">{{ files|length }}</span>{% endif %}
+    </div>
+    {% if files %}
+    <ul class="space-y-1">
+      {% for view in files %}
+      {% set file = view.attachment %}
+      <li data-attachment-id="{{ file.id }}" class="flex items-start gap-2">
+        <div class="min-w-0 flex-1">
+          <a href="/attachments/{{ file.id }}{% if file.kind == 'pdf' %}/file{% endif %}"{% if file.kind == "pdf" %} target="_blank" rel="noopener"{% endif %} class="inline-flex min-h-11 items-center gap-2">
+            {% if file.kind == "image" %}
+            <img src="/attachments/{{ file.id }}/thumb" alt="" width="44" height="44" loading="lazy" class="size-11 shrink-0 rounded object-cover">
+            {% else %}
+            <span class="inline-flex size-11 shrink-0 items-center justify-center text-2xl" aria-hidden="true">{% if file.kind == "pdf" %}📕{% else %}📄{% endif %}</span>
+            {% endif %}
+            <span class="link min-w-0 break-words">{{ file.filename }}</span>
+          </a>
+          <p class="text-sm text-slate-600 dark:text-slate-400">{{ file.size_bytes|filesizeformat(true) }} · {% if view.uploader %}{{ view.uploader.name }} · {% endif %}<time datetime="{{ file.created_at.isoformat() }}" class="whitespace-nowrap">{{ file.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</time></p>
+        </div>
+        {% if can_edit %}
+        <button type="button" class="btn-icon shrink-0 text-slate-600 dark:text-slate-400" hx-delete="/attachments/{{ file.id }}" hx-confirm="Delete “{{ file.filename }}”?" data-refocus="attachment-file" aria-label="Delete {{ file.filename }}" title="Delete"><span aria-hidden="true">✕</span></button>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-sm text-slate-600 dark:text-slate-400">No attachments yet.</p>
+    {% endif %}
+    {% if can_edit %}
+    <form hx-post="/items/{{ item.id }}/attachments" hx-encoding="multipart/form-data" hx-disabled-elt="find button" data-refocus="attachment-file" class="mt-2 space-y-2">
+      <label for="attachment-file" class="label">Add a file</label>
+      <input id="attachment-file" type="file" name="file" required accept="image/*,.heic,.heif,application/pdf,.pdf,.txt,text/plain,.md,text/markdown" class="block min-h-11 w-full text-sm file:mr-3 file:min-h-11 file:rounded-lg file:border-0 file:px-3">
+      <button type="submit" class="btn-secondary">Upload</button>
+    </form>
+    {% endif %}
+  </section>
 </div>

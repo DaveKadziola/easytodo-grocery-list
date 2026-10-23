@@ -11,6 +11,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from easytodo.attachments.routes import router as attachments_router
 from easytodo.auth.deps import CurrentUser, DbSession, FormField
 from easytodo.boards.service import BoardView, get_board_view
 from easytodo.content.checklist import (
@@ -294,3 +295,7 @@ async def restore_deleted_item(
     """The "Undo" of a delete."""
     item = await restore_item(db, item_id, user)
     return await _current_category(request, db, user, item.category_id)
+
+
+# The attachments' routes belong to the item's details; they are in their own module.
+router.include_router(attachments_router)

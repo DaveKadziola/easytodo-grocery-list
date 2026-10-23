@@ -13,6 +13,7 @@ from sqlalchemy import ColumnExpressionArgument, ScalarSelect, Select, delete, f
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from easytodo.attachments.service import total_bytes
 from easytodo.auth.service import DEFAULT_BOARD_NAME, normalize_email
 from easytodo.auth.sessions import revoke_all_sessions, sessions_revoked
 from easytodo.boards.permissions import is_possible_id
@@ -50,6 +51,7 @@ class AdminStats:
     categories_total: int
     items_total: int
     items_open: int
+    attachments_bytes: int  # the size of every attached file
 
 
 def _page_count(total: int, per_page: int) -> int:
@@ -104,6 +106,7 @@ async def get_stats(db: AsyncSession) -> AdminStats:
                 count(Category),
                 count(Item, Item.deleted_at.is_(None)),
                 count(Item, Item.deleted_at.is_(None), Item.is_done.is_(False)),
+                total_bytes,
             )
         )
     ).one()

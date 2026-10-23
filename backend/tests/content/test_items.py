@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from factories import (
+    create_attachment,
     create_board,
     create_category,
     create_checklist_entry,
@@ -579,16 +580,23 @@ async def test_undo_takes_only_the_row_lock_it_needs(editor_client, item, db):
         ("PATCH", "/checklist/{entry}", {"text": "Eggs"}),
         ("POST", "/checklist/{entry}/check", None),
         ("DELETE", "/checklist/{entry}", None),
+        ("DELETE", "/attachments/{attachment}", None),
     ],
 )
 async def test_viewer_write_is_403_without_waiting_for_a_row_lock(
     viewer_client, item, db, method, path, data
 ):
-    """An editor's change holds the item, its category and its checklist entries locked: a
-    viewer's write is refused at once instead of queueing behind it (and, had it got there first,
-    would hold up the editor)."""
+    """An editor's change holds the item, its category, its checklist entries and its attachments
+    locked: a viewer's write is refused at once instead of queueing behind it (and, had it got
+    there first, would hold up the editor)."""
     entry = await create_checklist_entry(db, item, "Skimmed")
-    ids = {"item": item.id, "category": item.category_id, "entry": entry.id}
+    attachment = await create_attachment(db, item)
+    ids = {
+        "item": item.id,
+        "category": item.category_id,
+        "entry": entry.id,
+        "attachment": attachment.id,
+    }
     if data is not None:
         data = {
             key: [v.format(**ids) for v in value]
@@ -601,6 +609,7 @@ async def test_viewer_write_is_403_without_waiting_for_a_row_lock(
             ("categories", item.category_id),
             ("items", item.id),
             ("checklist_entries", entry.id),
+            ("attachments", attachment.id),
         ):
             await other_device.execute(
                 text(f"SELECT 1 FROM {table} WHERE id = :id FOR UPDATE"), {"id": row_id}

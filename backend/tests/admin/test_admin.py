@@ -12,12 +12,13 @@ import pyotp
 import pytest
 from factories import (
     DEFAULT_PASSWORD,
+    create_attachment,
     create_board,
     create_category,
     create_item,
     create_user,
 )
-from helpers import login, signed_in, toast_message
+from helpers import count_queries, login, signed_in, text_of, toast_message
 from sqlalchemy import func, select, update
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
@@ -135,13 +136,16 @@ async def test_stats_counts(admin_client, db, admin):
     dairy = await create_category(db, shared, "Dairy")
     bakery = await create_category(db, shared, "Bakery", position=1)
     garden = await create_category(db, own, "Garden")
-    await create_item(db, dairy, "Milk")
+    milk = await create_item(db, dairy, "Milk")
     await create_item(db, dairy, "Butter")
     await create_item(db, bakery, "Bread", is_done=True)
     await create_item(db, garden, "Mow the lawn")
     deleted = await create_item(db, garden, "Rake the leaves")  # open, but deleted (Undo window)
     await db.execute(update(Item).where(Item.id == deleted.id).values(deleted_at=func.now()))
     await db.commit()
+    # 1 MiB and 0.5 MiB of files (the bytes themselves are not needed to count them).
+    await create_attachment(db, milk, size_bytes=1024 * 1024)
+    await create_attachment(db, milk, size_bytes=512 * 1024)
 
     expected = AdminStats(
         users_total=3,
@@ -152,6 +156,7 @@ async def test_stats_counts(admin_client, db, admin):
         categories_total=3,
         items_total=4,
         items_open=3,
+        attachments_bytes=1572864,
     )
     assert await get_stats(db) == expected
 
@@ -168,6 +173,17 @@ async def test_stats_counts(admin_client, db, admin):
         "Items": "4",
         "Open items": "3",
     }
+    assert "Attachment storage: 1.5 MB of 2048 MB" in text_of(r.text)
+
+
+async def test_stats_are_one_query_and_empty_storage_reads_zero(admin_client, db, admin):
+    with count_queries(db) as statements:
+        stats = await get_stats(db)  # SUM(bigint) is a numeric: cast, or it comes back a Decimal
+
+    assert len(statements) == 1
+    assert stats.attachments_bytes == 0 and type(stats.attachments_bytes) is int
+    r = await admin_client.get("/admin")
+    assert "Attachment storage: 0 MB of 2048 MB" in text_of(r.text)
 
 
 async def test_user_list_shows_every_user_with_details(admin_client, db, admin):

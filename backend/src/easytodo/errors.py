@@ -41,6 +41,10 @@ class Conflict(AppError):
     status_code = 409
 
 
+class PayloadTooLarge(AppError):
+    status_code = 413
+
+
 class ValidationFailed(AppError):
     status_code = 422
 

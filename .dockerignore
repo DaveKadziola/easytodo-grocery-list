@@ -17,4 +17,6 @@ Makefile
 **/.pytest_cache
 **/.ruff_cache
 backend/tests
+# A developer's attached files; the image gets an empty directory (deploy/Dockerfile).
+backend/data
 frontend/static/css/app.css

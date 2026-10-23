@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 import pytest
 from boards.test_item_views import attach
 from factories import (
+    create_attachment,
     create_board,
     create_category,
     create_checklist_entry,
@@ -130,8 +131,7 @@ async def test_get_item_details_uses_at_most_three_queries(db):
     milk = await create_item(db, category, "Milk", created_by=anna)
     await create_checklist_entry(db, milk, "Flour", position=1)
     await create_checklist_entry(db, milk, "Eggs", position=0)
-    attach(db, milk, 1)
-    await db.commit()
+    attachment = await create_attachment(db, milk, filename="receipt-1.png", uploaded_by=anna)
     db.expunge_all()
 
     with count_queries(db) as statements:
@@ -143,7 +143,8 @@ async def test_get_item_details_uses_at_most_three_queries(db):
     assert details.show_author is True
     assert details.author == Author(anna.id, "Anna Kowalska")
     assert [entry.text for entry in details.entries] == ["Eggs", "Flour"]
-    assert [attachment.filename for attachment in details.attachments] == ["receipt-1.png"]
+    assert [v.attachment.id for v in details.attachments] == [attachment.id]
+    assert [v.uploader for v in details.attachments] == [Author(anna.id, "Anna Kowalska")]
 
 
 async def test_entries_and_attachments_come_in_their_order(db):
@@ -165,7 +166,11 @@ async def test_entries_and_attachments_come_in_their_order(db):
     details = await get_item_details(db, milk.id, owner)
 
     assert [entry.text for entry in details.entries] == ["Eggs", "Salt", "Flour"]
-    assert [a.filename for a in details.attachments] == ["receipt-2.png", "receipt-1.png"]
+    assert [view.attachment.filename for view in details.attachments] == [
+        "receipt-2.png",
+        "receipt-1.png",
+    ]
+    assert [view.uploader for view in details.attachments] == [None, None]  # nobody uploaded them
     assert details.author is None and details.show_author is False
 
 

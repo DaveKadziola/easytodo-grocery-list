@@ -22,7 +22,7 @@
   const CHECK = 'input[type="checkbox"][hx-post$="/check"]';
   const TICKS = `${TICK}, ${CHECK}`;
   const FOCUSABLE = "a[href], input, textarea, select, button";
-  const TEXT_FIELDS = "input[id]:not([type=checkbox]):not([type=hidden]), textarea[id]";
+  const TEXT_FIELDS = "input[id]:not([type=checkbox]):not([type=hidden]):not([type=file]), textarea[id]";
   // Requests whose failure leaves the page out of step: Sortable has already moved the element.
   const DRAG_REQUEST = /\/items\/\d+\/move$|\/categories\/order$/;
   // The answer to a fetch of an item's details (the path of its request).

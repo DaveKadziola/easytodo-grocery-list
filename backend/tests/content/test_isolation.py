@@ -4,6 +4,7 @@ import json
 
 import pytest
 from factories import (
+    create_attachment,
     create_board,
     create_category,
     create_checklist_entry,
@@ -42,6 +43,12 @@ ROUTES = [
     ("PATCH", "/checklist/{entry}", {"text": "Hijacked"}),
     ("POST", "/checklist/{entry}/check", None),
     ("DELETE", "/checklist/{entry}", None),
+    ("POST", "/items/{item}/attachments", None),
+    ("DELETE", "/attachments/{attachment}", None),
+    ("GET", "/attachments/{attachment}", None),
+    ("GET", "/attachments/{attachment}/file", None),
+    ("GET", "/attachments/{attachment}/thumb", None),
+    ("GET", "/attachments/{attachment}/preview", None),
 ]
 WRITES = [route for route in ROUTES if route[0] != "GET"]
 
@@ -58,10 +65,21 @@ def fill(route, **ids):
     return method, path.format(**ids), data
 
 
+def routes_of(api_router):
+    """The routes of ``api_router``, those of the routers included in it too (FastAPI keeps an
+    included router whole, as a route of its own), all without a prefix."""
+    for route in api_router.routes:
+        if hasattr(route, "original_router"):
+            assert route.include_context.prefix == ""
+            yield from routes_of(route.original_router)
+        else:
+            yield route
+
+
 def test_routes_cover_every_content_route():
     registered = {
         (method, route.path.replace("_id}", "}"))
-        for route in router.routes
+        for route in routes_of(router)
         for method in route.methods
     }
     assert registered == {(method, path) for method, path, _ in ROUTES}
@@ -71,8 +89,15 @@ async def test_viewer_can_read_but_not_modify(viewer_client, board, item, db, co
     other = await create_category(db, board, "Bakery", position=1)
     await create_item(db, other, "Old bread", is_done=True)
     entry = await create_checklist_entry(db, item, "Eggs")
+    attachment = await create_attachment(db, item)
     before = await content_snapshot()
-    ids = {"board": board.id, "category": item.category_id, "item": item.id, "entry": entry.id}
+    ids = {
+        "board": board.id,
+        "category": item.category_id,
+        "item": item.id,
+        "entry": entry.id,
+        "attachment": attachment.id,
+    }
 
     for path in ("/boards/{board}", "/boards/{board}/content", "/categories/{category}"):
         r = await viewer_client.get(path.format(**ids))
@@ -93,7 +118,9 @@ async def test_viewer_can_read_but_not_modify(viewer_client, board, item, db, co
 @pytest.mark.parametrize("bad_id", ["999999", "0", "-1", str(2**63)])
 async def test_unknown_or_impossible_ids_are_404(editor_client, item, db, content_snapshot, bad_id):
     before = await content_snapshot()
-    ids = dict.fromkeys(("board", "category", "other_category", "item", "entry"), bad_id)
+    ids = dict.fromkeys(
+        ("board", "category", "other_category", "item", "entry", "attachment"), bad_id
+    )
     requests = [fill(route, **ids) for route in ROUTES] + [
         ("POST", f"/items/{item.id}/move", {"category_id": bad_id}),
     ]
@@ -115,6 +142,7 @@ async def test_other_users_ids_are_404_everywhere(
     milk = await create_item(db, dairy, "Milk")
     await create_item(db, dairy, "Old cheese", is_done=True)
     skim_milk = await create_checklist_entry(db, milk, "Skim Milk")
+    receipt = await create_attachment(db, milk, filename="Milk receipt.txt", uploaded_by=alice)
     bobs_board = await create_board(db, bob, "Bob's list")
     bobs_category = await create_category(db, bobs_board, "Bob's things")
     bobs_item = await create_item(db, bobs_category, "Bob's item")
@@ -127,6 +155,7 @@ async def test_other_users_ids_are_404_everywhere(
         "other_category": fruit.id,
         "item": milk.id,
         "entry": skim_milk.id,
+        "attachment": receipt.id,
     }
     requests = [fill(route, **alices_ids) for route in ROUTES] + [
         ("GET", f"/boards/{board.id}", None),
@@ -138,7 +167,7 @@ async def test_other_users_ids_are_404_everywhere(
         for headers in ({}, HX):
             r = await client.request(method, path, data=data, headers=headers)
             assert r.status_code == 404, (method, path, headers)
-            for secret in ("Alice", "Dairy", "Fruit", "Milk", "cheese"):
+            for secret in ("Alice", "Dairy", "Fruit", "Milk", "cheese", "receipt"):
                 assert secret not in r.text, (method, path, secret)
             if headers:
                 assert json.loads(r.headers["hx-trigger"])["resync"] is True

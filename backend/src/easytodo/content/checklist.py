@@ -11,7 +11,7 @@ and the category (its tile shows how many entries are done).
 
 from functools import cache
 
-from sqlalchemy import BigInteger, bindparam, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.boards.permissions import (
@@ -22,10 +22,10 @@ from easytodo.boards.permissions import (
     load_for_member,
     member_lookup,
 )
-from easytodo.content.service import _category_changed, load_item
+from easytodo.content.service import _category_changed, item_child_query, load_item
 from easytodo.content.validation import clean_name
 from easytodo.errors import Conflict, NotFound, ValidationFailed
-from easytodo.models import Board, BoardMember, BoardRole, Category, ChecklistEntry, Item, User
+from easytodo.models import BoardRole, ChecklistEntry, Item, User
 from easytodo.realtime.events import BoardEvent, commit_and_publish
 
 ENTRY_MAX_LENGTH = 200  # checklist_entries.text is String(200)
@@ -37,22 +37,8 @@ CHECKLIST_OUT_OF_DATE = "Checklist order is out of date. Refresh the task."
 
 @cache
 def _entry_lookup(action: Action, lock: RowLock | None) -> MemberLookup:
-    """The statements of ``load_entry`` for one action and lock, built once. The same visibility
-    rules as ``content.service._load_lookup`` has for an item: change them together."""
-    query = (
-        select(ChecklistEntry, Item, BoardMember.role)
-        .join(Item, Item.id == ChecklistEntry.item_id)
-        .join(Category, Category.id == Item.category_id)
-        .join(Board, Board.id == Item.board_id)
-        .join(BoardMember, BoardMember.board_id == Item.board_id)
-        .where(
-            ChecklistEntry.id == bindparam("entry_id", type_=BigInteger),
-            BoardMember.user_id == bindparam("user_id", type_=BigInteger),
-            Item.deleted_at.is_(None),
-            Category.archived_at.is_(None),
-            Board.archived_at.is_(None),
-        )
-    )
+    """The statements of ``load_entry`` for one action and lock, built once."""
+    query = item_child_query(ChecklistEntry, "entry_id")
     return member_lookup(query, action, lock=lock, of=ChecklistEntry)
 
 

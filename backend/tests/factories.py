@@ -1,10 +1,14 @@
 """Test data factories. Each one commits, so the app under test (own connection) sees the rows."""
 
+import io
+import secrets
 from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from easytodo.attachments.storage import AttachmentStore
 from easytodo.models import (
+    Attachment,
     Board,
     BoardMember,
     BoardRole,
@@ -110,6 +114,38 @@ async def create_checklist_entry(
     db.add(entry)
     await db.commit()
     return entry
+
+
+async def create_attachment(
+    db: AsyncSession,
+    item: Item,
+    *,
+    store: AttachmentStore | None = None,
+    filename: str = "note.txt",
+    content: bytes = b"Buy oat milk.\n",
+    kind: str = "text",
+    content_type: str = "text/plain",
+    uploaded_by: User | None = None,
+    size_bytes: int | None = None,
+) -> Attachment:
+    """An attachment of ``item``. With ``store`` the file is written there too (``content``, under
+    the row's key; no thumbnail or preview); without it only the row exists. ``size_bytes`` is
+    the content's length unless given (to fill the instance's quota without the bytes)."""
+    key = secrets.token_hex(16)
+    if store is not None:
+        await store.save(key, io.BytesIO(content))
+    attachment = Attachment(
+        item_id=item.id,
+        filename=filename,
+        kind=kind,
+        content_type=content_type,
+        size_bytes=len(content) if size_bytes is None else size_bytes,
+        storage_key=key,
+        uploaded_by=uploaded_by.id if uploaded_by else None,
+    )
+    db.add(attachment)
+    await db.commit()
+    return attachment
 
 
 async def create_notification(

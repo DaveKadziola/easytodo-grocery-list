@@ -99,6 +99,8 @@ jobs:
           docker compose restart app
           docker compose up -d --wait
           test "$(docker compose logs app | grep -c 'Running upgrade')" -eq "$migrations_run"
+      - name: The app can write to the attachments volume
+        run: docker compose exec -T app test -w /app/backend/data/attachments
       - name: App and database logs
         if: failure()
         run: docker compose logs

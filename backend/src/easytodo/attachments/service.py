@@ -1,0 +1,291 @@
+"""Files attached to an item: images, PDFs, plain text and Markdown.
+
+Like the other content services, every function finds what it changes through the user's own board
+memberships (an attachment of a deleted item, or in an archived category or board, answers
+``NotFound``; a role that may not edit gets ``Forbidden``) and commits the change together with
+its board event, which names the item (a page with it open fetches its details again, and the
+category: its tile shows how many files there are).
+
+What a file is, is decided by its content (``sniff``), never by what the browser says; the bytes
+go to the ``AttachmentStore``, outside the database, under a random key. An upload that is refused,
+or that fails half way, leaves nothing on disk and nothing in the database.
+"""
+
+import asyncio
+import codecs
+import logging
+import secrets
+import unicodedata
+from functools import cache
+from typing import BinaryIO
+from urllib.parse import urlsplit
+
+import pillow_heif
+from fastapi import UploadFile
+from markdown_it import MarkdownIt
+from markupsafe import Markup
+from PIL import Image, ImageOps
+from sqlalchemy import BigInteger, bindparam, cast, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from easytodo.attachments.sniff import HEAD_SIZE, HEIC, detect
+from easytodo.attachments.storage import AttachmentStore
+from easytodo.boards.permissions import (
+    Action,
+    MemberLookup,
+    RowLock,
+    is_possible_id,
+    load_for_member,
+    member_lookup,
+)
+from easytodo.config import Settings
+from easytodo.content.service import _category_changed, item_child_query, load_item
+from easytodo.errors import Conflict, NotFound, PayloadTooLarge, ValidationFailed
+from easytodo.models import Attachment, BoardRole, Item, User
+from easytodo.realtime.events import BoardEvent, commit_and_publish
+
+logger = logging.getLogger(__name__)
+
+TOO_LARGE = "Files can be at most {mb} MB."
+TOO_MANY = "A task can have at most {n} attachments."
+STORAGE_FULL = "Attachment storage is full."
+NOT_ALLOWED = "Only images, PDF, .txt and .md files can be attached."
+BROKEN_IMAGE = "This image could not be read."
+NO_FILE = "Choose a file to attach."
+ATTACHMENT_GONE = "This attachment no longer exists."
+
+FILENAME_MAX_LENGTH = 255  # attachments.filename is String(255)
+THUMB_SIZE = (480, 480)  # the tile in the item's details
+PREVIEW_SIZE = (2048, 2048)  # a HEIC photo, as a JPEG that browsers can show
+_MEGABYTE = 1024 * 1024
+_CHUNK = 1024 * 1024
+
+pillow_heif.register_heif_opener()  # Image.open reads HEIC from now on
+
+# The bytes of all attachments (SUM of a bigint is a numeric, which asyncpg returns as a Decimal),
+# as a subquery for the statements that need them: the instance's quota here, the admin's statistics.
+total_bytes = select(
+    func.coalesce(cast(func.sum(Attachment.size_bytes), BigInteger), 0)
+).scalar_subquery()
+# How many files the item has and how many bytes there are in all: one statement.
+_USAGE = select(
+    select(func.count())
+    .where(Attachment.item_id == bindparam("item_id", type_=BigInteger))
+    .scalar_subquery()
+    .label("files"),
+    total_bytes.label("bytes"),
+)
+
+
+@cache
+def _attachment_lookup(action: Action, lock: RowLock | None) -> MemberLookup:
+    """The statements of ``load_attachment`` for one action and lock, built once."""
+    query = item_child_query(Attachment, "attachment_id")
+    return member_lookup(query, action, lock=lock, of=Attachment)
+
+
+async def load_attachment(
+    db: AsyncSession,
+    attachment_id: int,
+    user: User,
+    action: Action,
+    *,
+    lock: RowLock = RowLock.NO_KEY_UPDATE,
+) -> tuple[Attachment, Item, BoardRole]:
+    """The attachment, its item and ``user``'s role, in one query joined with the item, its active
+    category, the active board and ``board_members``. An attachment of a deleted item or one in
+    an archived category or board is not found.
+
+    For a change (any action but VIEW) the attachment's row stays locked in mode ``lock`` until
+    the commit, so a delete from another device that got there first makes this ``NotFound``. A
+    member whose role does not allow the change (a viewer) takes no lock and waits for nobody
+    (see ``load_for_member``). The item is read, not locked.
+    """
+    if not is_possible_id(attachment_id):
+        raise NotFound(ATTACHMENT_GONE)
+    row_lock = None if action is Action.VIEW else lock
+    attachment, item, role = await load_for_member(
+        db,
+        _attachment_lookup(action, row_lock),
+        ATTACHMENT_GONE,
+        {"attachment_id": attachment_id, "user_id": user.id},
+    )
+    return attachment, item, role
+
+
+def too_large(settings: Settings) -> PayloadTooLarge:
+    mb = round(settings.attachment_max_bytes / _MEGABYTE, 1)
+    return PayloadTooLarge(TOO_LARGE.format(mb=f"{mb:g}"))
+
+
+def clean_filename(name: str) -> str:
+    """``name`` as it is kept, for showing only (the file is stored under a key): without control
+    characters, at most 255 characters long, cut in the middle of the name rather than of its
+    extension. A "/" stays: nothing ever turns the name into a path."""
+    name = "".join(char for char in name if unicodedata.category(char) != "Cc").strip()
+    if len(name) > FILENAME_MAX_LENGTH:
+        stem, dot, extension = name.rpartition(".")
+        if dot and len(extension) < 20:
+            name = stem[: FILENAME_MAX_LENGTH - len(extension) - 1] + dot + extension
+        else:
+            name = name[:FILENAME_MAX_LENGTH]
+    return name or "file"
+
+
+def _is_utf8_text(source: BinaryIO) -> bool:
+    """Whether the rest of ``source`` is UTF-8 without a NUL character (what a text file is)."""
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    try:
+        while chunk := source.read(_CHUNK):
+            if "\x00" in decoder.decode(chunk):
+                return False
+        return "\x00" not in decoder.decode(b"", final=True)
+    except UnicodeDecodeError:
+        return False
+
+
+def _save_webp(picture: Image.Image, path, **options) -> None:
+    if picture.mode not in ("RGB", "RGBA"):
+        picture = picture.convert("RGBA" if picture.has_transparency_data else "RGB")
+    picture.save(path, "WEBP", **options)
+
+
+def _make_images(store: AttachmentStore, key: str, heic: bool) -> None:
+    """Read the image stored as ``key`` and write its thumbnail beside it, and for a HEIC photo
+    its JPEG preview. ``ValidationFailed(BROKEN_IMAGE)`` for anything Pillow cannot read."""
+    path = store.path(key)
+    try:
+        with Image.open(path) as probe:
+            probe.verify()  # the file's structure; it cannot be used afterwards
+        with Image.open(path) as picture:
+            # Before the decoder allocates the pixels: Pillow itself only warns up to twice this.
+            if picture.width * picture.height > Image.MAX_IMAGE_PIXELS:
+                raise ValueError("too many pixels")
+            if heic:
+                picture.thumbnail(PREVIEW_SIZE)
+                shown = ImageOps.exif_transpose(picture).convert("RGB")
+                shown.save(store.preview_path(key), "JPEG", quality=85)
+            else:
+                picture.thumbnail(THUMB_SIZE)  # first: the turn below then costs next to nothing
+                shown = ImageOps.exif_transpose(picture)
+            shown.thumbnail(THUMB_SIZE)
+            _save_webp(shown, store.thumb_path(key), quality=80)
+    except Exception as exc:  # Pillow's decoders raise all sorts of errors on a corrupt file
+        logger.info("An image could not be read: %r", exc)
+        raise ValidationFailed(BROKEN_IMAGE) from exc
+
+
+def _size_of(upload: UploadFile) -> int:
+    if upload.size is not None:
+        return upload.size
+    upload.file.seek(0, 2)
+    size = upload.file.tell()
+    upload.file.seek(0)
+    return size
+
+
+def _item_changed(item: Item) -> BoardEvent:
+    return _category_changed(item.board_id, item.category_id, item_ids=(item.id,))
+
+
+async def add_attachment(
+    db: AsyncSession,
+    item_id: int,
+    user: User,
+    upload: UploadFile | None,
+    settings: Settings,
+    store: AttachmentStore,
+) -> Attachment:
+    """Attach the uploaded file to the item. In this order: ``Forbidden``/``NotFound`` for the
+    item, ``ValidationFailed`` without a file, ``PayloadTooLarge`` above the size limit, a
+    ``Conflict`` when the item has its fill of files or the instance its quota, and
+    ``ValidationFailed`` for a type that may not be attached (a text file must be UTF-8) or an
+    image Pillow cannot read. Only then is anything written."""
+    # The lock on the item (FOR NO KEY UPDATE, as every change to it takes) serializes the files
+    # added at the same time, so that each counts the others. A tick or a rename of the same
+    # item waits for it while the file is written and thumbnailed (accepted).
+    item, _ = await load_item(db, item_id, user, Action.EDIT_CONTENT)
+    if upload is None or not upload.filename:
+        raise ValidationFailed(NO_FILE)
+    size = _size_of(upload)
+    if size > settings.attachment_max_bytes:
+        raise too_large(settings)
+    files, stored = (await db.execute(_USAGE, {"item_id": item.id})).one()
+    if files >= settings.attachments_per_item:
+        raise Conflict(TOO_MANY.format(n=settings.attachments_per_item))
+    if stored + size > settings.attachments_total_bytes:
+        raise Conflict(STORAGE_FULL)
+    filename = clean_filename(upload.filename)
+    detected = detect(await upload.read(HEAD_SIZE), filename)
+    await upload.seek(0)
+    if detected is None:
+        raise ValidationFailed(NOT_ALLOWED)
+    if detected.kind in ("text", "markdown"):
+        if not await asyncio.to_thread(_is_utf8_text, upload.file):
+            raise ValidationFailed(NOT_ALLOWED)
+        await upload.seek(0)
+
+    key = secrets.token_hex(16)
+    attachment = Attachment(
+        item_id=item.id,
+        filename=filename,
+        kind=detected.kind,
+        content_type=detected.content_type,
+        size_bytes=size,
+        storage_key=key,
+        uploaded_by=user.id,
+    )
+    try:
+        await store.save(key, upload.file)
+        if detected.kind == "image":
+            await asyncio.to_thread(_make_images, store, key, detected.content_type == HEIC)
+        db.add(attachment)
+        await commit_and_publish(db, _item_changed(item))
+    except BaseException:
+        store.delete(key)  # nothing is left of a file that did not get in
+        raise
+    return attachment
+
+
+async def delete_attachment(
+    db: AsyncSession, attachment_id: int, user: User, store: AttachmentStore
+) -> int:
+    """Delete the attachment and its files; returns the id of its item. The files go after the
+    commit: a delete that fails leaves them in place, and one that is lost between the two steps
+    leaves files without a row, which the purge removes."""
+    attachment, item, _ = await load_attachment(
+        db, attachment_id, user, Action.EDIT_CONTENT, lock=RowLock.UPDATE
+    )
+    key = attachment.storage_key
+    await db.delete(attachment)
+    await commit_and_publish(db, _item_changed(item))
+    store.delete(key)
+    return item.id
+
+
+def _safe_link(url: str) -> bool:
+    """Only a link to a web page, a mail address or a place on this site is one: not
+    ``javascript:`` or ``data:`` or whatever else. (``urlsplit`` reads the scheme as a browser
+    does: any case, no tabs or line breaks inside, nothing but spaces before it.)"""
+    try:
+        return urlsplit(url).scheme in {"", "http", "https", "mailto"}
+    except ValueError:
+        return False
+
+
+# Raw HTML in the text is shown as text; no images (a picture would be fetched from wherever it
+# says, which tells that site who reads the file): `![x](url)` is a plain link instead.
+_MARKDOWN = MarkdownIt("commonmark", {"html": False}).disable("image")
+_MARKDOWN.validateLink = _safe_link
+
+
+def render_markdown(text: str) -> Markup:
+    """``text`` as HTML that is safe to put in a page: Markdown's own tags and the links that
+    ``_safe_link`` lets through, everything else escaped."""
+    return Markup(_MARKDOWN.render(text))
+
+
+def read_text(store: AttachmentStore, attachment: Attachment) -> str:
+    """The text of a text or Markdown attachment (blocking: run it in a thread). A leading byte
+    order mark is dropped; what is not UTF-8 any more is replaced, not an error."""
+    return store.path(attachment.storage_key).read_bytes().decode("utf-8-sig", errors="replace")

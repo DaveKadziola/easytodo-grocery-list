@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from factories import (
+    create_attachment,
     create_board,
     create_category,
     create_checklist_entry,
@@ -146,6 +147,8 @@ async def test_archived_category_is_404_everywhere(  # Review Focus 1
     milk = await create_item(db, dairy, "Milk")
     await create_item(db, bakery, "Bread")
     entry = await create_checklist_entry(db, milk, "Skim")
+    # No file in the store: the answer is 404 before the file is looked for.
+    attachment = await create_attachment(db, milk)
     owner_client = await signed_in_client("owner@example.com")
     r = await editor_client.post(f"/categories/{dairy.id}/archive", headers=HX)
     assert r.status_code == 200
@@ -159,13 +162,14 @@ async def test_archived_category_is_404_everywhere(  # Review Focus 1
         "other_category": bakery.id,
         "item": milk.id,
         "entry": entry.id,
+        "attachment": attachment.id,
     }
     requests = [
         fill(route, **ids)
         for route in ROUTES
         if not route[1].startswith("/boards/") and route[:2] not in ARCHIVE_ROUTES
     ]
-    assert len(requests) >= 14  # the checklist's five routes among them
+    assert len(requests) >= 20  # the checklist's five routes and the attachments' six among them
     for client in (owner_client, editor_client):
         for method, path, data in requests:
             r = await client.request(method, path, data=data, headers=HX)

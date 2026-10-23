@@ -98,22 +98,26 @@ A tunnel connector on your side opens an outgoing connection to the provider. Th
   - Both appear in the app's access log (`docker compose logs app`), in a proxy's access log if you turn one on (Caddy logs no requests by default), and, with the console mail backend, in the mails the app writes to that same log.
   - On Linux, anyone in the `docker` group can read the container logs.
   - Revoke a leaked invite link on the board's "Invite and members" page (⋮ on the board list → Invite). A password change invalidates all of the account's reset links.
-- [ ] **Backups** with `pg_dump`, run from the repository root, into `backups/` (git-ignored). A dump holds every account's password hash, so it is created readable by your user only (`umask 077`). Copy the dumps off the server, e.g. from a daily cron job:
+- [ ] **Backups** with `pg_dump` and a `tar` of the attachments volume, run from the repository root, into `backups/` (git-ignored). A dump holds every account's password hash, so it is created readable by your user only (`umask 077`). Copy both off the server, e.g. from a daily cron job (the one that runs at 03:15 must include the volume `easytodo_attachments`, i.e. the second line, next to the dump: a database restored without its files shows "This attachment no longer exists." for every file):
 
   ```sh
   mkdir -p backups
   (umask 077 && docker compose exec -T db pg_dump -U easytodo -d easytodo -Fc > backups/easytodo-$(date +%F).dump)
+  (umask 077 && docker compose exec -T app tar -C /app/backend/data/attachments -cf - . > backups/attachments-$(date +%F).tar)
   ```
 
-  To restore a dump:
+  To restore a dump and the files of the same day: stop the app, restore the database, restore the files with the app still stopped, start the app:
 
   ```sh
   docker compose stop app
   docker compose exec -T db pg_restore -U easytodo -d easytodo --clean --if-exists < backups/easytodo-2026-10-21.dump
+  docker compose run --rm --no-deps -T --entrypoint tar app -C /app/backend/data/attachments -xf - < backups/attachments-2026-10-21.tar
   docker compose start app
   ```
 
-  Never run `docker compose down -v`: `-v` deletes the database volume, and Caddy's certificates with it.
+  The app's nightly purge removes the files that have no row in the database (attached after the dump); `tar` keeps the files' old modification times, so a restore does not make files look new to it.
+
+  Never run `docker compose down -v`: `-v` deletes the database and attachments volumes, and Caddy's certificates with it.
 - [ ] **Updates:** take a backup first, then run:
 
   ```sh

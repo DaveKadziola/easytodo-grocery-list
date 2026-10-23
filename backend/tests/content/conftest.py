@@ -9,6 +9,7 @@ from factories import create_board, create_category, create_item, create_user
 from helpers import login
 from sqlalchemy import select
 
+from easytodo.attachments import service as attachments
 from easytodo.content import checklist, service
 from easytodo.models import (
     Attachment,
@@ -71,8 +72,8 @@ async def viewer_client(signed_in_client, db, board) -> httpx.AsyncClient:
 
 @pytest.fixture
 def published(monkeypatch) -> list[tuple[tuple[BoardEvent, ...], str | None]]:
-    """Every ``commit_and_publish`` call the content services (categories and items, checklists)
-    make: its events and the request's origin (``X-Client-Id``)."""
+    """Every ``commit_and_publish`` call the content services (categories and items, checklists,
+    attachments) make: its events and the request's origin (``X-Client-Id``)."""
     calls: list[tuple[tuple[BoardEvent, ...], str | None]] = []
 
     def spying_on(commit_and_publish):
@@ -82,7 +83,7 @@ def published(monkeypatch) -> list[tuple[tuple[BoardEvent, ...], str | None]]:
 
         return spy
 
-    for module in (service, checklist):
+    for module in (service, checklist, attachments):
         monkeypatch.setattr(module, "commit_and_publish", spying_on(module.commit_and_publish))
     return calls
 

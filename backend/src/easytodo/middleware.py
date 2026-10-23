@@ -1,12 +1,15 @@
 """Pure ASGI middleware (no BaseHTTPMiddleware: no extra task per request, context vars intact)."""
 
+import re
 from http.cookies import SimpleCookie
 
 from starlette.datastructures import Headers, MutableHeaders
-from starlette.requests import HTTPConnection
+from starlette.requests import ClientDisconnect, HTTPConnection, Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from easytodo.attachments.service import too_large
 from easytodo.config import Settings
+from easytodo.errors import app_error_handler
 from easytodo.realtime.events import current_origin
 from easytodo.security.csrf import CSRF_COOKIE
 from easytodo.security.tokens import new_token
@@ -81,12 +84,13 @@ class ClientIdMiddleware:
 
 
 class SecurityHeadersMiddleware:
-    """Sets the security headers (HSTS only when the public URL is https) on every response."""
+    """Sets the security headers (HSTS only when the public URL is https) on every response. The
+    Content-Security-Policy is a default: a response that has one of its own (a file shown on its
+    own, under the stricter policy of ``attachments.routes``) keeps it."""
 
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
         self.app = app
         self.headers = {
-            "Content-Security-Policy": CONTENT_SECURITY_POLICY,
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "same-origin",
             "X-Frame-Options": "DENY",
@@ -103,8 +107,84 @@ class SecurityHeadersMiddleware:
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
+                headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
                 for name, value in self.headers.items():
                     headers[name] = value
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+
+UPLOAD_PATH = re.compile(r"/items/\d+/attachments")
+FORM_OVERHEAD = 64 * 1024  # what the rest of the upload form (field names, boundaries) may add
+
+
+class UploadSizeLimitMiddleware:
+    """Stops an attachment upload that is far too large before the app has read it all.
+
+    The form is parsed (and spooled to a temporary file) before the route runs, so without this
+    anyone could make the server take in a body of any size. The limit is the largest file plus
+    ``FORM_OVERHEAD``; the service then checks the file itself against its limit.
+
+    A request that says it is larger (``Content-Length``) is answered 413 at once, unread. One
+    that does not say (chunked) is read up to the limit; then the app is told the client is gone,
+    which fails its parsing, and the answer it sends for that (a 400) is swapped for the 413.
+    """
+
+    def __init__(self, app: ASGIApp, settings: Settings) -> None:
+        self.app = app
+        self.settings = settings
+        self.limit = settings.attachment_max_bytes + FORM_OVERHEAD
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] != "http"
+            or scope["method"] != "POST"
+            or not UPLOAD_PATH.fullmatch(scope["path"])
+        ):
+            await self.app(scope, receive, send)
+            return
+        declared = Headers(scope=scope).get("content-length", "")
+        if declared.isdecimal() and int(declared) > self.limit:
+            await self._refuse(scope, receive, send)
+            return
+
+        received = 0
+        exceeded = False
+        refused = False
+
+        async def limited_receive() -> Message:
+            nonlocal received, exceeded
+            if exceeded:
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.limit:
+                    exceeded = True
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def limited_send(message: Message) -> None:
+            nonlocal refused
+            if refused:  # the rest of the answer being replaced
+                return
+            if exceeded and message["type"] == "http.response.start" and message["status"] >= 400:
+                refused = True
+                await self._refuse(scope, receive, send)
+                return
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, limited_send)
+        except ClientDisconnect:
+            # Raised by a dependency that read the form (the CSRF check, with no header): no
+            # answer was started.
+            if not exceeded or refused:
+                raise
+            await self._refuse(scope, receive, send)
+
+    async def _refuse(self, scope: Scope, receive: Receive, send: Send) -> None:
+        request = Request(scope, receive)
+        response = await app_error_handler(request, too_large(self.settings))
+        await response(scope, receive, send)
