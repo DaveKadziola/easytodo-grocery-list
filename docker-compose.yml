@@ -1,5 +1,6 @@
 # A fixed project name: the volumes (pgdata holds the database, attachments the files attached to
-# items) keep their names whatever the checkout directory is called, so a re-clone or a renamed directory finds the same data.
+# items) keep their names whatever the checkout directory is called, so a re-clone or a renamed
+# directory finds the same data.
 name: easytodo
 
 # Every service's log is rotated (at most 3 files of 10 MB each), so an always-on server's

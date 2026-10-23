@@ -17,6 +17,17 @@ HEIC = "image/heic"  # a photo from an iPhone: browsers other than Safari cannot
 HEIC_BRANDS = frozenset({b"heic", b"heix", b"hevc", b"heim", b"heis", b"mif1", b"msf1"})
 TEXT_EXTENSIONS = {".txt": "text", ".md": "markdown", ".markdown": "markdown"}
 TEXT_TYPES = {"text": "text/plain", "markdown": "text/markdown"}
+# The extensions that fit each type, the one a download gets first (``download_name``).
+EXTENSIONS = {
+    "image/jpeg": (".jpg", ".jpeg"),
+    "image/png": (".png",),
+    "image/gif": (".gif",),
+    "image/webp": (".webp",),
+    HEIC: (".heic", ".heif"),
+    "application/pdf": (".pdf",),
+    "text/plain": (".txt",),
+    "text/markdown": (".md", ".markdown"),
+}
 
 
 @dataclass(frozen=True)
@@ -44,6 +55,17 @@ def _signature(head: bytes) -> Detected | None:
 def _extension(filename: str) -> str:
     dot = filename.rfind(".")
     return filename[dot:].lower() if dot >= 0 else ""
+
+
+def download_name(filename: str, content_type: str) -> str:
+    """The name a download is saved under: ``filename`` when it ends in an extension that fits the
+    type the file was found to be, else with the right one added ("invoice.html" that is a PDF
+    becomes "invoice.html.pdf"). A browser or a file manager goes by the extension to decide what
+    a saved file is and what opens it."""
+    fitting = EXTENSIONS.get(content_type)
+    if fitting is None or _extension(filename) in fitting:
+        return filename
+    return filename.rstrip(".") + fitting[0]
 
 
 def detect(head: bytes, filename: str) -> Detected | None:

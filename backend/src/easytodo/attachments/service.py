@@ -15,8 +15,11 @@ import asyncio
 import codecs
 import logging
 import secrets
+import threading
 import unicodedata
+import warnings
 from functools import cache
+from pathlib import Path
 from typing import BinaryIO
 from urllib.parse import urlsplit
 
@@ -120,9 +123,10 @@ def too_large(settings: Settings) -> PayloadTooLarge:
 
 def clean_filename(name: str) -> str:
     """``name`` as it is kept, for showing only (the file is stored under a key): without control
-    characters, at most 255 characters long, cut in the middle of the name rather than of its
-    extension. A "/" stays: nothing ever turns the name into a path."""
-    name = "".join(char for char in name if unicodedata.category(char) != "Cc").strip()
+    characters or format characters (the right-to-left override that makes "gpj.exe" read as
+    "exe.jpg", zero-width ones), at most 255 characters long, cut in the middle of the name rather
+    than of its extension. A "/" stays: nothing ever turns the name into a path."""
+    name = "".join(char for char in name if unicodedata.category(char) not in ("Cc", "Cf")).strip()
     if len(name) > FILENAME_MAX_LENGTH:
         stem, dot, extension = name.rpartition(".")
         if dot and len(extension) < 20:
@@ -144,35 +148,51 @@ def _is_utf8_text(source: BinaryIO) -> bool:
         return False
 
 
-def _save_webp(picture: Image.Image, path, **options) -> None:
-    if picture.mode not in ("RGB", "RGBA"):
-        picture = picture.convert("RGBA" if picture.has_transparency_data else "RGB")
-    picture.save(path, "WEBP", **options)
+# ``warnings.catch_warnings`` changes the warning filters of the whole process: two threads in it
+# at once could each put back the other's state. Only the opening of a picture is inside.
+_WARNINGS_LOCK = threading.Lock()
+
+
+def _open(path: Path) -> Image.Image:
+    """``Image.open``, but a picture with more than ``Image.MAX_IMAGE_PIXELS`` pixels is an error
+    at once: Pillow itself only warns (twice) up to twice the limit and refuses above."""
+    with _WARNINGS_LOCK, warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        return Image.open(path)
+
+
+def _decode_images(path: Path, heic: bool) -> tuple[Image.Image | None, Image.Image]:
+    """The JPEG preview of a HEIC photo (None for any other picture) and the thumbnail of the
+    picture stored at ``path``, in memory. ``ValidationFailed(BROKEN_IMAGE)`` for anything Pillow
+    cannot read (reading and turning only: writing the result is not this)."""
+    try:
+        with _open(path) as probe:
+            probe.verify()  # the file's structure; it cannot be used afterwards
+        with _open(path) as picture:
+            if heic:
+                picture.thumbnail(PREVIEW_SIZE)
+                preview = ImageOps.exif_transpose(picture).convert("RGB")
+                thumb = preview.copy()
+            else:
+                picture.thumbnail(THUMB_SIZE)  # first: the turn below then costs next to nothing
+                preview, thumb = None, ImageOps.exif_transpose(picture)
+            thumb.thumbnail(THUMB_SIZE)
+            if thumb.mode not in ("RGB", "RGBA"):
+                thumb = thumb.convert("RGBA" if thumb.has_transparency_data else "RGB")
+            return preview, thumb
+    except Exception as exc:  # Pillow's decoders raise all sorts of errors on a corrupt file
+        logger.info("An image could not be read: %r", exc)
+        raise ValidationFailed(BROKEN_IMAGE) from exc
 
 
 def _make_images(store: AttachmentStore, key: str, heic: bool) -> None:
     """Read the image stored as ``key`` and write its thumbnail beside it, and for a HEIC photo
-    its JPEG preview. ``ValidationFailed(BROKEN_IMAGE)`` for anything Pillow cannot read."""
-    path = store.path(key)
-    try:
-        with Image.open(path) as probe:
-            probe.verify()  # the file's structure; it cannot be used afterwards
-        with Image.open(path) as picture:
-            # Before the decoder allocates the pixels: Pillow itself only warns up to twice this.
-            if picture.width * picture.height > Image.MAX_IMAGE_PIXELS:
-                raise ValueError("too many pixels")
-            if heic:
-                picture.thumbnail(PREVIEW_SIZE)
-                shown = ImageOps.exif_transpose(picture).convert("RGB")
-                shown.save(store.preview_path(key), "JPEG", quality=85)
-            else:
-                picture.thumbnail(THUMB_SIZE)  # first: the turn below then costs next to nothing
-                shown = ImageOps.exif_transpose(picture)
-            shown.thumbnail(THUMB_SIZE)
-            _save_webp(shown, store.thumb_path(key), quality=80)
-    except Exception as exc:  # Pillow's decoders raise all sorts of errors on a corrupt file
-        logger.info("An image could not be read: %r", exc)
-        raise ValidationFailed(BROKEN_IMAGE) from exc
+    its JPEG preview. A file that cannot be read is ``ValidationFailed(BROKEN_IMAGE)``; one that
+    cannot be written (a full disk) is the error of the write, a server error."""
+    preview, thumb = _decode_images(store.path(key), heic)
+    if preview is not None:
+        preview.save(store.preview_path(key), "JPEG", quality=85)
+    thumb.save(store.thumb_path(key), "WEBP", quality=80)
 
 
 def _size_of(upload: UploadFile) -> int:

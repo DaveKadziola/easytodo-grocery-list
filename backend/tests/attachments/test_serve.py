@@ -18,9 +18,10 @@ from attachments.samples import HX, upload
 from attachments.test_upload import files_in
 from easytodo.attachments.routes import FILE_CSP, PDF_CSP
 from easytodo.attachments.service import ATTACHMENT_GONE
+from easytodo.attachments.sniff import download_name
 from easytodo.content.service import ITEM_GONE
 from easytodo.middleware import CONTENT_SECURITY_POLICY
-from easytodo.models import Board, Category, Item
+from easytodo.models import Attachment, Board, Category, Item
 
 PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=()"
 POLISH_NAME = "Łosoś & chips.txt"
@@ -66,22 +67,102 @@ async def test_file_headers(viewer_client, item, db, store):
     assert r.headers["content-security-policy"] == FILE_CSP
 
 
-async def test_a_file_can_be_revalidated_and_read_in_ranges(viewer_client, item, db, store):
-    content = b"0123456789" * 100  # long enough for GZip to want it
-    attachment = await stored(db, item, store, "digits.txt", content)
+LONG_TEXT = b"0123456789" * 500  # 5000 bytes: GZip compresses a response above 1000
+
+
+def padded_pdf() -> bytes:
+    return samples.PDF + b"%" + b"x" * 4000 + b"\n"
+
+
+BIG_PNG = samples.png() + b"\x00" * 2000  # (only its size matters here)
+
+
+@pytest.mark.parametrize(
+    ("filename", "content", "kind", "content_type", "gzipped"),
+    [
+        pytest.param("digits.txt", LONG_TEXT, "text", "text/plain", True, id="text"),
+        pytest.param("plan.md", LONG_TEXT, "markdown", "text/markdown", True, id="markdown"),
+        pytest.param("receipt.pdf", padded_pdf(), "pdf", "application/pdf", False, id="pdf"),
+        pytest.param("photo.png", BIG_PNG, "image", "image/png", False, id="png"),
+        pytest.param("IMG.heic", b"\x00" * 4000, "image", "image/heic", False, id="heic"),
+    ],
+)
+async def test_text_above_the_minimum_size_is_compressed_and_the_rest_is_not(
+    viewer_client, item, db, store, filename, content, kind, content_type, gzipped
+):
+    assert len(content) > 1000
+    attachment = await stored(
+        db, item, store, filename, content, kind=kind, content_type=content_type
+    )
+
+    r = await viewer_client.get(
+        f"/attachments/{attachment.id}/file", headers={"Accept-Encoding": "gzip"}
+    )
+
+    assert r.status_code == 200 and r.content == content  # (httpx undoes the compression)
+    assert r.headers.get("content-encoding") == ("gzip" if gzipped else None)
+
+
+async def test_a_range_is_answered_in_parts_and_never_compressed(viewer_client, item, db, store):
+    attachment = await stored(db, item, store, "digits.txt", LONG_TEXT)
     url = f"/attachments/{attachment.id}/file"
+
+    # 1500 bytes: above what GZip compresses, so only the 206 keeps it from doing so.
+    part = await viewer_client.get(
+        url, headers={"Range": "bytes=1500-2999", "Accept-Encoding": "gzip"}
+    )
+
+    assert part.status_code == 206
+    assert part.content == LONG_TEXT[1500:3000]
+    assert part.headers["content-range"] == "bytes 1500-2999/5000"
+    assert part.headers["content-length"] == "1500"
+    assert "content-encoding" not in part.headers
+    assert part.headers["content-security-policy"] == FILE_CSP
+
+
+@pytest.mark.parametrize(
+    ("filename", "content", "kind", "content_type", "path", "csp"),
+    [
+        pytest.param("note.txt", samples.TEXT, "text", "text/plain", "/file", FILE_CSP, id="text"),
+        pytest.param(
+            "receipt.pdf", samples.PDF, "pdf", "application/pdf", "/file", PDF_CSP, id="pdf"
+        ),
+        pytest.param(
+            "photo.png", samples.png(), "image", "image/png", "/file?download=1", FILE_CSP, id="png"
+        ),
+        pytest.param(
+            "photo.png", samples.png(), "image", "image/png", "/thumb", FILE_CSP, id="thumb"
+        ),
+    ],
+)
+async def test_a_revalidated_file_is_a_304_that_keeps_the_policy_of_the_file(
+    viewer_client, item, db, store, filename, content, kind, content_type, path, csp
+):
+    """A browser replaces the headers it stored with those of the 304: without the file's own
+    policy the stored copy would get the page's (the sandbox lost; a PDF's viewer blocked)."""
+    attachment = await stored(
+        db, item, store, filename, content, kind=kind, content_type=content_type
+    )
+    store.thumb_path(attachment.storage_key).write_bytes(b"thumb")
+    url = f"/attachments/{attachment.id}{path}"
 
     first = await viewer_client.get(url)
     again = await viewer_client.get(url, headers={"If-None-Match": first.headers["etag"]})
-    part = await viewer_client.get(url, headers={"Range": "bytes=10-19"})
+    weak = await viewer_client.get(url, headers={"If-None-Match": f"W/{first.headers['etag']}"})
+    other = await viewer_client.get(url, headers={"If-None-Match": '"not-this-one"'})
 
-    assert first.status_code == 200 and first.content == content
-    assert "content-encoding" not in first.headers or first.headers["content-encoding"] == "gzip"
-    assert again.status_code == 304
-    assert part.status_code == 206
-    assert part.content == b"0123456789"
-    assert part.headers["content-range"] == "bytes 10-19/1000"
-    assert "content-encoding" not in part.headers
+    assert first.status_code == 200 and first.headers["content-security-policy"] == csp
+    assert other.status_code == 200
+    for revalidated in (again, weak):
+        assert revalidated.status_code == 304
+        assert revalidated.content == b""
+        assert revalidated.headers["content-security-policy"] == csp
+        for name in ("etag", "cache-control", "content-disposition", "last-modified"):
+            assert revalidated.headers.get(name) == first.headers.get(name), name
+        assert revalidated.headers["cache-control"] == "private, no-cache"
+        assert revalidated.headers["x-content-type-options"] == "nosniff"
+        assert revalidated.headers["x-frame-options"] == "DENY"
+        assert "content-type" not in revalidated.headers
 
 
 @pytest.mark.parametrize(
@@ -91,15 +172,84 @@ async def test_a_file_can_be_revalidated_and_read_in_ranges(viewer_client, item,
 async def test_the_name_is_only_ever_sent_percent_encoded(viewer_client, item, db, store, name):
     attachment = await stored(db, item, store, name)  # (a name no upload could have: worse)
 
-    for query in ("", "?download=1"):
+    for query, sent in (("", name), ("?download=1", download_name(name, "text/plain"))):
         r = await viewer_client.get(f"/attachments/{attachment.id}/file{query}")
 
         disposition = r.headers["content-disposition"]
-        assert disposition.endswith(f"filename*=utf-8''{quote(name, safe='')}")
+        assert disposition.endswith(f"filename*=utf-8''{quote(sent, safe='')}")
         assert 'filename="' not in disposition and "set-cookie" not in r.headers
         assert re.fullmatch(
             r"(inline|attachment); filename\*=utf-8''[A-Za-z0-9%_.~-]*", disposition
         )
+
+
+@pytest.mark.parametrize(
+    ("filename", "kind", "content_type", "saved_as"),
+    [
+        # A name whose extension says something else gets the right one added.
+        ("invoice.html", "pdf", "application/pdf", "invoice.html.pdf"),
+        ("invoice", "pdf", "application/pdf", "invoice.pdf"),
+        ("invoice.", "pdf", "application/pdf", "invoice.pdf"),
+        ("setup.exe", "text", "text/plain", "setup.exe.txt"),
+        ("notes.txt", "markdown", "text/markdown", "notes.txt.md"),
+        ("photo.png", "image", "image/jpeg", "photo.png.jpg"),
+        ("photo.jpg", "image", "image/png", "photo.jpg.png"),
+        ("clip.jpg", "image", "image/gif", "clip.jpg.gif"),
+        ("clip.gif", "image", "image/webp", "clip.gif.webp"),
+        ("IMG.jpg", "image", "image/heic", "IMG.jpg.heic"),
+        # One that fits stays as it is, in any case.
+        ("photo.jpg", "image", "image/jpeg", "photo.jpg"),
+        ("PHOTO.JPEG", "image", "image/jpeg", "PHOTO.JPEG"),
+        ("photo.png", "image", "image/png", "photo.png"),
+        ("clip.Gif", "image", "image/gif", "clip.Gif"),
+        ("pic.webp", "image", "image/webp", "pic.webp"),
+        ("IMG_1.HEIC", "image", "image/heic", "IMG_1.HEIC"),
+        ("IMG_1.heif", "image", "image/heic", "IMG_1.heif"),
+        ("receipt.PDF", "pdf", "application/pdf", "receipt.PDF"),
+        ("note.txt", "text", "text/plain", "note.txt"),
+        ("plan.md", "markdown", "text/markdown", "plan.md"),
+        ("plan.markdown", "markdown", "text/markdown", "plan.markdown"),
+        ("PLAN.MD", "markdown", "text/markdown", "PLAN.MD"),
+        ("Łosoś & chips.pdf", "pdf", "application/pdf", "Łosoś & chips.pdf"),
+        ("Łosoś & chips", "pdf", "application/pdf", "Łosoś & chips.pdf"),
+    ],
+)
+async def test_a_download_is_saved_with_an_extension_that_fits_what_the_file_is(
+    viewer_client, item, db, store, filename, kind, content_type, saved_as
+):
+    attachment = await stored(
+        db, item, store, filename, b"content", kind=kind, content_type=content_type
+    )
+    url = f"/attachments/{attachment.id}/file"
+
+    download = await viewer_client.get(f"{url}?download=1")
+    shown = await viewer_client.get(url)
+
+    assert download.headers["content-disposition"] == (
+        f"attachment; filename*=utf-8''{quote(saved_as, safe='')}"
+    )
+    # Shown in the browser (and in the list) it keeps the name it was given.
+    assert shown.headers["content-disposition"] == (
+        f"inline; filename*=utf-8''{quote(filename, safe='')}"
+    )
+
+
+async def test_a_name_that_disguises_the_file_is_cleaned_and_a_download_gets_its_real_extension(
+    editor_client, item, db, store
+):
+    """ "annual<RLO>gpj.exe" is shown as "annualexe.jpg": the override is dropped from the name,
+    and what is saved ends in what the file is."""
+    pdf = await upload(editor_client, item.id, "annual\u202egpj.exe", samples.PDF, "image/jpeg")
+
+    row = await db.get_one(Attachment, pdf)
+    download = await editor_client.get(f"/attachments/{pdf}/file?download=1")
+
+    assert row.filename == "annualgpj.exe" and row.kind == "pdf"
+    disposition = download.headers["content-disposition"]
+    assert disposition == "attachment; filename*=utf-8''annualgpj.exe.pdf"
+    assert "%E2%80%AE" not in disposition  # percent-encoded U+202E
+    page = await editor_client.get(f"/items/{item.id}/details", headers=HX)
+    assert "\u202e" not in page.text and "annualgpj.exe" in page.text
 
 
 async def test_html_called_txt_is_shown_as_text_under_the_sandboxed_policy(

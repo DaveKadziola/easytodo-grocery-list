@@ -3,9 +3,11 @@ nothing behind), the limits, the thumbnails, the store of files, and the lookups
 service. Serving them is in test_serve.py."""
 
 import asyncio
+import errno
 import io
 import json
 import re
+import warnings
 
 import httpx
 import pytest
@@ -415,11 +417,14 @@ async def test_a_damaged_image_makes_no_derived_files_and_frees_the_task_row(
     assert len(await attachment_rows(db)) == 1
 
 
-@pytest.mark.filterwarnings("ignore::PIL.Image.DecompressionBombWarning")
-async def test_an_image_with_too_many_pixels_is_refused_before_it_is_decoded(
-    editor_client, item, db, store, monkeypatch
+@pytest.mark.parametrize(
+    "limit", [100, 50], ids=["above the limit (Pillow warns, twice)", "above twice the limit"]
+)
+async def test_an_image_with_too_many_pixels_is_refused_without_a_warning(
+    editor_client, item, db, store, monkeypatch, recwarn, limit
 ):
-    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)  # Pillow only warns up to twice this
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", limit)  # the picture has 144 pixels
+    filters = list(warnings.filters)
 
     r = await editor_client.post(
         f"/items/{item.id}/attachments",
@@ -429,6 +434,8 @@ async def test_an_image_with_too_many_pixels_is_refused_before_it_is_decoded(
 
     assert r.status_code == 422 and toast_message(r) == BROKEN_IMAGE
     assert nothing_left(await attachment_rows(db), store)
+    assert [w.message for w in recwarn if "pixels" in str(w.message)] == []  # none emitted
+    assert warnings.filters == filters  # and the process's warning filters are as they were
 
 
 async def test_an_image_far_over_the_pixel_limit_is_refused(editor_client, item, db, store):
@@ -440,6 +447,29 @@ async def test_an_image_far_over_the_pixel_limit_is_refused(editor_client, item,
     )
 
     assert r.status_code == 422 and toast_message(r) == BROKEN_IMAGE
+    assert nothing_left(await attachment_rows(db), store)
+
+
+@pytest.mark.parametrize("heic", [False, True], ids=["thumbnail", "heic preview"])
+async def test_a_file_that_cannot_be_written_is_a_server_error_and_leaves_nothing(
+    editor_client, item, db, store, monkeypatch, heic
+):
+    """A full disk is not a broken image: no BROKEN_IMAGE, no row, no file (not the half-written
+    thumbnail either)."""
+    content, name = (samples.heic(), "IMG.heic") if heic else (samples.png(), "photo.png")
+
+    def full_disk(self, *args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(Image.Image, "save", full_disk)
+    editor_client._transport.raise_app_exceptions = False  # the server's 500, not the exception
+
+    r = await editor_client.post(
+        f"/items/{item.id}/attachments", files={"file": (name, content)}, headers=HX
+    )
+
+    assert r.status_code == 500
+    assert BROKEN_IMAGE not in r.text and "hx-trigger" not in r.headers
     assert nothing_left(await attachment_rows(db), store)
 
 
@@ -631,6 +661,11 @@ async def test_two_uploads_at_the_same_moment_respect_the_limit_of_a_task(
         ("Łosoś & chips.txt", "Łosoś & chips.txt"),
         ("\x00\x01", "file"),
         ("", "file"),
+        # Format characters: the right-to-left override that makes "gpj.exe" read "exe.jpg",
+        # zero-width ones, the byte order mark, the soft hyphen.
+        ("photo\u202egpj.exe", "photogpj.exe"),
+        ("a\u200bb\u200c\u200d\u2060c\ufeff\u00ad.txt", "abc.txt"),
+        ("\u202e\u200b", "file"),
         (NASTY + ".txt", NASTY + ".txt"),
         ("x" * 300 + ".txt", "x" * 251 + ".txt"),
         ("x" * 300, "x" * 255),

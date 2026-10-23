@@ -2,8 +2,8 @@
    file as plain text, or a Markdown file rendered (without raw HTML and without any link that
    runs script, see attachments.service.render_markdown). A PDF has no page: the browser shows it
    (attachments.routes). The file's name is a member's text, escaped like any other value.
-   Context: attachment (Attachment), board_id, and text (a str, for a text file) or markdown
-   (Markup that is already safe, for a Markdown file). -#}
+   Context: attachment (Attachment), board_id, heic (a HEIC photo, shown as its JPEG preview), and
+   text (a str, for a text file) or markdown (Markup that is already safe, for a Markdown file). -#}
 {% extends "base.html" %}
 {% block title %}{{ attachment.filename }} · EasyToDo{% endblock %}
 {% block content %}
@@ -15,7 +15,7 @@
   </div>
 
   {% if attachment.kind == "image" %}
-  <img src="/attachments/{{ attachment.id }}/{{ 'preview' if attachment.content_type == 'image/heic' else 'file' }}" alt="{{ attachment.filename }}" class="mx-auto h-auto max-w-full rounded-lg">
+  <img src="/attachments/{{ attachment.id }}/{{ 'preview' if heic else 'file' }}" alt="{{ attachment.filename }}" class="mx-auto h-auto max-w-full rounded-lg">
   {% elif attachment.kind == "markdown" %}
   <div class="markdown card">{{ markdown }}</div>
   {% else %}

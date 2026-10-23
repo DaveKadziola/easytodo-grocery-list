@@ -15,7 +15,6 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.staticfiles import NotModifiedResponse
 
 from easytodo.attachments.service import (
     ATTACHMENT_GONE,
@@ -25,7 +24,7 @@ from easytodo.attachments.service import (
     read_text,
     render_markdown,
 )
-from easytodo.attachments.sniff import HEIC
+from easytodo.attachments.sniff import HEIC, download_name
 from easytodo.attachments.storage import AttachmentStore
 from easytodo.auth.deps import CurrentUser, DbSession
 from easytodo.boards.permissions import Action
@@ -103,7 +102,12 @@ def _served(
             f"{disposition}; filename*=utf-8''{quote(filename, safe='')}"
         )
     file = FileResponse(path, media_type=media_type, stat_result=_stat_of(path), headers=headers)
-    return NotModifiedResponse(file.headers) if _already_has(request, file) else file
+    if not _already_has(request, file):
+        return file
+    # A 304 updates the headers that the browser keeps with its copy: it carries the file's own
+    # policy (the sandbox, or the PDF viewer's) and name too, or the copy would lose them.
+    names = ("ETag", "Last-Modified", *headers)
+    return Response(status_code=304, headers={name: file.headers[name] for name in names})
 
 
 @router.post("/items/{item_id}/attachments")
@@ -143,8 +147,8 @@ async def view_attachment(
     if attachment.kind == "pdf":
         return RedirectResponse(f"/attachments/{attachment.id}/file", status_code=303)
     store = _store(request)
-    context: dict = {"attachment": attachment, "board_id": item.board_id}
-    heic = attachment.content_type == HEIC
+    heic = attachment.content_type == HEIC  # shown as its JPEG preview
+    context: dict = {"attachment": attachment, "board_id": item.board_id, "heic": heic}
     _stat_of(
         store.preview_path(attachment.storage_key) if heic else store.path(attachment.storage_key)
     )
@@ -182,7 +186,9 @@ async def attachment_file(
         _store(request).path(attachment.storage_key),
         media_type,
         csp,
-        filename=attachment.filename,
+        filename=download_name(attachment.filename, attachment.content_type)
+        if download
+        else attachment.filename,
         download=download,
     )
 
