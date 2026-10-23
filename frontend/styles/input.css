@@ -188,6 +188,14 @@
     @apply dark:bg-red-950 dark:text-red-200 dark:ring-red-900;
   }
 
+  /* The number of unread notifications on the bell (notifications/_badge.html). White on red-600
+     is above 4.5:1 (WCAG AA); the bell's button is 44×44 px, the badge sits on its corner and
+     does not take the tap. */
+  .notifications-badge {
+    @apply pointer-events-none absolute top-0.5 right-0.5 inline-flex h-5 min-w-5 items-center justify-center;
+    @apply rounded-full bg-red-600 px-1 text-xs leading-none font-semibold text-white tabular-nums;
+  }
+
   /* The board's connection in the header: a dot, and the word beside it from a tablet up (on a
      phone the header has no room; screen readers still get it). The shape tells the states apart
      without the colour: a filled green dot when live, a hollow ring otherwise (amber while it

@@ -32,6 +32,7 @@ from easytodo.middleware import (
     SecurityHeadersMiddleware,
     UploadSizeLimitMiddleware,
 )
+from easytodo.notifications.routes import router as notifications_router
 from easytodo.realtime.hub import Hub
 from easytodo.realtime.listener import EventListener, listener_dsn
 from easytodo.realtime.routes import router as realtime_router
@@ -130,6 +131,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(invite_router)
     app.include_router(content_router)
     app.include_router(sort_router)
+    app.include_router(notifications_router)
     app.include_router(realtime_router)
     app.include_router(admin_router)
     app.mount("/static", CachedStaticFiles(directory=STATIC_DIR), name="static")

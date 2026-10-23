@@ -1,0 +1,22 @@
+{# The bell's panel. In the header (base.html) it is only the heading: the panel is fetched when the bell opens (GET /notifications/panel), and swapped over this one with the notifications. Context: notifications (the latest, newest first; undefined: not fetched yet), retention_days. The messages quote names that other people chose: autoescaped, like all text here. -#}
+<div id="notifications-panel" class="menu left-4 right-4 top-full w-auto max-h-[70dvh] overflow-y-auto sm:left-auto sm:right-0 sm:top-auto sm:w-80">
+  <h2 class="px-3 pt-2 text-base font-semibold">Notifications</h2>
+  {% if notifications is defined %}
+  {% if notifications %}
+  <ul class="divide-y divide-slate-200 dark:divide-slate-700">
+    {% for n in notifications %}
+    <li id="notification-{{ n.id }}"{% if n.read_at is none %} data-unread{% endif %} class="border-l-4 border-transparent px-3 py-2 text-sm data-[unread]:border-emerald-600 data-[unread]:font-semibold dark:data-[unread]:border-emerald-400">
+      <p class="break-words">{{ n.message }}</p>
+      <p class="mt-1 flex flex-wrap items-center gap-x-4 text-xs font-normal text-slate-600 dark:text-slate-400">
+        <time datetime="{{ n.created_at.isoformat() }}" class="whitespace-nowrap">{{ n.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</time>
+        {% if n.board_id %}<a href="/boards/{{ n.board_id }}" class="link inline-flex min-h-11 items-center text-sm">Open board</a>{% endif %}
+      </p>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="px-3 py-3 text-sm">No notifications.</p>
+  {% endif %}
+  <p class="px-3 pb-2 text-xs text-slate-600 dark:text-slate-400">Notifications are kept for {{ retention_days }} days.</p>
+  {% endif %}
+</div>

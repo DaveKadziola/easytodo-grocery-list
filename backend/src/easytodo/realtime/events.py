@@ -10,7 +10,9 @@ leave only together with the commit: each is a ``pg_notify`` on ``board_events``
 transaction, which every worker's ``realtime.listener`` hands to its ``realtime.hub``. A socket
 gets the event as ``{"type", "board_id", "category_ids"}``, plus ``"item_ids"`` when there are some
 (the items whose details changed: a page with one of them open fetches its details again); the hub
-decides which sockets get it.
+decides which sockets get it. ``NOTIFICATIONS_CHANGED`` has no board: it names a user (``user_id``)
+and goes to that user's own sockets (``/ws/user``) as just ``{"type"}``, the page asking for the
+bell's new numbers itself.
 """
 
 import json
@@ -36,6 +38,7 @@ class EventType(StrEnum):
     CATEGORIES_REORDERED = "categories.reordered"
     MEMBER_REMOVED = "member.removed"
     SESSIONS_REVOKED = "sessions.revoked"
+    NOTIFICATIONS_CHANGED = "notifications.changed"
     RESYNC = "resync"
 
 

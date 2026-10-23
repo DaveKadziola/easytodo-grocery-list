@@ -119,9 +119,13 @@ async def test_owner_archives_board(
     after = await rows(db)
     assert [row[:3] for row in after[0]] == [row[:3] for row in before[0]]  # only archived_at
     assert after[1:] == before[1:]  # members, invites, categories and items are all kept
-    for user in (owner, await user_named(db, "editor@example.com")):
+    editor = await user_named(db, "editor@example.com")
+    for user in (owner, editor):
         assert await list_boards(db, user) == []
-    assert sharing_events == [BoardEvent(EventType.BOARD_DELETED, board_id=board.id)]
+    assert sharing_events == [  # the members are told; the owner archived it themself
+        BoardEvent(EventType.BOARD_DELETED, board_id=board.id),
+        BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=editor.id),
+    ]
     # "/" opened the last board shown on this device (and the user's only one): not any more.
     assert owner_client.cookies["easytodo_last_board"] == str(board.id)
     assert (await owner_client.get("/")).headers["location"] == "/boards"
@@ -285,7 +289,9 @@ async def test_restore_brings_everything_back(
     r = await owner_client.post(f"/boards/{board.id}/restore", headers=HX)
     assert r.status_code == 404  # only an archived board is restored
     assert toast_message(r) == BOARD_GONE
-    assert sharing_events == []  # nobody can have an archived board open
+    # Nobody can have an archived board open: only the bell has news, for the members.
+    editor = await user_named(db, "editor@example.com")
+    assert sharing_events == [BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=editor.id)]
 
 
 async def test_delete_needs_an_archived_board_and_its_typed_name(owner, board, client_factory, db):

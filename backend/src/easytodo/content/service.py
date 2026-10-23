@@ -48,7 +48,7 @@ from easytodo.content.validation import (
     clean_description,
     clean_name,
 )
-from easytodo.display import display_name
+from easytodo.display import display_name, user_display_name
 from easytodo.errors import Conflict, NameTaken, NotFound, ValidationFailed
 from easytodo.models import (
     Attachment,
@@ -58,8 +58,10 @@ from easytodo.models import (
     Category,
     ChecklistEntry,
     Item,
+    NotificationKind,
     User,
 )
+from easytodo.notifications.service import member_ids, notify
 from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
 
 CATEGORY_GONE = "This category no longer exists."
@@ -372,6 +374,8 @@ async def move_category(
     entries and files hang on the item, and so follow. People who are not members of the target
     board lose all of it at once. Everyone's own sort order for the category stays with it (the
     rows of ``category_sort_prefs``); those of people who cannot see it any more do nothing.
+
+    The members of both boards, but ``user``, are told (``notify``), each once.
     """
     category, _ = await load_category(db, category_id, user, Action.EDIT_CONTENT)
     target, _ = await require_board(db, target_board_id, user, Action.EDIT_CONTENT)
@@ -381,18 +385,36 @@ async def move_category(
     free = await suggest_category_name(db, target.id, name)
     if free != name:
         raise NameTaken(NAME_TAKEN_ON_TARGET.format(name=name), suggestion=free)
-    # Before the change: the query would flush it first, outside the savepoint.
+    # Before the change: their queries would flush it first, outside the savepoint. Who is told
+    # needs the boards as they are now, and the board it leaves by name.
     position = await _next_position(db, target.id)
     source_id = category.board_id
+    source_name = await db.scalar(select(Board.name).where(Board.id == source_id))
+    # Everyone who is on the target board is sent there (also those who are on both boards, once);
+    # the rest of the source board's members, who only lose it, are sent to the board it left.
+    # Not the one who moves it.
+    on_target = await member_ids(db, target.id, exclude=user.id)
+    on_source = set(await member_ids(db, source_id, exclude=user.id)) - set(on_target)
     async with _unique_category_name(db):  # also the target deleted meanwhile (a foreign key)
         category.board_id = target.id
         category.name = name
         category.position = position
         await db.flush()
+    said = {
+        "actor": user_display_name(user),
+        "category": name,
+        "source": source_name,
+        "target": target.name,
+    }
+    told = [
+        *notify(db, on_target, NotificationKind.CATEGORY_MOVED, board_id=target.id, **said),
+        *notify(db, sorted(on_source), NotificationKind.CATEGORY_MOVED, board_id=source_id, **said),
+    ]
     await commit_and_publish(
         db,
         BoardEvent(EventType.CATEGORY_DELETED, board_id=source_id, category_ids=(category.id,)),
         _category_changed(target.id, category.id),
+        *told,
     )
     return category, source_id
 

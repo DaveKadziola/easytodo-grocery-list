@@ -44,7 +44,12 @@ async def test_base_layout(client):
 @pytest.mark.parametrize(
     "path",
     [f"/static/vendor/{name}" for name in VENDOR_SCRIPTS]
-    + ["/static/js/app.js", "/static/js/board.js", "/static/js/realtime.js"]
+    + [
+        "/static/js/app.js",
+        "/static/js/board.js",
+        "/static/js/realtime.js",
+        "/static/js/notifications.js",
+    ]
     + ["/static/images/favicon.webp", "/static/manifest.webmanifest"],
 )
 async def test_static_files_are_served(client, path):
@@ -54,7 +59,13 @@ async def test_static_files_are_served(client, path):
 
 
 def test_the_apps_own_assets_have_a_content_version_in_their_url():
-    for path in ("js/app.js", "js/board.js", "js/realtime.js", "css/app.css"):
+    for path in (
+        "js/app.js",
+        "js/board.js",
+        "js/realtime.js",
+        "js/notifications.js",
+        "css/app.css",
+    ):
         digest = hashlib.sha256((FRONTEND_DIR / "static" / path).read_bytes()).hexdigest()
         assert static_url(path) == f"/static/{path}?v={digest[:12]}"
 

@@ -97,7 +97,8 @@ async def test_owner_changes_a_members_role(client_factory, db, team, sharing_ev
     }
     # Carries the member, so that member's own page can reload with its new controls.
     assert sharing_events == [
-        BoardEvent(EventType.BOARD_UPDATED, board_id=board.id, user_id=eve.id)
+        BoardEvent(EventType.BOARD_UPDATED, board_id=board.id, user_id=eve.id),
+        BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=eve.id),  # the bell on their devices
     ]
     eve_client = await signed_in(client_factory, "eve@example.com")
     r = await eve_client.post(f"/boards/{board.id}/categories", data={"name": "Dairy"}, headers=HX)
@@ -126,7 +127,8 @@ async def test_removed_member_loses_access(client_factory, db, team, sharing_eve
     assert "eve@example.com" not in r.text
     assert await members_of(db, board.id) == {owner.id: BoardRole.OWNER, frank.id: BoardRole.VIEWER}
     assert sharing_events == [
-        BoardEvent(EventType.MEMBER_REMOVED, board_id=board.id, user_id=eve.id)
+        BoardEvent(EventType.MEMBER_REMOVED, board_id=board.id, user_id=eve.id),
+        BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=eve.id),
     ]
     for path in (f"/boards/{board.id}", f"/boards/{board.id}/members"):
         r = await eve_client.get(path)
@@ -148,9 +150,11 @@ async def test_member_leaves_board(client_factory, db, team, sharing_events):
     assert r.headers["location"] == "/boards"
 
     assert await members_of(db, board.id) == {owner.id: BoardRole.OWNER}
-    assert sharing_events == [
+    assert sharing_events == [  # each leaving tells the owner
         BoardEvent(EventType.MEMBER_REMOVED, board_id=board.id, user_id=eve.id),
+        BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=owner.id),
         BoardEvent(EventType.MEMBER_REMOVED, board_id=board.id, user_id=frank.id),
+        BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=owner.id),
     ]
     assert (await eve_client.get(f"/boards/{board.id}")).status_code == 404
     assert "Groceries" not in (await eve_client.get("/boards")).text

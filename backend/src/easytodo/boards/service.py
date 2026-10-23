@@ -32,7 +32,7 @@ from sqlalchemy.orm import aliased
 
 from easytodo.boards.permissions import Action, RowLock, is_possible_id, require_board
 from easytodo.content.validation import clean_name
-from easytodo.display import display_name
+from easytodo.display import display_name, user_display_name
 from easytodo.errors import Conflict, Forbidden, NotFound, ValidationFailed
 from easytodo.models import (
     SORT_FIELDS,
@@ -44,8 +44,10 @@ from easytodo.models import (
     CategorySortPref,
     ChecklistEntry,
     Item,
+    NotificationKind,
     User,
 )
+from easytodo.notifications.service import member_ids, notify
 from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
 
 _NAME_MAX_LENGTH = 80  # boards.name is String(80)
@@ -271,23 +273,41 @@ async def rename_board(db: AsyncSession, board_id: int, user: User, name: str) -
 
 async def archive_board(db: AsyncSession, board_id: int, user: User) -> Board:
     """Archive the board: gone for its members, whose open pages leave it (``BOARD_DELETED``),
-    until its owner restores it. Its members, invites, categories and items are kept."""
+    until its owner restores it. Its members, invites, categories and items are kept. The members
+    are told (a notification with no board to open: it is archived)."""
     board, _ = await require_board(
         db, board_id, user, Action.MANAGE_BOARD, lock=RowLock.NO_KEY_UPDATE
     )
     # Not func.now(): the attribute would then expire, and async code cannot load it lazily.
     board.archived_at = datetime.now(UTC)
-    await commit_and_publish(db, BoardEvent(EventType.BOARD_DELETED, board_id=board.id))
+    told = notify(
+        db,
+        await member_ids(db, board.id, exclude=user.id),
+        NotificationKind.BOARD_ARCHIVED,
+        board_id=None,
+        actor=user_display_name(user),
+        board=board.name,
+    )
+    await commit_and_publish(db, BoardEvent(EventType.BOARD_DELETED, board_id=board.id), *told)
     return board
 
 
 async def restore_board(db: AsyncSession, board_id: int, user: User) -> Board:
-    """Bring an archived board back, with everything on it, for all its members."""
+    """Bring an archived board back, with everything on it, for all its members, who are told."""
     board, _ = await require_board(
         db, board_id, user, Action.MANAGE_BOARD, archived=True, lock=RowLock.NO_KEY_UPDATE
     )
     board.archived_at = None
-    await commit_and_publish(db)  # nobody can have an archived board open
+    told = notify(
+        db,
+        await member_ids(db, board.id, exclude=user.id),
+        NotificationKind.BOARD_RESTORED,
+        board_id=board.id,
+        actor=user_display_name(user),
+        board=board.name,
+    )
+    # No board event: nobody can have an archived board open. Only the bell has news.
+    await commit_and_publish(db, *told)
     return board
 
 
@@ -565,37 +585,70 @@ async def _member(db: AsyncSession, board_id: int, member_user_id: int) -> Board
 async def change_role(
     db: AsyncSession, board_id: int, user: User, member_user_id: int, role: BoardRole
 ) -> None:
-    """Make the member an editor or a viewer; the owner stays the owner, and nobody becomes one."""
-    await require_board(db, board_id, user, Action.MANAGE_MEMBERS)
+    """Make the member an editor or a viewer; the owner stays the owner, and nobody becomes one.
+    A member whose role changes is told."""
+    board, _ = await require_board(db, board_id, user, Action.MANAGE_MEMBERS)
     member = await _member(db, board_id, member_user_id)
     if role == BoardRole.OWNER or member.role == BoardRole.OWNER:
         raise Forbidden(OWNER_ROLE_FIXED)
+    told = []
+    if member.role != role:  # asking for the role they have tells nobody
+        told = notify(
+            db,
+            [member.user_id],
+            NotificationKind.ROLE_CHANGED,
+            board_id=board.id,
+            actor=user_display_name(user),
+            board=board.name,
+            role=role.value,
+        )
     member.role = role
     # Names the member: their own open board pages need a full reload, as their controls change.
     await commit_and_publish(
-        db, BoardEvent(EventType.BOARD_UPDATED, board_id=board_id, user_id=member_user_id)
+        db, BoardEvent(EventType.BOARD_UPDATED, board_id=board_id, user_id=member_user_id), *told
     )
 
 
 async def remove_member(db: AsyncSession, board_id: int, user: User, member_user_id: int) -> None:
-    await require_board(db, board_id, user, Action.MANAGE_MEMBERS)
+    board, _ = await require_board(db, board_id, user, Action.MANAGE_MEMBERS)
     member = await _member(db, board_id, member_user_id)
     if member.role == BoardRole.OWNER:  # only owners manage members, so: the owner leaving
         raise Conflict(OWNER_CANNOT_LEAVE)
-    await _delete_member(db, member)
+    await _delete_member(db, board, member, user, NotificationKind.MEMBER_REMOVED)
 
 
 async def leave_board(db: AsyncSession, board_id: int, user: User) -> None:
-    _, role = await require_board(db, board_id, user, Action.VIEW)
+    board, role = await require_board(db, board_id, user, Action.VIEW)
     if role == BoardRole.OWNER:
         raise Conflict(OWNER_CANNOT_LEAVE)
-    await _delete_member(db, await _member(db, board_id, user.id))
+    member = await _member(db, board_id, user.id)
+    await _delete_member(db, board, member, user, NotificationKind.MEMBER_LEFT)
 
 
-async def _delete_member(db: AsyncSession, member: BoardMember) -> None:
-    """Delete the membership; ``MEMBER_REMOVED`` names the user, whose open pages are closed."""
+async def _delete_member(
+    db: AsyncSession, board: Board, member: BoardMember, actor: User, kind: NotificationKind
+) -> None:
+    """Delete the membership; ``MEMBER_REMOVED`` names the user, whose open pages are closed.
+
+    ``kind`` says who is told, by ``actor``'s name: the owner when the member left
+    (``MEMBER_LEFT``, with the board to open), the member when they were removed
+    (``MEMBER_REMOVED``, with no board to open any more).
+    """
+    if kind == NotificationKind.MEMBER_LEFT:
+        recipient, linked = board.owner_id, board.id
+    else:
+        recipient, linked = member.user_id, None
     await db.delete(member)
+    told = notify(
+        db,
+        [recipient],
+        kind,
+        board_id=linked,
+        actor=user_display_name(actor),
+        board=board.name,
+    )
     await commit_and_publish(
         db,
         BoardEvent(EventType.MEMBER_REMOVED, board_id=member.board_id, user_id=member.user_id),
+        *told,
     )

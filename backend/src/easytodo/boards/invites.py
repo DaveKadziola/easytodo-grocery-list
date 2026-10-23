@@ -20,9 +20,11 @@ from easytodo.boards.permissions import (
     require_board,
 )
 from easytodo.config import Settings
+from easytodo.display import user_display_name
 from easytodo.errors import Forbidden, NotFound, ValidationFailed
 from easytodo.mail.mailer import Mailer, render_mail
-from easytodo.models import Board, BoardInvite, BoardMember, BoardRole, User
+from easytodo.models import Board, BoardInvite, BoardMember, BoardRole, NotificationKind, User
+from easytodo.notifications.service import notify
 from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
 from easytodo.security.tokens import hash_token, new_token
 
@@ -153,7 +155,8 @@ async def accept_invite(db: AsyncSession, raw_token: str, user: User) -> Board:
     A member already keeps their role (an invite never demotes anyone). An e-mail invite must be
     for ``user``'s address, and is used up even when ``user`` is a member already. The board
     returned is the one read before the member is added, not read again after the commit, when
-    another device may have deleted it already.
+    another device may have deleted it already (its name and owner go into the notification that
+    tells the owner someone joined).
     """
     invite = await get_valid_invite(db, raw_token)
     # FOR KEY SHARE: the board cannot be deleted before the commit (the new member's foreign
@@ -185,7 +188,19 @@ async def accept_invite(db: AsyncSession, raw_token: str, user: User) -> Board:
         .on_conflict_do_nothing(index_elements=[BoardMember.board_id, BoardMember.user_id])
         .returning(BoardMember.user_id)
     )
-    events = [BoardEvent(EventType.BOARD_UPDATED, board_id=board.id)] if joined else []
+    events: list[BoardEvent] = []
+    if joined:  # the board's members see a new one; the owner is told
+        events = [
+            BoardEvent(EventType.BOARD_UPDATED, board_id=board.id),
+            *notify(
+                db,
+                [board.owner_id],
+                NotificationKind.MEMBER_JOINED,
+                board_id=board.id,
+                actor=user_display_name(user),
+                board=board.name,
+            ),
+        ]
     await commit_and_publish(db, *events)
     return board
 

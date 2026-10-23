@@ -214,7 +214,10 @@
   }
 
   document.addEventListener("htmx:beforeSend", (event) => {
-    const { xhr } = event.detail;
+    const { elt, xhr } = event.detail;
+    // The bell's requests (notifications.js) are the page's background, not the user's own change
+    // to the board: they must not hold updates back or make their answers stale.
+    if (elt instanceof Element && elt.closest("#notifications")) return;
     if (sendingRefresh || sendingDetails) {
       if (sendingRefresh) refreshXhr = xhr;
       else detailsXhr = xhr;

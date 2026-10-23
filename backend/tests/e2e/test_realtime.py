@@ -595,8 +595,10 @@ def test_removed_member_is_sent_to_the_board_list(
     board_id = seed(make)
     viewer_page = signed_in_as("vic@example.com")
     open_board(viewer_page, board_id)
-    reconnects = []
-    viewer_page.on("websocket", lambda ws: reconnects.append(ws.url))
+    reconnects = []  # only the board's sockets: the bell's /ws/user stays connected
+    viewer_page.on(
+        "websocket", lambda ws: reconnects.append(ws.url) if "/ws/boards/" in ws.url else None
+    )
 
     owner_page = logged_in_page
     owner_page.goto(f"/boards/{board_id}/members")
@@ -641,7 +643,7 @@ def test_member_removed_while_disconnected_is_sent_to_the_board_list(
 
 def test_signed_out_device_is_sent_to_the_login_page(two_logged_in_pages):
     a, b = two_logged_in_pages
-    reconnects = []
+    reconnects = []  # every socket: the bell's /ws/user does not come back after 4401 either
     b.on("websocket", lambda ws: reconnects.append(ws.url))
 
     a.goto("/account")

@@ -128,8 +128,8 @@ def test_the_whole_card_opens_its_board_but_the_menu_button_does_not(logged_in_p
     seed(lambda db: create_board(db, user, "Groceries"))
     page.goto("/boards")
 
-    open_board_menu(page, "Groceries")
-    expect(page.locator(".menu")).to_be_visible()
+    card = open_board_menu(page, "Groceries")
+    expect(card.locator(".menu")).to_be_visible()  # not the bell's panel, a .menu as well
     expect(page).to_have_url(re.compile(r"/boards$"))
     page.keyboard.press("Escape")
     box = page.locator("li.card").bounding_box()

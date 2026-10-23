@@ -15,6 +15,7 @@ from factories import (
     create_category,
     create_checklist_entry,
     create_item,
+    create_notification,
     create_user,
 )
 from helpers import NASTY, NASTY_ESCAPED, count_queries, signed_in
@@ -107,6 +108,9 @@ async def test_board_page_statement_budget(app, client_factory, shared):
         r = await editor.get(f"/boards/{shared.board.id}")
     assert r.status_code == 200
     assert "Milk" in r.text
+    # With the bell in the header: it loads its own badge (GET /notifications/badge), so
+    # rendering the page asks the database nothing for it.
+    assert 'hx-get="/notifications/badge" hx-trigger="load"' in r.text
     with statements_of(app) as content:  # the fragment the page fetches again over its socket
         r = await editor.get(f"/boards/{shared.board.id}/content")
     assert r.status_code == 200
@@ -114,6 +118,30 @@ async def test_board_page_statement_budget(app, client_factory, shared):
     # The page is the request people wait for most. Raise this only with a bench.
     assert len(page) <= 5, page
     assert len(content) <= 4, content
+
+
+async def test_notification_routes_statement_budget(app, client_factory, shared, db):
+    # The bell loads its badge on its own, so the page above pays nothing for it. Each route is the
+    # session lookup and: the unread count (2); the 20 latest (2); the update that reads them and
+    # the ``pg_notify`` that tells the reader's other devices, in the same commit (3).
+    owner = shared.owner
+    await create_notification(db, owner)
+    await create_notification(db, owner)
+    owner_client = await signed_in(client_factory, "owner@example.com")
+
+    with statements_of(app) as badge:
+        r = await owner_client.get("/notifications/badge")
+    assert r.status_code == 200
+    with statements_of(app) as panel:
+        r = await owner_client.get("/notifications/panel")
+    assert r.status_code == 200
+    with statements_of(app) as read:
+        r = await owner_client.post("/notifications/read", headers=HX)
+    assert r.status_code == 200
+
+    assert len(badge) <= 2, badge
+    assert len(panel) <= 2, panel
+    assert len(read) <= 3, read
 
 
 async def test_category_view_takes_two_statements(db):

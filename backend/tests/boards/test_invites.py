@@ -86,7 +86,16 @@ async def test_link_invite_grants_role(client_factory, db, sharing_events):
         assert await role_of(db, board.id, user.id) == BoardRole.EDITOR
         assert (await member.get(f"/boards/{board.id}")).status_code == 200
 
-    assert sharing_events == [BoardEvent(EventType.BOARD_UPDATED, board_id=board.id)] * 2
+    assert (
+        sharing_events
+        == [
+            BoardEvent(EventType.BOARD_UPDATED, board_id=board.id),
+            BoardEvent(
+                EventType.NOTIFICATIONS_CHANGED, user_id=owner.id
+            ),  # each joining tells the owner
+        ]
+        * 2
+    )
 
 
 async def test_only_owner_can_invite(editor_client, board, client_factory, db):

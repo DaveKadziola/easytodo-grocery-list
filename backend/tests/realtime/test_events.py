@@ -18,6 +18,7 @@ def test_event_types_use_the_wire_names():
         "CATEGORIES_REORDERED": "categories.reordered",
         "MEMBER_REMOVED": "member.removed",
         "SESSIONS_REVOKED": "sessions.revoked",
+        "NOTIFICATIONS_CHANGED": "notifications.changed",
         "RESYNC": "resync",
     }
 

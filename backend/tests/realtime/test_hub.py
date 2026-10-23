@@ -1,13 +1,20 @@
-"""The hub: which board sockets get which event, and which sockets are closed with which code."""
+"""The hub: which board and user sockets get which event, and which sockets are closed with which
+code. A user socket has no board (``board_id=None``)."""
 
 import json
 
 from easytodo.realtime.events import BoardEvent, EventType
-from easytodo.realtime.hub import QUEUE_SIZE, Hub, Subscriber
+from easytodo.realtime.hub import (
+    MAX_SOCKETS_PER_SESSION,
+    QUEUE_SIZE,
+    CloseCode,
+    Hub,
+    Subscriber,
+)
 
 
 def sub(
-    board_id: int = 1, user_id: int = 1, session_id: int = 1, client_id: str | None = None
+    board_id: int | None = 1, user_id: int = 1, session_id: int = 1, client_id: str | None = None
 ) -> Subscriber:
     return Subscriber(
         board_id=board_id, user_id=user_id, session_id=session_id, client_id=client_id
@@ -189,3 +196,95 @@ async def test_unsubscribed_socket_gets_nothing():
     assert hub.subscribers() == [staying]
     await hub.reconnect_all()
     assert gone.close_code is None and staying.close_code == 1013
+
+
+NOTIFIED = {"type": "notifications.changed"}
+
+
+async def test_notifications_changed_reaches_that_users_sockets_except_the_origin_tab():
+    tab_a = sub(board_id=None, user_id=5, session_id=1, client_id="A")
+    tab_b = sub(board_id=None, user_id=5, session_id=1, client_id="B")
+    phone = sub(board_id=None, user_id=5, session_id=2, client_id="P")
+    unnamed = sub(board_id=None, user_id=5, session_id=3)  # no client id: never the origin
+    other_user = sub(board_id=None, user_id=6, session_id=4, client_id="B")
+    board_page = sub(board_id=1, user_id=5, session_id=1, client_id="B")
+    hub = hub_with(tab_a, tab_b, phone, unnamed, other_user, board_page)
+
+    await hub.dispatch(BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=5, origin="A"))
+
+    for told in (tab_b, phone, unnamed):
+        assert messages(told) == [NOTIFIED]  # no data: the page asks for what it shows
+    for not_told in (tab_a, other_user, board_page):
+        assert messages(not_told) == []
+    assert all(s.close_code is None for s in hub.subscribers())
+
+    # No origin (a request without X-Client-Id): every socket of the user, the first tab too.
+    await hub.dispatch(BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=5))
+    assert [len(messages(s)) for s in (tab_a, tab_b, phone, unnamed)] == [1, 1, 1, 1]
+    assert messages(other_user) == [] and messages(board_page) == []
+
+
+async def test_board_events_do_not_reach_user_sockets():
+    user_socket = sub(board_id=None, user_id=5, client_id="B")
+    board_page = sub(board_id=1, user_id=5, client_id="B")
+    hub = hub_with(user_socket, board_page)
+
+    for event in (
+        BoardEvent(EventType.CATEGORY_CHANGED, board_id=1, category_ids=(7,)),
+        BoardEvent(EventType.CATEGORIES_REORDERED, board_id=1),
+        BoardEvent(EventType.MEMBER_REMOVED, board_id=1, user_id=5),
+    ):
+        await hub.dispatch(event)
+
+    assert messages(user_socket) == [] and user_socket.close_code is None
+    assert [m["type"] for m in messages(board_page)] == [
+        "category.changed",
+        "categories.reordered",
+        "member.removed",
+    ]
+    assert board_page.close_code == 4403  # removed from the board; the user's socket stays
+    assert hub.subscribers() == [user_socket]
+
+
+async def test_user_sockets_close_on_revoked_sessions_and_on_reconnect_all():
+    revoked = sub(board_id=None, user_id=5, session_id=10)
+    revoked_board = sub(board_id=1, user_id=5, session_id=10)
+    kept = sub(board_id=None, user_id=5, session_id=11)
+    revoked.queue.put_nowait("{}")  # not sent any more
+    hub = hub_with(revoked, revoked_board, kept)
+
+    await hub.dispatch(BoardEvent(EventType.SESSIONS_REVOKED, user_id=5, session_ids=(10,)))
+
+    assert (revoked.close_code, revoked_board.close_code, kept.close_code) == (4401, 4401, None)
+    assert revoked.queue.empty()
+    assert hub.subscribers() == [kept]
+
+    await hub.reconnect_all()  # the listener lost its connection: events may have been missed
+
+    assert kept.close_code == 1013
+    assert hub.subscribers() == []
+
+
+async def test_subscribe_refuses_more_than_30_sockets_per_session():
+    assert MAX_SOCKETS_PER_SESSION == 30
+    hub = Hub()
+    # Board pages and user sockets count together, whatever the board.
+    sockets = [sub(board_id=None if n % 2 else n, session_id=1) for n in range(30)]
+    assert [hub.subscribe(s) for s in sockets] == [True] * 30
+
+    extra = sub(board_id=None, session_id=1)
+    assert hub.subscribe(extra) is False
+    assert extra not in hub.subscribers() and len(hub.subscribers()) == 30
+    assert hub.subscribe(sub(board_id=None, session_id=2)) is True  # another session's budget
+
+    # A socket the hub closed is out of the count, and the route's own unsubscribe afterwards
+    # frees nothing more (one place, not three).
+    hub._close_now(sockets[0], CloseCode.TRY_AGAIN_LATER)
+    hub.unsubscribe(sockets[0])
+    hub.unsubscribe(sockets[0])
+    assert hub.subscribe(sub(board_id=None, session_id=1)) is True
+    assert hub.subscribe(sub(board_id=None, session_id=1)) is False
+
+    hub.unsubscribe(sockets[1])  # a user socket's own way out
+    assert hub.subscribe(sub(board_id=None, session_id=1)) is True
+    assert hub.subscribe(sub(board_id=None, session_id=1)) is False

@@ -51,6 +51,7 @@ async def test_move_takes_the_category_and_all_its_items_to_the_end(
     editor_client, board, category, item, target_board, db, published
 ):
     owner = await db.scalar(select(User).where(User.email == "owner@example.com"))
+    target_owner = await db.scalar(select(User).where(User.email == "target-owner@example.com"))
     await create_category(db, target_board, "Bakery", position=0)
     await create_category(db, target_board, "Fruit", position=3)
     await create_category(db, target_board, "Old", position=9, archived_at=datetime.now(UTC))
@@ -103,6 +104,10 @@ async def test_move_takes_the_category_and_all_its_items_to_the_end(
                     board_id=target_board.id,
                     category_ids=(category.id,),
                 ),
+                # The bell: the target board's other members first, then those of the board it
+                # left (not the editor who moved it).
+                BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=target_owner.id),
+                BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=owner.id),
             ),
             "tab-1",
         )
