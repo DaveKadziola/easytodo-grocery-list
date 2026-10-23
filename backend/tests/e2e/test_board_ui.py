@@ -326,6 +326,12 @@ def test_viewer_reads_an_item_in_a_read_only_dialog(signed_in_as, seed, user, op
     page.keyboard.press("Shift+Tab")
     expect(close).to_be_focused()
 
+    # Text cannot take the focus, so a click on it leaves it on the dialog's panel: Shift+Tab
+    # still goes round to "Close", and Escape is still heard.
+    dialog.get_by_text("2 litres").click()
+    page.keyboard.press("Shift+Tab")
+    expect(close).to_be_focused()
+    dialog.get_by_text("2 litres").click()
     page.keyboard.press("Escape")
 
     expect(dialog).to_be_hidden()

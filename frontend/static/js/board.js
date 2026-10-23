@@ -214,10 +214,12 @@
   document.addEventListener("htmx:beforeSwap", (event) => {
     kept = null;
     const { target, requestConfig, xhr } = event.detail;
-    // The details of an item that is not the open one any more (closed meanwhile, or another one
-    // opened) have nowhere to go.
+    // The details of an item that is not the open one any more (another opened meanwhile, or none)
+    // are not swapped in. (An answer for the open item whose placeholder was replaced since, by a
+    // reopening, aims at an element that is gone: htmx does nothing with that, and its event never
+    // reaches the document.)
     const details = requestConfig && DETAILS_PATH.exec(requestConfig.path);
-    if (details && (Number(details[1]) !== openId || !target.isConnected)) {
+    if (details && Number(details[1]) !== openId) {
       event.detail.shouldSwap = false;
       return;
     }
@@ -380,13 +382,22 @@
   });
 
   // The open item's details, fetched into #item-details, which they replace (the slot around it
-  // stays: htmx-config swaps outerHTML). When the modal opens, and again when realtime.js sees an
-  // event that names the item. Returns htmx's promise of the request, or nothing when no item is
-  // open.
+  // stays: htmx-config swaps outerHTML). Returns htmx's promise of the request.
+  // `source` is the element the request comes from, and htmx queues a request behind another one
+  // from the same element (resolving its promise at once, so the caller would think it was sent
+  // and realtime.js would not see its XHR start): the fetch when the modal opens comes from the
+  // slot, the refresh realtime.js asks for from #item-details itself, so one is never queued
+  // behind the other. (Two refreshes at a time do not happen: realtime.js sends one at a time.)
+  function fetchDetails(source) {
+    return htmx.ajax("GET", `/items/${openId}/details`, { source, target: "#item-details" });
+  }
+
+  // The refresh of the open item's details after an event named it (realtime.js); nothing when no
+  // item is open.
   function refreshDetails() {
-    const slot = document.getElementById("item-details-slot");
-    if (openId === null || !slot) return undefined;
-    return htmx.ajax("GET", `/items/${openId}/details`, { source: slot, target: "#item-details" });
+    const details = document.getElementById("item-details");
+    if (openId === null || !details) return undefined;
+    return fetchDetails(details);
   }
 
   window.easytodoBoard = {
@@ -417,10 +428,13 @@
     if (controls.length === 0) return;
     const first = controls[0];
     const last = controls[controls.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
+    const active = document.activeElement;
+    // The panel itself (tabindex -1: a click on text in it leaves the focus there) is no Tab stop,
+    // but Shift+Tab from it must not leave for the page behind either.
+    if (event.shiftKey && (active === first || active === event.currentTarget)) {
       event.preventDefault();
       last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
+    } else if (!event.shiftKey && active === last) {
       event.preventDefault();
       first.focus();
     }
@@ -435,7 +449,7 @@
     const placeholder = document.createElement("div");
     placeholder.id = "item-details";
     component.$refs.details.replaceChildren(placeholder);
-    Promise.resolve(refreshDetails()).catch(() => {}); // a failed request shows its own error
+    Promise.resolve(fetchDetails(component.$refs.details)).catch(() => {}); // it shows its own error
     component.open = true;
     editing = true;
     setPageInert(true);

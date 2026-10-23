@@ -191,8 +191,8 @@ def _category_changed(
     board_id: int, *category_ids: int, item_ids: Iterable[int] = ()
 ) -> BoardEvent:
     """The event for a change inside these categories. ``item_ids`` are the items whose details
-    changed (checklist, files), so that a page with one of them open fetches its details again;
-    no duplicates in either list."""
+    changed (an edit, a tick or a move, which set "Modified", or the checklist or the files), so
+    that a page with one of them open fetches its details again; no duplicates in either list."""
     return BoardEvent(
         EventType.CATEGORY_CHANGED,
         board_id=board_id,
@@ -416,14 +416,16 @@ _ITEM_ID = bindparam("item_id", type_=BigInteger)
 # tied to a row: the members are counted once, not for every entry) and the entries, one row each.
 _DETAILS_OF_ITEM = (
     select(
-        User.id,
-        User.email,
-        User.display_name,
+        User.id.label("author_id"),
+        User.email.label("author_email"),
+        User.display_name.label("author_name"),
         ChecklistEntry,
-        select(func.count())
-        .where(BoardMember.board_id == bindparam("board_id", type_=BigInteger))
-        .scalar_subquery()
-        > 1,
+        (
+            select(func.count())
+            .where(BoardMember.board_id == bindparam("board_id", type_=BigInteger))
+            .scalar_subquery()
+            > 1
+        ).label("shared"),
     )
     .select_from(Item)
     .outerjoin(User, User.id == Item.created_by)
@@ -450,12 +452,14 @@ async def get_item_details(db: AsyncSession, item_id: int, user: User) -> ItemDe
     ).all()
     if not rows:
         raise NotFound(ITEM_GONE)
-    author_id, email, name, _, shared = rows[0]  # the same in every row
-    author = None if author_id is None else Author(author_id, display_name(email, name))
-    entries = [row[3] for row in rows if row[3] is not None]
+    first = rows[0]  # the author and whether the board is shared are the same in every row
+    author = None
+    if first.author_id is not None:
+        author = Author(first.author_id, display_name(first.author_email, first.author_name))
+    entries = [row.ChecklistEntry for row in rows if row.ChecklistEntry is not None]
     attachments = (await db.scalars(_FILES_OF_ITEM, {"item_id": item.id})).all()
     return ItemDetails(
-        item, role, author, author is not None and shared, entries, list(attachments)
+        item, role, author, author is not None and first.shared, entries, list(attachments)
     )
 
 
@@ -485,7 +489,9 @@ async def update_item(
     item, _ = await load_item(db, item_id, user, Action.EDIT_CONTENT)
     item.name = _clean_item_name(name)
     item.description = clean_description(description)
-    await commit_and_publish(db, _category_changed(item.board_id, item.category_id))
+    await commit_and_publish(
+        db, _category_changed(item.board_id, item.category_id, item_ids=(item.id,))
+    )
     return item
 
 
@@ -504,7 +510,9 @@ async def toggle_item(db: AsyncSession, item_id: int, user: User, done: bool | N
         return item
     item.is_done = wanted
     item.done_at = datetime.now(UTC) if wanted else None
-    await commit_and_publish(db, _category_changed(item.board_id, item.category_id))
+    await commit_and_publish(
+        db, _category_changed(item.board_id, item.category_id, item_ids=(item.id,))
+    )
     return item
 
 
@@ -534,7 +542,9 @@ async def move_item(
         raise NotFound(CATEGORY_GONE)
     old_category_id = item.category_id
     item.category_id = target.id
-    await commit_and_publish(db, _category_changed(item.board_id, old_category_id, target.id))
+    await commit_and_publish(
+        db, _category_changed(item.board_id, old_category_id, target.id, item_ids=(item.id,))
+    )
     return item, old_category_id
 
 

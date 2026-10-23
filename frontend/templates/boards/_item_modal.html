@@ -7,9 +7,11 @@
    shown and hidden with its hidden attribute ("closed"), not x-show, which would wait for the
    next animation frame and so fall out of step with the page behind (see board.js). Below the form
    is the slot of the item's details (#item-details, fetched when the modal opens and again when
-   an event names the item); a member who may not edit gets _item_viewer.html instead. -#}
+   an event names the item); a member who may not edit gets _item_viewer.html instead. The panel has
+   tabindex -1 (no Tab stop): a click on text in it leaves the focus there, so Esc is still heard
+   inside the dialog rather than on the page behind it. -#}
 <div hidden :hidden="closed" class="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/50 dark:bg-black/60 sm:items-center sm:p-4" @click.self="dismiss" @keydown.escape="close">
-  <div role="dialog" aria-modal="true" aria-labelledby="item-modal-title" class="max-h-dvh w-full max-w-md overflow-y-auto rounded-t-2xl bg-white dark:bg-slate-900 p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-xl sm:rounded-2xl" @keydown.tab="trapFocus">
+  <div role="dialog" aria-modal="true" aria-labelledby="item-modal-title" tabindex="-1" class="max-h-dvh w-full max-w-md overflow-y-auto rounded-t-2xl bg-white dark:bg-slate-900 p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-xl focus:outline-none sm:rounded-2xl" @keydown.tab="trapFocus">
     <h2 id="item-modal-title" class="text-lg font-semibold">Edit item</h2>
     <form x-ref="form" @submit.prevent="save" class="mt-4 space-y-4">
       <div>

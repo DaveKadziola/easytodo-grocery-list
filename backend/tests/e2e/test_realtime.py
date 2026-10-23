@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 import pytest
 from factories import create_board, create_category, create_item, create_user
 from playwright.sync_api import Locator, Page, Route, WebSocketRoute, expect
-from sqlalchemy import delete, update
+from sqlalchemy import delete, select, update
 
 from e2e.conftest import open_board_menu
 from e2e.locators import add_item, category, item, items_of
@@ -237,6 +237,100 @@ def test_open_item_details_refresh_live_while_the_board_waits(
     expect(page.get_by_role("button", name="Whole milk", exact=True)).to_be_visible(
         timeout=LIVE_UPDATE_MS
     )
+
+
+def set_updated_at(seed, item_id: int, when: datetime) -> None:
+    async def run(db):
+        await db.execute(update(Item).where(Item.id == item_id).values(updated_at=when))
+        await db.commit()
+
+    seed(run)
+
+
+def modified(seed, item_id: int) -> str:
+    """The "Modified" date of the item as the details show it."""
+    when = seed(lambda db: db.scalar(select(Item.updated_at).where(Item.id == item_id)))
+    return f"Modified {when:%Y-%m-%d %H:%M} UTC"
+
+
+@pytest.mark.parametrize("change", ["tick", "rename"])
+def test_open_item_details_show_a_tick_or_rename_from_another_device(
+    two_logged_in_pages, seed, change
+):
+    a, b = two_logged_in_pages
+    milk_id = seed(lambda db: db.scalar(select(Item.id)))
+    set_updated_at(seed, milk_id, datetime(2030, 1, 2, 3, 4, tzinfo=UTC))
+    a.get_by_role("button", name="Milk", exact=True).click()
+    dialog = a.get_by_role("dialog")
+    details = dialog.locator("#item-details")
+    expect(details).to_contain_text("Modified 2030-01-02 03:04 UTC")
+    name = dialog.get_by_label("Name")
+    name.fill("Oat milk")
+
+    if change == "tick":
+        with b.expect_response(TOGGLED):
+            b.get_by_role("checkbox", name="Milk").check()
+    else:
+        b.get_by_role("button", name="Milk", exact=True).click()
+        other = b.get_by_role("dialog")
+        other.get_by_label("Name").fill("Whole milk")
+        with b.expect_response(re.compile(r"/items/\d+$")):
+            other.get_by_role("button", name="Save").click()
+
+    expect(details).to_contain_text(modified(seed, milk_id), timeout=LIVE_UPDATE_MS)
+    expect(details).not_to_contain_text("2030-01-02")
+    expect(name).to_have_value("Oat milk")  # what is being typed stays
+    expect(name).to_be_focused()
+
+
+def test_details_refresh_is_not_queued_behind_the_fetch_that_opened_them(
+    signed_in_page, seed, user, open_board
+):
+    """htmx queues a request behind another one from the same element, and answers the promise
+    of the queued one at once: the refresh must not come from the element the opening fetch did."""
+    board_id = seed_two_categories(seed, user)
+    page = signed_in_page()
+    open_board(page, board_id)
+    held: list[Route] = []
+    page.route(DETAILS, lambda route: held.append(route))  # each details request waits for the test
+
+    page.get_by_role("button", name="Milk", exact=True).click()
+    wait_until(page, lambda: len(held) == 1, "the fetch that opens the details")
+    # A tab sent to the background lets go of what it holds; back on it, the details are fetched
+    # again, while the first fetch is still on its way.
+    set_visibility(page, "hidden")
+    set_visibility(page, "visible")
+
+    wait_until(page, lambda: len(held) == 2, "the refresh, sent while the first fetch is held")
+    for route in held:
+        route.continue_()
+    expect(page.locator("#item-details")).to_contain_text("Modified")
+
+
+def test_open_item_details_are_fetched_once_again_after_a_reconnect(
+    signed_in_page, seed, user, open_board
+):
+    board_id = seed_two_categories(seed, user)
+    milk_id = seed(lambda db: db.scalar(select(Item.id).where(Item.name == "Milk")))
+    set_updated_at(seed, milk_id, datetime(2030, 1, 2, 3, 4, tzinfo=UTC))
+    page = signed_in_page()
+    sockets = routed_sockets(page)
+    open_board(page, board_id)
+    page.get_by_role("button", name="Milk", exact=True).click()
+    details = page.locator("#item-details")
+    expect(details).to_contain_text("Modified 2030-01-02 03:04 UTC")
+    fetched: list[str] = []
+    page.on("request", lambda r: fetched.append(r.url) if DETAILS.search(r.url) else None)
+
+    sockets[0].close(code=1012)  # the connection drops, with the item open
+    expect(page.locator("#conn-status")).to_have_text("Reconnecting…")
+    # A change that no event brings: made while the page was not connected.
+    set_updated_at(seed, milk_id, datetime(2031, 5, 6, 7, 8, tzinfo=UTC))
+
+    expect(details).to_contain_text("Modified 2031-05-06 07:08 UTC", timeout=5000)
+    assert len(sockets) == 2
+    page.wait_for_timeout(SETTLE_MS)
+    assert len(fetched) == 1, fetched
 
 
 def test_refresh_during_a_held_touch_drag_does_not_end_it(

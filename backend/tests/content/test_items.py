@@ -30,8 +30,11 @@ def toast(response) -> str:
     return json.loads(response.headers["hx-trigger"])["toast"]["message"]
 
 
-def changed(board_id: int, *category_ids: int) -> BoardEvent:
-    return BoardEvent(EventType.CATEGORY_CHANGED, board_id=board_id, category_ids=category_ids)
+def changed(board_id: int, *category_ids: int, items: tuple[int, ...] = ()) -> BoardEvent:
+    """The event of a change in these categories; ``items``: the ones whose details changed."""
+    return BoardEvent(
+        EventType.CATEGORY_CHANGED, board_id=board_id, category_ids=category_ids, item_ids=items
+    )
 
 
 def item_ids_in(html: str) -> list[int]:
@@ -107,7 +110,7 @@ async def test_update_item_changes_name_and_description(editor_client, board, it
     assert f'id="category-{item.category_id}"' in r.text and "Whole milk" in r.text
     row = (await db.execute(select(Item.name, Item.description))).one()
     assert tuple(row) == ("Whole milk", "3.2% fat")
-    assert published == [((changed(board.id, item.category_id),), "tab-1")]
+    assert published == [((changed(board.id, item.category_id, items=(item.id,)),), "tab-1")]
 
     r = await editor_client.patch(f"/items/{item.id}", data={"name": "Milk", "description": "  "})
     assert r.status_code == 200
@@ -128,7 +131,7 @@ async def test_toggle_sets_and_clears_done_at(editor_client, board, item, db, pu
     assert f'id="category-{item.category_id}"' in r.text
     assert item_ids_in(r.text) == [later.id, item.id]  # done items go last
     assert re.search(rf'id="item-{item.id}"[^>]*line-through', r.text)
-    assert published == [((changed(board.id, item.category_id),), "tab-1")]
+    assert published == [((changed(board.id, item.category_id, items=(item.id,)),), "tab-1")]
 
     r = await editor_client.post(f"/items/{item.id}/toggle")
 
@@ -197,7 +200,7 @@ async def test_move_item_to_another_category_of_the_board(
     assert tuple(row) == (bakery.id, board.id)
     bakery_html = r.text[r.text.index(f'id="category-{bakery.id}"') :]
     assert item_ids_in(bakery_html) == [item.id]
-    assert published == [((changed(board.id, category.id, bakery.id),), "tab-1")]
+    assert published == [((changed(board.id, category.id, bakery.id, items=(item.id,)),), "tab-1")]
 
     published.clear()
     r = await editor_client.post(f"/items/{item.id}/move", data={"category_id": bakery.id})

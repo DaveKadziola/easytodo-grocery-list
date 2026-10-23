@@ -354,6 +354,20 @@ def test_item_modal_keeps_the_keyboard_inside_and_closes_on_escape(logged_in_pag
     expect(opener).to_be_focused()
 
 
+def test_item_modal_closes_on_escape_after_a_click_on_its_text(logged_in_page_with_seed):
+    page = logged_in_page_with_seed
+    opener = page.get_by_role("button", name="Bread", exact=True)
+    opener.click()
+    dialog = page.get_by_role("dialog")
+    expect(dialog.get_by_label("Name")).to_be_focused()
+
+    dialog.get_by_role("heading", name="Edit item").click()  # text: the focus stays in the dialog
+    page.keyboard.press("Escape")
+
+    expect(dialog).to_be_hidden()
+    expect(opener).to_be_focused()
+
+
 def test_item_modal_focus_trap_skips_what_cannot_take_focus(logged_in_page_with_seed):
     page = logged_in_page_with_seed
     page.get_by_role("button", name="Bread", exact=True).click()
