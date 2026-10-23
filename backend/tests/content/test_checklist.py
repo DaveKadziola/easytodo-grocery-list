@@ -381,8 +381,20 @@ async def test_editor_controls_with_escaped_text(
     assert re.search(r"<ul [^>]*data-sortable-checklist>", r.text)
     assert f'<li id="checklist-entry-{entry.id}" data-entry-id="{entry.id}"' in r.text
     assert f'value="{NASTY_ESCAPED}"' in r.text
-    for label in (f"{NASTY_ESCAPED}", f"Edit {NASTY_ESCAPED}", f"Delete {NASTY_ESCAPED}"):
+    for label in (
+        f"{NASTY_ESCAPED}",
+        f"Edit {NASTY_ESCAPED}",
+        f"Delete {NASTY_ESCAPED}",
+        f"Move {NASTY_ESCAPED}",
+    ):
         assert f'aria-label="{label}"' in r.text, label
+    # The handle takes the focus (the keyboard's way to reorder, board.js) and is also what a drag
+    # starts from; it is a span, as Firefox starts no drag from a button in the draggable row.
+    handle = re.search(rf'<span id="checklist-{entry.id}-handle"[^>]*>', r.text)
+    assert handle, "no handle"
+    assert 'class="checklist-handle ' in handle.group(0)
+    assert 'role="button"' in handle.group(0) and 'tabindex="0"' in handle.group(0)
+    assert f'aria-label="Move {NASTY_ESCAPED}"' in handle.group(0)
     assert "<script>alert(1)</script>" not in r.text and "<b>" not in r.text
     # Nothing the board's scripts would take for an item or a category on the page.
     assert "data-item-id" not in r.text and "data-category-" not in r.text
@@ -391,6 +403,7 @@ async def test_editor_controls_with_escaped_text(
     r = await viewer_client.get(f"/items/{item.id}/details", headers=HX)
 
     assert NASTY_ESCAPED in r.text
+    assert "checklist-handle" not in r.text  # nothing to move for a viewer
     assert "<script>alert(1)</script>" not in r.text and "<b>" not in r.text
     assert "data-item-id" not in r.text and "data-category-" not in r.text
     assert not re.search(r'id="(item|category)-\d', r.text)
@@ -516,3 +529,111 @@ async def test_entries_added_at_the_same_moment_take_one_position_each(editor_cl
     assert [r.status_code for r in responses] == [200, 200, 200]
     positions = [position for _, position in await entries(db, item)]
     assert positions == [0, 1, 2]
+
+
+async def test_a_stale_reorder_racing_a_delete_of_one_entry_is_422(editor_client, item, db):
+    a, b, c = [
+        await create_checklist_entry(db, item, name, position=position)
+        for position, name in enumerate(("A", "B", "C"))
+    ]
+    async with db.bind.connect() as other_device:
+        transaction = await other_device.begin()
+        await other_device.execute(
+            text("DELETE FROM checklist_entries WHERE id = :id"), {"id": b.id}
+        )
+        reorder = asyncio.create_task(
+            editor_client.put(
+                f"/items/{item.id}/checklist/order",
+                data={"ids": [str(c.id), str(b.id), str(a.id)]},  # the order it saw, B included
+                headers=HX,
+            )
+        )
+        await wait_until_a_query_waits_for_a_lock(db)
+        await transaction.commit()
+        r = await reorder
+
+    assert r.status_code == 422 and toast(r) == CHECKLIST_OUT_OF_DATE
+    assert await entries(db, item) == [("A", 0), ("C", 2)]  # nothing of the stale order applied
+
+
+async def test_a_stale_reorder_racing_an_uncommitted_add_is_422(editor_client, item, db):
+    a = await create_checklist_entry(db, item, "A", position=0)
+    b = await create_checklist_entry(db, item, "B", position=1)
+    async with db.bind.connect() as other_device:
+        transaction = await other_device.begin()
+        await other_device.execute(  # an add, half done: the item held, the entry inserted
+            text("SELECT 1 FROM items WHERE id = :id FOR NO KEY UPDATE"), {"id": item.id}
+        )
+        await other_device.execute(
+            text(
+                "INSERT INTO checklist_entries (item_id, text, is_done, position)"
+                " VALUES (:item, 'New', false, 2)"
+            ),
+            {"item": item.id},
+        )
+        reorder = asyncio.create_task(
+            editor_client.put(
+                f"/items/{item.id}/checklist/order",
+                data={"ids": [str(b.id), str(a.id)]},  # without the new one
+                headers=HX,
+            )
+        )
+        await wait_until_a_query_waits_for_a_lock(db)
+        await transaction.commit()
+        r = await reorder
+
+    assert r.status_code == 422 and toast(r) == CHECKLIST_OUT_OF_DATE
+    assert await entries(db, item) == [("A", 0), ("B", 1), ("New", 2)]
+
+
+async def test_two_adds_at_99_entries_leave_100_with_distinct_positions(editor_client, item, db):
+    db.add_all(
+        ChecklistEntry(item_id=item.id, text=f"Step {n}", is_done=False, position=n)
+        for n in range(MAX_ENTRIES - 1)
+    )
+    await db.commit()
+    async with db.bind.connect() as other_device:
+        transaction = await other_device.begin()
+        await other_device.execute(
+            text("SELECT 1 FROM items WHERE id = :id FOR NO KEY UPDATE"), {"id": item.id}
+        )
+        adds = [
+            asyncio.create_task(
+                editor_client.post(f"/items/{item.id}/checklist", data={"text": name}, headers=HX)
+            )
+            for name in ("One", "Two")
+        ]
+        await wait_until_a_query_waits_for_a_lock(db)
+        await transaction.commit()
+        responses = await asyncio.gather(*adds)
+
+    assert sorted(r.status_code for r in responses) == [200, 409]
+    rows = await entries(db, item)
+    assert len(rows) == MAX_ENTRIES
+    assert len({position for _, position in rows}) == MAX_ENTRIES
+
+
+async def test_a_reorder_waits_for_a_tick_of_another_entry_and_goes_through(
+    editor_client, item, db
+):
+    a = await create_checklist_entry(db, item, "A", position=0)
+    b = await create_checklist_entry(db, item, "B", position=1)
+    async with db.bind.connect() as other_device:
+        transaction = await other_device.begin()
+        await other_device.execute(
+            update(ChecklistEntry).where(ChecklistEntry.id == b.id).values(is_done=True)
+        )
+        reorder = asyncio.create_task(
+            editor_client.put(
+                f"/items/{item.id}/checklist/order",
+                data={"ids": [str(b.id), str(a.id)]},
+                headers=HX,
+            )
+        )
+        await wait_until_a_query_waits_for_a_lock(db)
+        await transaction.commit()
+        r = await reorder
+
+    assert r.status_code == 200
+    assert await entries(db, item) == [("B", 0), ("A", 1)]
+    assert await db.scalar(select(ChecklistEntry.is_done).where(ChecklistEntry.id == b.id)) is True

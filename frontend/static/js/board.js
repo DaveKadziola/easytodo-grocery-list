@@ -1,10 +1,10 @@
 // Board page: drag and drop (SortableJS) and Move up / Move down for categories, the item modal
 // of those who may edit and the read-only dialog of those who may not (Alpine components
 // "itemModal" and "itemViewer", both with the open item's details fetched into their slot, and in
-// them the checklist: ticks, and drag and drop of its entries), ticks that show at once, fields
-// that are ready for the next entry and keep what the user typed when their category or the
-// details are swapped, folding categories away (per device), the bottom bar's "New category", and
-// a board reload when a change did not go through.
+// them the checklist: ticks, and drag and drop or ArrowUp / ArrowDown for its entries), ticks that
+// show at once, fields that are ready for the next entry and keep what the user typed when their
+// category or the details are swapped, folding categories away (per device), the bottom bar's "New
+// category", and a board reload when a change did not go through.
 // Loaded before Alpine (see base.html), so the components are registered on alpine:init. They read
 // items only from data-* attributes, which the templates escape; no page data is ever written into
 // a script.
@@ -109,16 +109,48 @@
     return Array.from(list.querySelectorAll("[data-entry-id]"), (el) => el.dataset.entryId);
   }
 
+  // The new order of the open item's checklist goes to the server one request at a time, and the
+  // last order the user made is the one that stays. A second move while the first is still on
+  // its way is noted here, not sent: its request would be queued by htmx on the list, which the
+  // first answer replaces, and htmx drops what it queued for an element that is gone. When the
+  // first has been answered the noted order is sent, and the first answer is not swapped in
+  // meanwhile (it would show the order from before the second move).
+  let savingOrder = false; // a request with the order is on its way
+  let nextOrder = null; // {itemId, ids}: the order made since, to be sent when it has been answered
+
   // The answer is the item's details again, in the new order. A request that fails is put right
   // by failed() below (it hears the same error), so there is nothing to catch here.
   function saveChecklistOrder(list) {
+    const ids = checklistIds(list);
+    if (savingOrder) {
+      nextOrder = { itemId: openId, ids };
+      return Promise.resolve();
+    }
+    savingOrder = true;
     return htmx
-      .ajax("PUT", `/items/${openId}/checklist/order`, {
-        source: list,
-        target: "#item-details",
-        values: { ids: checklistIds(list) },
+      .ajax("PUT", `/items/${openId}/checklist/order`, { source: list, target: "#item-details", values: { ids } })
+      .catch(() => {})
+      .then(sendNextOrder);
+  }
+
+  function sendNextOrder() {
+    savingOrder = false;
+    const next = nextOrder;
+    nextOrder = null;
+    if (next === null) return undefined;
+    const list = document.querySelector("#item-details [data-sortable-checklist]");
+    if (list && next.itemId === openId) return saveChecklistOrder(list);
+    // The modal was closed (or another item opened) since: the order still has to be saved, and
+    // nothing on the page shows its answer.
+    savingOrder = true;
+    return htmx
+      .ajax("PUT", `/items/${next.itemId}/checklist/order`, {
+        source: document.body,
+        swap: "none",
+        values: { ids: next.ids },
       })
-      .catch(() => {});
+      .catch(() => {})
+      .then(sendNextOrder);
   }
 
   function initSortable(root) {
@@ -263,6 +295,12 @@
       event.detail.shouldSwap = false;
       return;
     }
+    // The answer to an order that a newer one (made since, or being made) has overtaken would put
+    // the list back as it was: the page keeps the user's list, and the newer order is saved next.
+    if (requestConfig && CHECKLIST_ORDER.test(requestConfig.path) && (nextOrder !== null || dragging)) {
+      event.detail.shouldSwap = false;
+      return;
+    }
     if (!(target instanceof Element)) return;
     const form = requestConfig && requestConfig.elt;
     const sent = (xhr.status < 400 && form instanceof HTMLFormElement && sentValues.get(form)) || {};
@@ -327,6 +365,11 @@
   const heldTicks = new Map(); // checkbox id -> {from: checkbox tapped, checked: wanted state}
 
   document.addEventListener("htmx:beforeRequest", (event) => {
+    // A write to the open item's checklist is on its way: if the modal closes before it is
+    // answered, the category's tile has to be fetched all the same (leaveItem).
+    const { requestConfig, target } = event.detail;
+    const verb = requestConfig && String(requestConfig.verb).toLowerCase();
+    if (verb !== "get" && target && target.id === "item-details") detailsChanged = true;
     const checkbox = event.detail.elt;
     if (!checkbox.matches(TICKS)) return;
     if (checkbox.matches(TICK)) strike(checkbox);
@@ -376,6 +419,7 @@
     const config = event.detail.requestConfig;
     if (config && DRAG_REQUEST.test(config.path)) stale(); // put the dragged element back
     if (config && CHECKLIST_ORDER.test(config.path)) {
+      nextOrder = null; // the server's order is fetched, and shown instead
       Promise.resolve(refreshDetails()).catch(() => {}); // put the dragged entry back
     }
   }
@@ -390,6 +434,24 @@
     container.insertBefore(section, direction === "up" ? sibling : sibling.nextElementSibling);
     saveCategoryOrder(container);
   }
+
+  // A checklist entry's handle (it takes the focus): ArrowUp / ArrowDown move the entry one place
+  // and save the order, as a drag does. The keyboard's way to reorder, where there is no drag.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const handle = event.target instanceof Element ? event.target.closest(".checklist-handle") : null;
+    const entry = handle && handle.closest("[data-entry-id]");
+    if (!entry) return;
+    event.preventDefault(); // the page does not scroll
+    const up = event.key === "ArrowUp";
+    const sibling = up ? entry.previousElementSibling : entry.nextElementSibling;
+    if (!sibling) return; // at the end of the list: nothing moves, nothing is sent
+    const list = entry.parentElement;
+    list.insertBefore(entry, up ? sibling : sibling.nextElementSibling);
+    handle.focus(); // moving an element takes the focus from it
+    saveChecklistOrder(list);
+  });
 
   document.addEventListener("click", (event) => {
     // <button data-focus="field-id"> (the bottom bar's "New category"): to that field, ready to type.

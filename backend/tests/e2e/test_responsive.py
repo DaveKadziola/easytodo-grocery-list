@@ -6,10 +6,12 @@ and the item modal by keyboard."""
 import re
 
 import pytest
-from factories import create_board, create_category, create_item
+from factories import create_board, create_category, create_checklist_entry, create_item
 from playwright.sync_api import Locator, Page, expect
+from sqlalchemy import select
 
 from e2e.locators import TAP_TARGETS, category
+from easytodo.models import Item
 
 pytestmark = pytest.mark.e2e
 
@@ -327,14 +329,21 @@ def test_undo_toast_closes_after_5_seconds(logged_in_page_with_seed):
     assert UNDO_TOAST_MS - 50 <= removed_after_ms <= UNDO_TOAST_MS + 500
 
 
-def test_item_modal_keeps_the_keyboard_inside_and_closes_on_escape(logged_in_page_with_seed):
+def test_item_modal_keeps_the_keyboard_inside_and_closes_on_escape(logged_in_page_with_seed, seed):
     page = logged_in_page_with_seed
+
+    async def add_entry(db) -> None:
+        await create_checklist_entry(
+            db, await db.scalar(select(Item).where(Item.name == "Bread")), "Rye"
+        )
+
+    seed(add_entry)
     opener = page.get_by_role("button", name="Bread", exact=True)
     opener.click()
     dialog = page.get_by_role("dialog")
     name = dialog.get_by_label("Name")
     expect(name).to_be_focused()
-    expect(dialog.get_by_label("Add entry")).to_be_visible()  # the details are loaded
+    expect(dialog.get_by_label("Edit Rye")).to_be_visible()  # the details are loaded
 
     for control in (
         dialog.get_by_label("Description"),
@@ -342,7 +351,13 @@ def test_item_modal_keeps_the_keyboard_inside_and_closes_on_escape(logged_in_pag
         dialog.get_by_role("button", name="Delete item"),
         dialog.get_by_role("button", name="Cancel"),
         dialog.get_by_role("button", name="Save"),
-        dialog.get_by_label("Add entry"),  # the checklist's controls come after the form
+        # The checklist's controls come after the form: each entry's handle (the keyboard moves
+        # the entry with the arrow keys), tick, text and delete button, then the new entry.
+        dialog.get_by_role("button", name="Move Rye"),
+        dialog.get_by_role("checkbox", name="Rye"),
+        dialog.get_by_label("Edit Rye"),
+        dialog.get_by_role("button", name="Delete Rye"),
+        dialog.get_by_label("Add entry"),
         dialog.get_by_role("button", name="Add", exact=True),
         name,  # round again: never out to the page behind
     ):

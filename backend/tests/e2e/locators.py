@@ -6,7 +6,7 @@ from playwright.sync_api import Locator, Page, expect
 # What a finger must be able to hit: every control at least 44×44 px (a checkbox or a radio button
 # through the label around it).
 TAP_TARGETS = (
-    "a, button, summary, select, input:not([type=checkbox]):not([type=radio]),"
+    "a, button, [role=button], summary, select, input:not([type=checkbox]):not([type=radio]),"
     " label:has(> input[type=checkbox]), label:has(> input[type=radio])"
 )
 

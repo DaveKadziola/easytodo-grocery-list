@@ -186,6 +186,122 @@ def entry_handle(page: Page, text: str):
     return row.filter(has=page.get_by_label(f"Edit {text}")).locator(".checklist-handle")
 
 
+def move_and_wait(page: Page, key: str) -> None:
+    """Press ``key`` (an arrow on a handle), then wait until the answer has replaced the details."""
+    page.evaluate("document.getElementById('item-details').dataset.replaced = 'no'")
+    with page.expect_response(ORDERED) as answer:
+        page.keyboard.press(key)
+    assert answer.value.status == 200
+    expect(page.locator("#item-details[data-replaced]")).to_have_count(0)
+
+
+def test_checklist_entries_move_with_the_arrow_keys(logged_in_page, seed, user, open_board):
+    """WCAG 2.1.1: what a drag does can be done from the keyboard."""
+    page = logged_in_page
+    problems = watch_console(page)
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
+    add_entries(seed, "Milk", "Eggs", "Flour", "Sugar")
+    open_board(page, board_id)
+    dialog = open_item(page, "Milk")
+    expect_entries(dialog, "Eggs", "Flour", "Sugar")
+    orders: list[str] = []
+    page.on(
+        "request",
+        lambda request: orders.append(request.url) if ORDERED.search(request.url) else None,
+    )
+    handle = dialog.get_by_role("button", name="Move Flour")
+    at_least_44px(handle)
+
+    handle.focus()
+    move_and_wait(page, "ArrowDown")
+
+    expect_entries(dialog, "Eggs", "Sugar", "Flour")
+    expect(handle).to_be_focused()  # the new list has the same handle, and the cursor is on it
+    page.keyboard.press("ArrowDown")  # at the end: nothing moves
+    for _ in range(2):
+        move_and_wait(page, "ArrowUp")
+    expect_entries(dialog, "Flour", "Eggs", "Sugar")
+    expect(handle).to_be_focused()
+    page.keyboard.press("ArrowUp")  # at the top: nothing moves
+    page.wait_for_timeout(SETTLE_MS)
+    assert len(orders) == 3, orders  # one request for each move, none for the two at an end
+    expect_entries(dialog, "Flour", "Eggs", "Sugar")
+
+    open_board(page, board_id)  # the page again, from the server
+    expect_entries(open_item(page, "Milk"), "Flour", "Eggs", "Sugar")
+    assert problems == []
+
+
+def test_a_second_order_made_before_the_first_is_answered_is_the_one_that_stays(
+    logged_in_page, seed, user, open_board
+):
+    page = logged_in_page
+    problems = watch_console(page)
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
+    add_entries(seed, "Milk", "Eggs", "Flour", "Sugar")
+    open_board(page, board_id)
+    dialog = open_item(page, "Milk")
+    expect_entries(dialog, "Eggs", "Flour", "Sugar")
+    sent: list[str] = []
+    page.on(
+        "request", lambda request: sent.append(request.url) if ORDERED.search(request.url) else None
+    )
+    held = []
+
+    def hold_the_first(route: Route) -> None:
+        if held:
+            route.continue_()
+        else:
+            held.append(route)  # the first order waits here, unanswered
+
+    page.route(ORDERED, hold_the_first)
+    dialog.get_by_role("button", name="Move Sugar").focus()
+
+    page.keyboard.press("ArrowUp")  # Eggs, Sugar, Flour: on its way
+    wait_until(page, lambda: held, "the first order")
+    page.keyboard.press("ArrowUp")  # Sugar, Eggs, Flour: made before the first is answered
+    held[0].continue_()
+
+    expect_entries(dialog, "Sugar", "Eggs", "Flour")
+    page.wait_for_timeout(SETTLE_MS)
+    expect_entries(
+        dialog, "Sugar", "Eggs", "Flour"
+    )  # the first answer did not put the first order back
+    assert len(sent) == 2, sent
+    expect(dialog.get_by_role("button", name="Move Sugar")).to_be_focused()
+
+    open_board(page, board_id)
+    expect_entries(open_item(page, "Milk"), "Sugar", "Eggs", "Flour")
+    assert problems == []
+
+
+def test_closing_the_modal_while_a_tick_is_on_its_way_still_updates_the_tile(
+    logged_in_page, seed, user, open_board
+):
+    """The answer arrives after the modal is gone, so the page never hears it: the tile is fetched
+    again once the request has ended, not at once (it would show the old count)."""
+    page = logged_in_page
+    problems = watch_console(page)
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
+    add_entries(seed, "Milk", "Eggs", "Flour")
+    open_board(page, board_id)
+    dialog = open_item(page, "Milk")
+    held = []
+    page.route(CHECKED, lambda route: held.append(route))  # the tick waits here, unanswered
+
+    dialog.get_by_role("checkbox", name="Eggs").check()
+    wait_until(page, lambda: held, "the tick")
+    page.keyboard.press("Escape")
+
+    expect(dialog).to_be_hidden()
+    page.wait_for_timeout(SETTLE_MS)
+    expect(tile_count(page, "Milk")).to_have_text("0/2")  # the server has not ticked it yet
+    held[0].continue_()
+
+    expect(tile_count(page, "Milk")).to_have_text("1/2", timeout=LIVE_UPDATE_MS)
+    assert problems == []
+
+
 @pytest.mark.parametrize("failure", ["error", "no answer"])
 def test_checklist_drag_that_did_not_go_through_puts_the_entry_back(
     logged_in_page, seed, user, open_board, failure
