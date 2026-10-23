@@ -186,6 +186,32 @@ async def test_item_views_take_one_statement_for_a_category_and_for_a_board(db, 
     assert [iv.item.name for iv in on_board] == ["Apple", "cherry", "milk", "banana"]
 
 
+async def test_category_scope_counts_the_members_of_its_own_board(db, owner, board):
+    """A solo board next to a shared one: the category scope must look at its own board's
+    members, not at another board's or at all of them."""
+    editor = await create_user(db, "editor@example.com")
+    await add_member(db, board, editor)
+    shared = await create_category(db, board, "Shared")
+    await create_item(db, shared, "Milk", created_by=owner)
+    solo_board = await create_board(db, owner, "Solo")
+    solo = await create_category(db, solo_board, "Mine")
+    await create_item(db, solo, "Bread", created_by=owner)
+
+    assert [(iv.author, iv.show_author) for iv in await views(db, owner, category=solo)] == [
+        (Author(owner.id, "owner"), False)
+    ]
+    assert [(iv.author, iv.show_author) for iv in await views(db, owner, category=shared)] == [
+        (Author(owner.id, "owner"), True)
+    ]
+
+
+async def test_category_scope_leaves_out_an_archived_category(db, owner, board):
+    archived = await create_category(db, board, "Archived", archived_at=datetime.now(UTC))
+    await create_item(db, archived, "Milk")
+
+    assert await views(db, owner, category=archived) == []
+
+
 async def test_select_item_views_needs_exactly_one_scope(db, owner, board):
     category = await create_category(db, board)
 
