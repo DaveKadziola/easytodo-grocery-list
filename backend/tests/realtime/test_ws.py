@@ -533,6 +533,7 @@ async def test_sockets_close_with_4401_when_the_session_expires(
     board, _ = groceries
     device = await sign_in(live_server, "dave@example.com")
     lifetime = 1.5
+    started = time.monotonic()  # before the end is fixed: the handshakes below come after it
     await db.execute(
         update(UserSession)
         .where(UserSession.id == await session_id_of(db, device))
@@ -544,7 +545,6 @@ async def test_sockets_close_with_4401_when_the_session_expires(
         board_socket(live_server, board.id, token=token_of(device)) as board_ws,
         user_socket(live_server, token=token_of(device)) as user_ws,
     ):
-        started = time.monotonic()
         assert await close_code(board_ws, within=lifetime + 1.5) == 4401
         assert await close_code(user_ws, within=1) == 4401
         assert time.monotonic() - started > lifetime - 0.5  # at the end of the session, not before

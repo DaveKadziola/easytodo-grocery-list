@@ -16,10 +16,13 @@ from factories import (
     create_board,
     create_category,
     create_item,
+    create_notification,
     create_user,
 )
 from helpers import count_queries, login, signed_in, text_of, toast_message
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
@@ -435,6 +438,25 @@ async def test_two_admins_removing_each_other_leaves_one(client_factory, db, mon
     assert sorted(r.status_code for r in responses) == [200, 409]
     assert [toast_message(r) for r in responses if r.status_code == 409] == [LAST_ADMIN]
     assert await db.scalar(select(func.count()).select_from(User).where(User.is_admin)) == 1
+
+
+async def test_the_last_admin_check_serializes_admins_but_not_foreign_keys(db):
+    """Its lock on the active admins is taken against another check (two at once cannot both
+    pass), but it leaves alone the FOR KEY SHARE that a row pointing at an admin takes on theirs
+    (a notification for them): a member leaving a board or a newcomer joining it must not wait
+    behind an admin's removal."""
+    first = await create_user(db, "first@example.com", is_admin=True)
+    second = await create_user(db, "second@example.com", is_admin=True)
+    async with AsyncSession(db.bind) as checking, AsyncSession(db.bind) as telling:
+        await service._keep_an_active_admin(checking, first)  # holds its locks, uncommitted
+        await telling.execute(text("SET LOCAL lock_timeout = '2s'"))
+
+        await create_notification(telling, second)  # LockNotAvailable after 2 s if it waited
+
+        async with AsyncSession(db.bind) as checking_too:
+            await checking_too.execute(text("SET LOCAL lock_timeout = '300ms'"))
+            with pytest.raises(DBAPIError, match="lock timeout"):
+                await service._keep_an_active_admin(checking_too, first)
 
 
 async def test_send_reset_emails_user(admin_client, client, db, mail_outbox):

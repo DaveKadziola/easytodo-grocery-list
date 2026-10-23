@@ -201,8 +201,11 @@ async def create_user_with_temp_password(
 async def _keep_an_active_admin(db: AsyncSession, user: User) -> None:
     """``Conflict`` if ``user`` is the only active admin, so they may not go.
 
-    Locks the active admins' rows until the commit: two admins removing each other at once
-    cannot both succeed.
+    Locks the active admins' rows until the commit, FOR NO KEY UPDATE: two admins removing each
+    other at once cannot both succeed (that lock conflicts with itself), and a row that points at
+    an admin (a notification for them) can still be inserted, whose foreign key takes only FOR KEY
+    SHARE. A plain FOR UPDATE would make a member leaving a board, or someone joining one, wait
+    behind the removal.
     """
     if not user.is_admin or user.status != UserStatus.ACTIVE:
         return
@@ -210,7 +213,7 @@ async def _keep_an_active_admin(db: AsyncSession, user: User) -> None:
         select(User.id)
         .where(User.is_admin, User.status == UserStatus.ACTIVE)
         .order_by(User.id)
-        .with_for_update()
+        .with_for_update(key_share=True)
     )
     if not any(admin_id != user.id for admin_id in admins):
         raise Conflict(LAST_ADMIN)

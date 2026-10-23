@@ -7,12 +7,11 @@
 // and the user's other devices are told); a notification that arrives while it is open is shown at
 // once and read with it. The bell's requests are the page's background: they are not "own
 // requests" that hold back board updates (realtime.js), and a failure of the network is silent
-// (no toast; #notifications[data-live] says whether the socket is open).
+// (no toast; #notifications[data-live] says that the socket is open and the bell is up to date).
 // Loaded after htmx, before the page's own scripts; connects once app.js has run (DOMContentLoaded).
 (() => {
   "use strict";
 
-  const MAX_DELAY_S = 30;
   const STALE_SOCKET_MS = 25000; // hidden longer than the server's ping interval: a new socket
   const SIGNED_OUT = 4401; // the session ended
   const WRONG_ADDRESS = 4400; // the page is at an address the server does not accept
@@ -21,9 +20,9 @@
   const panelOpen = () => bell().open;
   const inBell = (element) => element instanceof Element && element.closest("#notifications") !== null;
 
-  // The bell's requests come from the bell itself (never from an element that a swap replaces:
-  // htmx drops what it queued for a source that is gone). They are marked as background (app.js
-  // shows no toast for them) and a failed one is remembered, to tell ask() apart from a success.
+  // The bell's requests come from the bell itself (the source of htmx.ajax; the badge that loads
+  // itself has the badge for its own). They are marked as background (app.js shows no toast for
+  // them) and a failed one is remembered, to tell ask() apart from a success.
   let failed = false;
   document.addEventListener("htmx:beforeSend", (event) => {
     if (inBell(event.detail.elt)) event.detail.xhr.easytodoBackground = true; // app.js: no toast
@@ -34,56 +33,83 @@
     });
   }
 
-  // Whether the request went through and its answer is on the page.
-  async function ask(verb, path, target) {
+  // Sends one request over the bell and swaps its answer over the element with this id, which is
+  // looked for now, not when the request was asked for; resolves (never rejects) to whether the
+  // request went through, once the answer is on the page.
+  async function send(verb, path, id) {
+    const target = document.getElementById(id);
+    if (target === null) return false;
+    // The element can be replaced while the request is out (the badge loads itself too, with the
+    // badge for its source): the answer then goes to the one that took its place, not to nothing.
+    const follow = (event) => {
+      const current = document.getElementById(id);
+      if (!target.isConnected && current !== null) event.detail.target = current;
+    };
+    target.addEventListener("htmx:beforeSwap", follow);
     failed = false;
     try {
       await htmx.ajax(verb, path, { source: bell(), target, swap: "outerHTML" });
     } catch {
       return false; // the network, or the page is going away
+    } finally {
+      target.removeEventListener("htmx:beforeSwap", follow);
     }
     return !failed;
   }
 
-  const refreshBadge = () => ask("GET", "/notifications/badge", "#notifications-badge");
-
-  // Fetches the panel and then reads everything in it, one at a time. A change that comes while
-  // this runs is fetched afterwards, so nothing arrives unseen between the fetch and the read.
-  let showing = false;
-  let showAgain = false;
-  async function showPanel() {
-    if (showing) {
-      showAgain = true;
-      return;
-    }
-    showing = true;
-    try {
-      do {
-        showAgain = false;
-        const panel = document.getElementById("notifications-panel");
-        const hadFocus = panel !== null && panel.contains(document.activeElement);
-        const shown = await ask("GET", "/notifications/panel", "#notifications-panel");
-        // The swap took the focus from a link in the old panel: it goes back to the bell.
-        if (hadFocus && document.activeElement === document.body) bell().querySelector("summary").focus();
-        // Closed meanwhile, or the panel did not come: what was never shown is not read.
-        if (shown && panelOpen()) await ask("POST", "/notifications/read", "#notifications-badge");
-      } while (showAgain);
-    } finally {
-      showing = false;
-    }
+  // One request at a time, in the order they were asked for. htmx would otherwise hold a request
+  // made while another of the bell's is out and drop it for the next one that comes (and resolve
+  // it as if it were done), so that a read could take the place of the panel's fetch: everything
+  // marked read without ever being shown.
+  let sending = Promise.resolve();
+  function ask(verb, path, id) {
+    const answer = sending.then(() => send(verb, path, id));
+    sending = answer;
+    return answer;
   }
+
+  // ``task``, never twice at once: a call that comes while it runs makes it run once more after
+  // (a change that comes while it runs is asked for afterwards); the call resolves when that is
+  // done. Calls in a burst are served by a single run.
+  function once(task) {
+    let running = null;
+    let again = false;
+    return () => {
+      if (running !== null) {
+        again = true;
+        return running;
+      }
+      running = (async () => {
+        try {
+          do {
+            again = false;
+            await task();
+          } while (again);
+        } finally {
+          running = null;
+        }
+      })();
+      return running;
+    };
+  }
+
+  const refreshBadge = once(() => ask("GET", "/notifications/badge", "notifications-badge"));
+
+  // Fetches the panel and then reads everything in it. A change that comes while this runs is
+  // fetched afterwards, so nothing arrives unseen between the fetch and the read.
+  const showPanel = once(async () => {
+    const panel = document.getElementById("notifications-panel");
+    const hadFocus = panel !== null && panel.contains(document.activeElement);
+    const shown = await ask("GET", "/notifications/panel", "notifications-panel");
+    // The swap took the focus from a link in the old panel: it goes back to the bell.
+    if (hadFocus && document.activeElement === document.body) bell().querySelector("summary").focus();
+    // Closed meanwhile, or the panel did not come: what was never shown is not read.
+    if (shown && panelOpen()) await ask("POST", "/notifications/read", "notifications-badge");
+  });
 
   // Something may have changed (a message, the socket opened again, the page is back): show it.
   function update() {
-    if (panelOpen()) showPanel();
-    else refreshBadge();
-  }
-
-  // 1, 2, 4… seconds, at most 30, each give or take 20 % so that devices do not all come back at
-  // the same moment (as realtime.js does for the board).
-  function retryDelay(failures) {
-    const seconds = Math.min(MAX_DELAY_S, 2 ** failures) * (0.8 + Math.random() * 0.4);
-    return Math.min(MAX_DELAY_S, seconds) * 1000;
+    return panelOpen() ? showPanel() : refreshBadge();
   }
 
   function connectUser() {
@@ -91,6 +117,7 @@
     let failures = 0;
     let retry = null;
     let hiddenSince = null;
+    let stopped = false; // refused for good: no new socket until the page is loaded again
 
     function setLive(live) {
       if (live) bell().dataset.live = "";
@@ -107,8 +134,11 @@
       ws.addEventListener("open", () => {
         if (socket !== ws) return;
         failures = 0;
-        setLive(true);
-        update(); // whatever happened while not connected, and since the page was rendered
+        // Live is: open, and up to date with whatever happened while not connected and since the
+        // page was rendered.
+        update().then(() => {
+          if (socket === ws) setLive(true);
+        });
       });
       ws.addEventListener("message", (event) => {
         if (socket === ws && JSON.parse(event.data).type === "notifications.changed") update();
@@ -118,9 +148,13 @@
         socket = null;
         setLive(false);
         // Signed out, or at an address the server does not accept: another try would be refused
-        // again (a signed-out page finds out with its next request, the board page at once).
-        if (event.code === SIGNED_OUT || event.code === WRONG_ADDRESS) return;
-        retry = setTimeout(connect, retryDelay(failures));
+        // again, whatever brings the tab back (a signed-out page finds out with its next request,
+        // the board page at once).
+        if (event.code === SIGNED_OUT || event.code === WRONG_ADDRESS) {
+          stopped = true;
+          return;
+        }
+        retry = setTimeout(connect, window.easytodo.retryDelay(failures));
         failures += 1;
       });
     }
@@ -130,6 +164,7 @@
     // a long time away it is replaced by a new one (whose open asks again); otherwise the badge is
     // fetched again over HTTP, in case its messages never arrived.
     function reconnectNow(longAway) {
+      if (stopped) return;
       if (socket === null) {
         connect();
       } else if (longAway) {

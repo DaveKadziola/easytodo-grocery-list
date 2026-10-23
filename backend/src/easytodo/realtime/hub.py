@@ -16,9 +16,10 @@ from enum import IntEnum
 from easytodo.realtime.events import BoardEvent, EventType
 
 QUEUE_SIZE = 100  # messages a socket may fall behind before it is closed
-# How many sockets one session may hold at a time, board pages and user sockets together: a
-# script with one cookie cannot use up the server's file descriptors. A tab that finds the budget
-# spent is closed with 1013 and tries again later.
+# How many sockets one session may hold at a time on one worker (the hub keeps only its own
+# worker's count, so with several workers a session may hold that many on each), board pages and
+# user sockets together: a script with one cookie cannot use up the server's file descriptors. A
+# tab that finds the budget spent is closed with 1013 and tries again later.
 MAX_SOCKETS_PER_SESSION = 30
 
 

@@ -1,6 +1,7 @@
 // Page shell: headers for every HTMX request (and the page's id, window.easytodo.clientId), toasts
 // (from HX-Trigger, the flash cookie, or a request that failed without one; one can offer Undo),
-// menus that close themselves, and copy and download buttons.
+// menus that close themselves, and copy and download buttons. window.easytodo also holds the wait
+// before a socket tries again (retryDelay), for realtime.js and notifications.js.
 (() => {
   "use strict";
 
@@ -8,6 +9,7 @@
   const TOAST_MS = 4000; // how long a toast stays
   const UNDO_TOAST_MS = 5000; // one with an Undo button stays a little longer
   const DOWNLOAD_URL_MS = 40000; // how long a saved file's blob URL lives (see data-download)
+  const RETRY_MAX_S = 30; // the longest wait before a socket tries again
 
   function randomId() {
     if (crypto.randomUUID) return crypto.randomUUID();
@@ -34,8 +36,17 @@
     event.detail.headers["X-Client-Id"] = clientId();
   });
 
+  // 1, 2, 4… seconds, at most 30, each give or take 20 % so that devices do not all come back at
+  // the same moment. The sockets (realtime.js for the board, notifications.js for the bell) ask
+  // for it only once one has failed: this script runs after theirs (deferred scripts run in
+  // order), but before the first of them connects (DOMContentLoaded).
+  function retryDelay(failures) {
+    const seconds = Math.min(RETRY_MAX_S, 2 ** failures) * (0.8 + Math.random() * 0.4);
+    return Math.min(RETRY_MAX_S, seconds) * 1000;
+  }
+
   // realtime.js names the tab the same way when it subscribes to the board.
-  window.easytodo = { clientId };
+  window.easytodo = { clientId, retryDelay };
 
   // The Undo button of a toast: one POST to undo.url, its answer swapped over undo.swap_into. No
   // source element, so a 404 ("resync": the window is over, or the item is gone) comes from the

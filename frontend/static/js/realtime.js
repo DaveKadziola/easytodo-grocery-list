@@ -22,7 +22,6 @@
   const TEXT_FIELDS = "input:not([type=checkbox]):not([type=hidden]), textarea, select";
   const TYPING_PAUSE_MS = 1500; // a key pressed this recently still counts as typing
   const STALE_SOCKET_MS = 25000; // hidden longer than the server's ping interval: a new socket
-  const MAX_DELAY_S = 30;
   const SIGNED_OUT = 4401; // the session ended: sign in again
   const NO_ACCESS = [4403, 4404]; // removed from the board, or the board is gone
   const WRONG_ADDRESS = 4400; // the page is at an address the server does not accept
@@ -353,13 +352,6 @@
     scheduleFlush();
   }
 
-  // 1, 2, 4… seconds, at most 30, each give or take 20 % so that devices do not all come back
-  // at the same moment.
-  function retryDelay(failures) {
-    const seconds = Math.min(MAX_DELAY_S, 2 ** failures) * (0.8 + Math.random() * 0.4);
-    return Math.min(MAX_DELAY_S, seconds) * 1000;
-  }
-
   function connectBoard(boardId) {
     let socket = null;
     let failures = 0;
@@ -404,7 +396,7 @@
           document.dispatchEvent(new CustomEvent("toast", { detail: { level: "error", message } }));
         } else {
           setStatus("reconnecting", "Reconnecting…");
-          retry = setTimeout(connect, retryDelay(failures));
+          retry = setTimeout(connect, window.easytodo.retryDelay(failures));
           failures += 1;
         }
       });

@@ -85,6 +85,11 @@ def notify(
     which tell the recipients' pages, together with the change.
 
     A message over ``MESSAGE_MAX_LENGTH`` is cut short and ends in "…" (names may be long).
+
+    Each insert takes FOR KEY SHARE on the recipient's ``users`` row (and on the board's, when it
+    links to one) for the foreign keys, until the commit: a lock on those rows that conflicts
+    with it (FOR UPDATE, as a delete takes) makes the change wait. FOR NO KEY UPDATE, as the
+    admin check takes, does not.
     """
     people = list(dict.fromkeys(recipients))
     message = MESSAGES[kind].format(**names)

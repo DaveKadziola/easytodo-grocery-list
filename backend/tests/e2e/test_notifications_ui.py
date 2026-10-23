@@ -15,7 +15,7 @@ from e2e.test_realtime import wait_until
 from e2e.test_responsive import AA, LOW_CONTRAST_TEXT, too_small_targets
 from easytodo.boards.invites import accept_invite, create_link_invite
 from easytodo.models import BoardRole, NotificationKind, User
-from easytodo.notifications.service import notify
+from easytodo.notifications.service import notify, unread_count
 from easytodo.realtime.events import commit_and_publish
 
 pytestmark = pytest.mark.e2e
@@ -31,9 +31,35 @@ def badge(page: Page):
     return page.locator("#notifications-badge")
 
 
+NO_BADGE_HTML = '<span id="notifications-badge" hidden></span>'
+
+
 def wait_until_live(page: Page) -> None:
-    """The bell's socket is open (and the badge has been asked for since)."""
+    """The bell's socket is open and the bell is up to date: the badge was asked for after it
+    opened and the answer is in, so none of the bell's requests is out."""
     expect(page.locator("#notifications[data-live]")).to_be_attached()
+
+
+SLOW_DOWN = """
+(() => {
+  const open = XMLHttpRequest.prototype.open;
+  const send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+    this.lateByTest = /\\/notifications\\/(badge|panel|read)$/.test(new URL(url, location).pathname);
+    return open.call(this, method, url, ...rest);
+  };
+  XMLHttpRequest.prototype.send = function (...args) {
+    if (this.lateByTest) setTimeout(() => send.apply(this, args), %d);
+    else send.apply(this, args);
+  };
+})();
+"""
+
+
+def slow_down(page: Page, ms: int = 200) -> None:
+    """Every request of the bell, on every page this page loads from now on, goes out ``ms`` late:
+    a test that passes only when the round trips are quick does not pass with this."""
+    page.add_init_script(SLOW_DOWN % ms)
 
 
 def seed_notifications(seed, user: User, *, unread: int, read: int = 0) -> int:
@@ -101,6 +127,8 @@ def test_reading_on_one_device_clears_the_badge_on_the_other(signed_in_page, see
     seed_notifications(seed, user, unread=2)
     a, b = signed_in_page(), signed_in_page()
     for page in (a, b):
+        slow_down(page)
+        page.reload()
         wait_until_live(page)
         expect(badge(page)).to_have_text("2 unread")
 
@@ -116,6 +144,8 @@ def test_a_notification_that_arrives_while_the_panel_is_open_is_shown_and_read(
 ):
     seed_notifications(seed, user, unread=0, read=1)
     page = logged_in_page
+    slow_down(page)
+    page.reload()
     wait_until_live(page)
     bell(page).click()
     panel = page.locator("#notifications-panel")
@@ -150,8 +180,10 @@ def test_bell_does_not_hold_back_board_updates(two_logged_in_pages):
     expect(b.locator("#notifications-panel")).to_contain_text("No notifications.")
 
 
-def test_bell_works_around_the_item_modal(logged_in_page_with_seed, seed, user):
-    page = logged_in_page_with_seed
+def test_bell_works_around_the_item_modal(logged_in_page, seeded_board, open_board, seed, user):
+    page = logged_in_page
+    slow_down(page)
+    open_board(page, seeded_board)
     wait_until_live(page)
     bell(page).click()
     expect(page.locator("#notifications-panel")).to_be_visible()
@@ -183,6 +215,8 @@ def test_bell_works_around_the_item_modal(logged_in_page_with_seed, seed, user):
 def test_bell_opens_and_closes_from_the_keyboard(logged_in_page, seed, user):
     seed_notifications(seed, user, unread=1)
     page = logged_in_page
+    slow_down(page)
+    page.reload()
     wait_until_live(page)
     bell(page).focus()
 
@@ -235,11 +269,86 @@ def test_bell_and_panel_stay_readable(signed_in_page, seed, user, scheme):
     assert too_small_targets(page) == []
 
 
-def test_board_page_still_opens_its_own_socket_beside_the_bell(
-    logged_in_page_with_seed, seed, user
-):
+def test_board_page_still_opens_its_own_socket_beside_the_bell(two_logged_in_pages):
     """Both sockets are live on a board page, and a board change reaches only the board's one."""
-    page = logged_in_page_with_seed
+    a, b = two_logged_in_pages
+    wait_until_live(b)
+    expect(b.locator("#conn-status")).to_have_text("Live")
+    expect(badge(b)).to_be_hidden()
+    asked: list[str] = []
+    b.on("request", lambda request: asked.append(request.url))
+
+    add_item(a, "Dairy", "Eggs")
+
+    expect(items_of(b, "Dairy").filter(has_text="Eggs")).to_have_count(1, timeout=LIVE_UPDATE_MS)
+    b.wait_for_timeout(300)  # long enough for a request that is (wrongly) sent for it
+    assert [url for url in asked if "/notifications/" in url] == []  # the bell was not asked
+    expect(badge(b)).to_be_hidden()
+
+
+def test_opening_the_bell_while_one_of_its_requests_is_out_still_shows_and_reads(
+    logged_in_page, seed, user
+):
+    """A badge refresh is on its way (as after a push or a return to the tab) when the bell opens:
+    the panel is fetched all the same, and read only after it is on the page."""
+    seed_notifications(seed, user, unread=2)
+    page = logged_in_page
+    page.reload()  # the rows were added without a push
     wait_until_live(page)
-    expect(page.locator("#conn-status")).to_have_text("Live")
+    expect(badge(page)).to_have_text("2 unread")
+    held: list[Route] = []
+    page.route(
+        re.compile(r"/notifications/badge$"),
+        lambda route: route.continue_() if held else held.append(route),
+    )
+    page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")  # back on the tab
+    wait_until(page, lambda: held, "the badge refresh")
+
+    bell(page).click()  # while that request is out
+
+    held[0].continue_()
+    expect(page.locator("#notifications-panel")).to_contain_text("vic joined")
+    expect(badge(page)).to_be_hidden()  # read, and this tab's badge says so
+    assert seed(lambda db: unread_count(db, user)) == 0
+
+
+def test_a_badge_that_loads_itself_does_not_take_the_bells_answer_away(logged_in_page, seed, user):
+    """The badge asks for itself when the page loads, and the bell asks for it when its socket
+    opens: whichever is answered second must still show, though the first replaced the element."""
+    seed_notifications(seed, user, unread=2)
+    page = logged_in_page
+    held: list[Route] = []
+    page.route(re.compile(r"/notifications/badge$"), lambda route: held.append(route))
+
+    page.reload()
+    wait_until(page, lambda: len(held) == 2, "the badge's own request and the bell's")
+    # The page's own request is answered first, and with an old answer; the bell's, with the real
+    # one, then belongs on the element that replaced the one it was asked for.
+    held[0].fulfill(body=NO_BADGE_HTML, content_type="text/html")
     expect(badge(page)).to_be_hidden()
+    held[1].continue_()
+
+    expect(badge(page)).to_have_text("2 unread")
+
+
+def test_a_bell_that_was_refused_stays_down(signed_in_page):
+    """Signed out elsewhere: the socket is closed with 4401, and coming back to the tab or being
+    back online does not try it again (every try would be refused). On the board list: a board
+    page would leave for the login page at once."""
+    a, b = signed_in_page(), signed_in_page()
+    sockets = []
+    b.on("websocket", lambda ws: sockets.append(ws) if "/ws/user" in ws.url else None)
+    b.reload()
+    wait_until_live(b)
+    assert len(sockets) == 1
+
+    a.goto("/account")
+    a.get_by_role("button", name="Sign out other devices").click()
+    wait_until(b, lambda: sockets[0].is_closed(), "the bell's socket closing")
+    expect(b.locator("#notifications[data-live]")).to_have_count(0)
+
+    b.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    b.evaluate("window.dispatchEvent(new Event('online'))")
+    b.wait_for_timeout(500)  # long enough for a socket that is (wrongly) opened again
+
+    assert len(sockets) == 1
