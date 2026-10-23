@@ -31,7 +31,7 @@ from easytodo.security.passwords import (
     validate_password,
     verify_password,
 )
-from easytodo.security.ratelimit import rate_limit
+from easytodo.security.ratelimit import limit_user
 from easytodo.security.totp import provisioning_uri, qr_svg
 from easytodo.web import flash, render
 
@@ -39,10 +39,16 @@ router = APIRouter(prefix="/account")
 
 _MAX_SESSION_ID = 2**63 - 1  # user_sessions.id is a BigInteger; a larger id cannot exist
 
-# Every form that checks the current password shares this budget. The limiter comes after
-# require_user, so only signed-in requests use it up: a wrong password is a password guess for
-# whoever holds a stolen session.
-PasswordGuesses = Annotated[None, Depends(rate_limit("password-change", 10, 900))]
+
+async def count_password_guess(request: Request, user: CurrentUser) -> None:
+    """Every form that checks the current password shares one budget per account, whichever
+    address it is used from: a wrong password is a password guess for whoever holds a stolen
+    session. Every attempt counts, and only signed-in requests (after ``require_user``) do. The
+    accepted risk: whoever holds a stolen session can use the owner's budget up for a while."""
+    limit_user(request, "password-change", user.id, 10, 900)
+
+
+PasswordGuesses = Annotated[None, Depends(count_password_guess)]
 
 DISPLAY_NAME_MAX_LENGTH = 60  # users.display_name is a String(60)
 PROFILE_SAVED = "Profile saved."

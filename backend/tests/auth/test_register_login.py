@@ -10,7 +10,7 @@ from sqlalchemy import func, select, update
 from easytodo.auth import service
 from easytodo.auth.sessions import SESSION_COOKIE
 from easytodo.models import User, UserSession, UserStatus
-from easytodo.security.csrf import CSRF_COOKIE
+from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
 from easytodo.security.passwords import needs_rehash, verify_password
 from easytodo.security.tokens import hash_token
 
@@ -329,3 +329,23 @@ async def test_register_rate_limited_per_ip(client):
         assert r.status_code == 400
     r = await post_form(client, "/register", email="eve@example.com", password="short")
     assert r.status_code == 429
+
+
+@pytest.mark.parametrize(
+    ("path", "email"),
+    [("/login", "dave@example.com"), ("/register", "eve@example.com"), ("/logout", "")],
+)
+async def test_auth_posts_without_csrf_token_are_403(client, db, path, email):
+    # The auth forms are checked by the global CSRF dependency, ahead of their own rate limits
+    # and of any account work (the guard for moving that work after the check).
+    await create_user(db, "dave@example.com")
+    await login(client, "dave@example.com")
+    del client.headers[CSRF_HEADER]
+    users, sessions = await count_rows(db, User), await count_rows(db, UserSession)
+
+    r = await client.post(path, data={"email": email, "password": DEFAULT_PASSWORD})
+
+    assert r.status_code == 403
+    assert "Invalid CSRF token." in r.text
+    assert (await count_rows(db, User), await count_rows(db, UserSession)) == (users, sessions)
+    assert (await client.get("/boards")).status_code == 200  # Dave is still signed in

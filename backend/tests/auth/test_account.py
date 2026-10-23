@@ -14,7 +14,7 @@ from easytodo.auth.deps import require_user
 from easytodo.auth.sessions import SESSION_COOKIE, create_session
 from easytodo.errors import Forbidden, PasswordChangeRequired
 from easytodo.models import User, UserSession
-from easytodo.security.csrf import CSRF_COOKIE
+from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
 from easytodo.security.passwords import verify_password
 from easytodo.security.tokens import hash_token
 from easytodo.web import FLASH_COOKIE
@@ -164,12 +164,22 @@ async def test_password_form_requires_sign_in(client):
     assert r.headers["location"] == "/login?next=%2Faccount%2Fpassword"
 
 
-async def test_password_change_is_rate_limited_per_ip(client, db):
+async def test_password_guesses_are_counted_per_account(client_factory, client_from_ip, db):
     await create_user(db, EMAIL)
-    await sign_in(client)
+    await create_user(db, "bob@example.com")
+    dave = await sign_in(await client_factory())
+    bob = await sign_in(await client_factory(), "bob@example.com")  # the same address as Dave
     wrong = change_form(current="not-the-right-password")
-    statuses = [(await client.post("/account/password", data=wrong)).status_code for _ in range(11)]
+
+    statuses = [(await dave.post("/account/password", data=wrong)).status_code for _ in range(11)]
     assert statuses == [400] * 10 + [429]
+    # Bob shares Dave's address, not his budget.
+    assert (await bob.post("/account/password", data=wrong)).status_code == 400
+    # Dave's budget goes with his session, whichever address it is used from.
+    elsewhere = await client_from_ip("203.0.113.7")
+    elsewhere.cookies.update(dave.cookies)
+    elsewhere.headers[CSRF_HEADER] = dave.headers[CSRF_HEADER]
+    assert (await elsewhere.post("/account/password", data=wrong)).status_code == 429
 
 
 async def test_must_change_password_redirects_everything(client, db):

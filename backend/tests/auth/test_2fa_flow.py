@@ -447,7 +447,7 @@ async def test_setup_shares_the_password_guess_budget(client, db):
     statuses = [(await client.post("/account/2fa/setup", data=form)).status_code for _ in range(10)]
     assert statuses == [400] * 10
 
-    # The change-password form, the 2FA forms and this one have one budget per IP.
+    # The change-password form, the 2FA forms and this one have one budget per account.
     r = await client.post("/account/2fa/setup", data=form | {"password": DEFAULT_PASSWORD})
     assert r.status_code == 429
     r = await client.post("/account/password", data={"current_password": DEFAULT_PASSWORD})

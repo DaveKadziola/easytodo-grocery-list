@@ -54,7 +54,10 @@ async def email_invite(db, settings, board: Board, owner: User, email: str) -> s
 
 
 async def sign_up(
-    client: httpx.AsyncClient, next_path: str | None, email: str = NEWBIE
+    client: httpx.AsyncClient,
+    next_path: str | None,
+    email: str = NEWBIE,
+    password: str = DEFAULT_PASSWORD,
 ) -> httpx.Response:
     """POST the sign-up form as the browser does: back to ``/register?next=...``."""
     if CSRF_COOKIE not in client.cookies:
@@ -64,7 +67,7 @@ async def sign_up(
         params={} if next_path is None else {"next": next_path},
         data={
             "email": email,
-            "password": DEFAULT_PASSWORD,
+            "password": password,
             "csrf_token": client.cookies[CSRF_COOKIE],
         },
     )
@@ -221,3 +224,16 @@ async def test_login_page_from_an_invite_offers_sign_up_while_registration_is_cl
     )
     assert "No account yet?" not in page.text  # the foot of the page stays closed
     assert 'href="/register' not in (await closed.get("/login")).text
+
+
+async def test_closed_register_counts_only_posts_past_the_invite_check(closed, db, board, owner):
+    # Posts that the closed registration refuses do not use up the budget of the address: a
+    # stranger's tries must not lock out the people the invites are for.
+    assert {(await sign_up(closed, None)).status_code for _ in range(12)} == {404}
+
+    token, _ = await link_invite(db, board, owner)
+    tries = [
+        (await sign_up(closed, f"/invite/{token}", password="short")).status_code for _ in range(11)
+    ]
+    assert tries == [400] * 10 + [429]
+    assert (await sign_up(closed, None)).status_code == 404  # 404 before 429

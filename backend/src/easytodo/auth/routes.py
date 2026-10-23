@@ -86,6 +86,10 @@ async def require_registration_allowed(
 
 RegistrationInvite = Annotated[BoardInvite | None, Depends(require_registration_allowed)]
 
+# Counted in the route, after RegistrationInvite: a post that closed registration refuses with a
+# 404 uses up nothing, so a stranger's tries cannot take the budget of the people invited.
+_register_attempts = rate_limit("register", 10, 3600)
+
 
 async def _signed_in_redirect(
     request: Request, db: AsyncSession, user: User, target: str, *, mfa_pending: bool = False
@@ -120,7 +124,7 @@ async def register_page(
     return render(request, "auth/register.html", {"email": email, "next_path": _kept_next(next_)})
 
 
-@router.post("/register", dependencies=[Depends(rate_limit("register", 10, 3600))])
+@router.post("/register")
 async def register(
     request: Request,
     db: DbSession,
@@ -129,6 +133,7 @@ async def register(
     password: FormField = "",
     next_: NextParam = None,
 ) -> Response:
+    await _register_attempts(request)  # before the try: its 429 is an AppError, not a form error
     try:
         if (  # an e-mail invite opens sign-up for its own address only
             invite is not None
