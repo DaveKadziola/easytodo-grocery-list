@@ -5,7 +5,7 @@ on:
     branches: [main]
   pull_request:
 
-# The jobs only read the repository.
+# Read-only by default; the `release` job alone writes, and only its tag and release.
 permissions:
   contents: read
 
@@ -43,6 +43,8 @@ jobs:
       - run: uv run alembic upgrade head
       - run: uv run alembic check
       - run: uv run pytest
+      - run: python3 scripts/release-notes.py --self-test
+        working-directory: .
 
   e2e:
     runs-on: ubuntu-24.04  # pinned, not -latest: a new image can break the setup steps
@@ -105,3 +107,28 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down -v
+
+  # A green run on main gets the next vX.Y.Z and a GitHub release (README "Releases").
+  release:
+    needs: [test, e2e, docker]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04  # pinned, not -latest: a new image can break the setup steps
+    timeout-minutes: 5
+    # Two quick merges must not both take the same next number; a newer run replaces a waiting one.
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Tag and release main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          tag="$(python3 scripts/release-notes.py --target "$GITHUB_SHA" --run-url "$RUN_URL" --out notes.md)"
+          if [ -z "$tag" ]; then echo "$GITHUB_SHA is already in a release"; exit 0; fi
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --notes-file notes.md
