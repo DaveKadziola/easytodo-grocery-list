@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from easytodo import legacy_import
 from easytodo.boards.service import get_board_view
 from easytodo.cli import main
+from easytodo.content.validation import clean_description, clean_name
 from easytodo.errors import ValidationFailed
 from easytodo.legacy_import import ImportReport, import_legacy
 from easytodo.models import Board, BoardMember, BoardRole, Category, Item
@@ -59,9 +60,15 @@ WINTER = datetime(2026, 1, 15, 12, 0)
 
 
 @pytest.fixture
-async def legacy_conn(settings) -> AsyncIterator[asyncpg.Connection]:
+def legacy_dsn(settings) -> str:
+    """The test database's DSN as asyncpg takes it (the v1 schema lives in that database)."""
+    return settings.database_url.replace("+asyncpg", "")
+
+
+@pytest.fixture
+async def legacy_conn(legacy_dsn) -> AsyncIterator[asyncpg.Connection]:
     """A connection to the test database with an empty v1 schema in it."""
-    conn = await asyncpg.connect(settings.database_url.replace("+asyncpg", ""))
+    conn = await asyncpg.connect(legacy_dsn)
     await conn.execute(f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE")
     await conn.execute(LEGACY_DDL)
     yield conn
@@ -75,7 +82,7 @@ async def owner(db):
 
 
 async def add_category(
-    conn, name: str, position: int = 0, *, created_at=SUMMER, updated_at=SUMMER
+    conn, name: str, position: int | None = 0, *, created_at=SUMMER, updated_at=SUMMER
 ) -> int:
     return await conn.fetchval(
         f"INSERT INTO {SCHEMA}.categories (name, position, created_at, updated_at) "
@@ -170,12 +177,13 @@ async def test_imports_categories_in_order_with_items(db, legacy_conn, owner):
     assert [c.category.name for c in view.categories] == ["Bakery", "Dairy"]  # by position
     assert [c.category.position for c in view.categories] == [0, 1]
     bakery_view, dairy_view = view.categories
-    assert [i.name for i in bakery_view.items] == ["Bread"]
-    assert bakery_view.items[0].description is None
-    butter, milk = dairy_view.items  # open items first
+    assert [i.item.name for i in bakery_view.items] == ["Bread"]
+    assert bakery_view.items[0].item.description is None
+    butter, milk = (iv.item for iv in dairy_view.items)  # open items first
     assert (butter.name, butter.is_done, butter.done_at) == ("Butter", False, None)
     assert (milk.name, milk.description, milk.is_done) == ("Milk", "2 liters", True)
     assert milk.board_id == board.id
+    assert milk.created_by == owner.id  # v1 knows no authors: the importing account stands in
     # v1 has no completion time: the last change stands in for it.
     assert milk.created_at == datetime(2026, 7, 1, 7, 0, tzinfo=UTC)  # Warsaw is UTC+2 in July
     assert milk.updated_at == milk.done_at == datetime(2026, 7, 2, 16, 30, tzinfo=UTC)
@@ -239,7 +247,7 @@ async def test_the_latest_assignment_wins(db, legacy_conn, owner):
 
     assert (report.items, report.orphan_items) == (3, 0)  # one item per task, not per assignment
     view = await get_board_view(db, (await only_board(db)).id, owner)
-    placed = {c.category.name: [i.name for i in c.items] for c in view.categories}
+    placed = {c.category.name: [i.item.name for i in c.items] for c in view.categories}
     assert placed == {"Dairy": [], "Bakery": ["Bread", "Eggs", "Milk"]}
 
 
@@ -277,14 +285,32 @@ async def test_naive_timestamps_converted_from_legacy_tz(db, legacy_conn, owner)
     dairy = await add_category(legacy_conn, "Dairy", 1, created_at=WINTER, updated_at=SUMMER)
     await add_task(legacy_conn, "Milk", dairy, created_at=WINTER, updated_at=SUMMER)
 
-    await run_import(
-        db, legacy_conn, owner
-    )  # v1 ran in Europe/Warsaw: UTC+1 in winter, +2 in summer
+    # v1 ran in Europe/Warsaw: UTC+1 in winter, +2 in summer.
+    await run_import(db, legacy_conn, owner)
 
     (category,) = await categories_of(db, await only_board(db))
     item = await db.scalar(select(Item))
     assert category.created_at == item.created_at == datetime(2026, 1, 15, 11, 0, tzinfo=UTC)
     assert category.updated_at == item.updated_at == datetime(2026, 7, 1, 10, 0, tzinfo=UTC)
+
+
+async def test_clock_change_times_take_the_offset_before_the_change(db, legacy_conn, owner):
+    # Warsaw: 02:30 on 2026-03-29 does not exist (02:00 becomes 03:00), 02:30 on 2026-10-25
+    # happens twice (03:00 becomes 02:00). Both are read with the offset in force before the change.
+    dairy = await add_category(legacy_conn, "Dairy", 1)
+    await add_task(
+        legacy_conn,
+        "Milk",
+        dairy,
+        created_at=datetime(2026, 3, 29, 2, 30),
+        updated_at=datetime(2026, 10, 25, 2, 30),
+    )
+
+    await run_import(db, legacy_conn, owner)
+
+    item = await db.scalar(select(Item))
+    assert item.created_at == datetime(2026, 3, 29, 1, 30, tzinfo=UTC)  # UTC+1
+    assert item.updated_at == datetime(2026, 10, 25, 0, 30, tzinfo=UTC)  # UTC+2
 
 
 async def test_legacy_tz_can_be_chosen(db, legacy_conn, owner):
@@ -304,17 +330,16 @@ async def test_unknown_legacy_tz_rejected(db, legacy_conn, owner):
 
 
 async def test_missing_timestamps_fall_back_to_the_import_time(db, legacy_conn, owner):
-    await legacy_conn.execute(
+    category_id = await legacy_conn.fetchval(
         f"INSERT INTO {SCHEMA}.categories (name, position, created_at, updated_at) "
-        "VALUES ('Dairy', NULL, NULL, NULL)"
+        "VALUES ('Dairy', NULL, NULL, NULL) RETURNING id"
     )
-    category_id = await legacy_conn.fetchval(f"SELECT id FROM {SCHEMA}.categories")
-    await legacy_conn.execute(
+    task_id = await legacy_conn.fetchval(
         f"INSERT INTO {SCHEMA}.tasks (name, created_at, updated_at, is_done) "
-        "VALUES ('Milk', NULL, $1, NULL)",
+        "VALUES ('Milk', NULL, $1, NULL) RETURNING id",
         WINTER,
     )
-    await assign(legacy_conn, 1, category_id)
+    await assign(legacy_conn, task_id, category_id)
     before = datetime.now(UTC)
 
     await run_import(db, legacy_conn, owner)
@@ -354,6 +379,26 @@ async def test_names_are_tidied_like_typed_ones(db, legacy_conn, owner):
     assert category.name == "Dairy products"
     item = await db.scalar(select(Item))
     assert (item.name, item.description) == ("Whole milk", "a\nb")
+
+
+@pytest.mark.parametrize("value", ["  Whole \t milk ", "Mi\x00lk \r\n"])
+def test_v1_text_follows_the_rules_of_typed_text(value):
+    assert legacy_import._fit_name(value, 200, "task 1") == clean_name(
+        value, max_len=200, label="Item name"
+    )
+    assert legacy_import._fit_description(value) == clean_description(value)
+
+
+async def test_categories_without_a_position_go_last(db, legacy_conn, owner):
+    await add_category(legacy_conn, "Dairy", None)
+    await add_category(legacy_conn, "Bakery", 1)
+    await add_category(legacy_conn, "Fruit", None)
+
+    await run_import(db, legacy_conn, owner)
+
+    categories = await categories_of(db, await only_board(db))
+    assert [c.name for c in categories] == ["Bakery", "Dairy", "Fruit"]
+    assert [c.position for c in categories] == [0, 1, 2]
 
 
 async def test_colliding_category_names_are_renamed(db, legacy_conn, owner):
@@ -436,22 +481,21 @@ async def test_only_the_named_schema_is_read(db, legacy_conn, owner):
 # --- the command line ----------------------------------------------------------------------
 
 
-async def import_command(settings, *args: str) -> int:
+async def import_command(legacy_dsn: str, *args: str) -> int:
     # main runs its own event loop (asyncio.run), so it cannot run in the test's.
-    dsn = settings.database_url.replace("+asyncpg", "")
     return await asyncio.to_thread(
-        main, ["import-legacy", "--legacy-dsn", dsn, "--schema", SCHEMA, *args]
+        main, ["import-legacy", "--legacy-dsn", legacy_dsn, "--schema", SCHEMA, *args]
     )
 
 
-async def test_cli_imports_and_prints_a_report(db, legacy_conn, owner, cli_env, settings, capsys):
+async def test_cli_imports_and_prints_a_report(db, legacy_conn, owner, cli_env, legacy_dsn, capsys):
     dairy = await add_category(legacy_conn, "Dairy", 1)
     await add_category(legacy_conn, "X" * 130, 2)
     await add_task(legacy_conn, "Milk", dairy)
     await add_task(legacy_conn, "Batteries")
 
     code = await import_command(
-        settings, "--owner-email", " Dave@Example.com ", "--board-name", "Old list"
+        legacy_dsn, "--owner-email", " Dave@Example.com ", "--board-name", "Old list"
     )
 
     assert code == 0
@@ -466,12 +510,12 @@ async def test_cli_imports_and_prints_a_report(db, legacy_conn, owner, cli_env, 
     assert len(await categories_of(db, board)) == 3
 
 
-async def test_cli_legacy_tz_option(db, legacy_conn, owner, cli_env, settings):
+async def test_cli_legacy_tz_option(db, legacy_conn, owner, cli_env, legacy_dsn):
     dairy = await add_category(legacy_conn, "Dairy", 1)
     await add_task(legacy_conn, "Milk", dairy, created_at=SUMMER)
 
     assert (
-        await import_command(settings, "--owner-email", "dave@example.com", "--legacy-tz", "UTC")
+        await import_command(legacy_dsn, "--owner-email", "dave@example.com", "--legacy-tz", "UTC")
         == 0
     )
 
@@ -487,18 +531,17 @@ async def test_cli_legacy_tz_option(db, legacy_conn, owner, cli_env, settings):
     ],
 )
 async def test_cli_refuses_bad_arguments(
-    db, legacy_conn, owner, cli_env, settings, capsys, extra, message
+    db, legacy_conn, owner, cli_env, legacy_dsn, capsys, extra, message
 ):
-    code = await import_command(settings, *extra)
+    code = await import_command(legacy_dsn, *extra)
 
     assert code == 1
     assert message in capsys.readouterr().err
     assert await board_count(db) == 0
 
 
-async def test_cli_refuses_a_bad_schema_name(db, legacy_conn, owner, cli_env, settings, capsys):
-    dsn = settings.database_url.replace("+asyncpg", "")
-    args = ["import-legacy", "--legacy-dsn", dsn, "--schema", "prod; drop table x"]
+async def test_cli_refuses_a_bad_schema_name(db, legacy_conn, owner, cli_env, legacy_dsn, capsys):
+    args = ["import-legacy", "--legacy-dsn", legacy_dsn, "--schema", "prod; drop table x"]
 
     code = await asyncio.to_thread(main, [*args, "--owner-email", "dave@example.com"])
 
@@ -508,10 +551,9 @@ async def test_cli_refuses_a_bad_schema_name(db, legacy_conn, owner, cli_env, se
 
 
 async def test_cli_reports_a_legacy_database_error(
-    db, legacy_conn, owner, cli_env, settings, capsys
+    db, legacy_conn, owner, cli_env, legacy_dsn, capsys
 ):
-    dsn = settings.database_url.replace("+asyncpg", "")
-    args = ["import-legacy", "--legacy-dsn", dsn, "--schema", "no_such_schema"]
+    args = ["import-legacy", "--legacy-dsn", legacy_dsn, "--schema", "no_such_schema"]
 
     code = await asyncio.to_thread(main, [*args, "--owner-email", "dave@example.com"])
 

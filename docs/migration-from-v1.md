@@ -14,6 +14,7 @@ v2 account:
 - Each item keeps its description, its done state and its created/updated times. v1 stored times
   without a time zone; they are read as local time in `--legacy-tz` (default `Europe/Warsaw`).
   With v1's Docker setups, pass `--legacy-tz UTC` (see step 4).
+- Items count as added by the `--owner-email` account.
 - v1's internal tables (`updates_log`, `temporary_data`) are not copied.
 
 Changes made in v1 after the import are not copied. Stop using v1 before you start, or import

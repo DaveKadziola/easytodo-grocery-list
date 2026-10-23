@@ -9,21 +9,17 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs
 
 import pytest
-from factories import create_board, create_category, create_item
+from factories import create_board, create_category, create_item, create_user
 from helpers import NASTY
 from playwright.sync_api import Locator, Page, expect
 from sqlalchemy import func, update
 
 from e2e.conftest import open_board_menu, watch_console
-from easytodo.models import Category, Item
+from e2e.locators import TAP_TARGETS, add_item, category, item, items_of
+from easytodo.models import BoardRole, Category, Item
 
 pytestmark = pytest.mark.e2e
 
-# What a finger must be able to hit: every control at least 44×44 px (the checkbox through the
-# label around it).
-TAP_TARGETS = (
-    "a, button, summary, select, input:not([type=checkbox]), label:has(> input[type=checkbox])"
-)
 # On a phone the bottom bar covers the foot of the screen: what a finger goes for is scrolled up.
 SCROLL_CLEAR_OF_THE_BOTTOM_BAR = "(el) => el.scrollIntoView({ block: 'center' })"
 
@@ -60,22 +56,6 @@ def describe(seed, item_name: str, description: str) -> None:
     seed(run)
 
 
-def category(page: Page, name: str) -> Locator:
-    return page.locator("section[data-category-id]").filter(
-        has=page.get_by_role("heading", name=name, exact=True)
-    )
-
-
-def item(page: Page, name: str) -> Locator:
-    return page.locator("li[data-item-id]").filter(
-        has=page.get_by_role("button", name=name, exact=True)
-    )
-
-
-def items_of(page: Page, category_name: str) -> Locator:
-    return category(page, category_name).locator("li[data-item-id]")
-
-
 def too_small_targets(page: Page) -> list[str]:
     return page.locator("#board-content").evaluate(
         """(board, selector) => Array.from(board.querySelectorAll(selector))
@@ -107,6 +87,43 @@ def test_add_and_toggle_item_on_phone(logged_in_page_mobile, seed, user, open_bo
     expect(item(page, "Milk")).to_have_class(re.compile(r"\bline-through\b"))
     expect(items_of(page, "Dairy")).to_have_text([re.compile("Yogurt"), re.compile("Milk")])
     assert too_small_targets(page) == []
+
+
+def test_shared_board_shows_who_added_each_item(logged_in_page, seed, user, open_board):
+    page = logged_in_page
+    problems = watch_console(page)
+
+    async def make(db) -> tuple[int, int]:
+        anna = await create_user(db, "anna@example.com", display_name="Anna Kowalska")
+        shared = await create_board(db, user, "Groceries", {anna: BoardRole.EDITOR})
+        dairy = await create_category(db, shared, "Dairy")
+        await create_item(db, dairy, "Milk", created_by=user)
+        await create_item(db, dairy, "Bread", created_by=anna)
+        await create_item(db, dairy, "Eggs")  # its author's account is gone
+        solo = await create_board(db, user, "Solo")
+        await create_item(db, await create_category(db, solo, "Dairy"), "Cheese", created_by=user)
+        return shared.id, solo.id
+
+    shared_id, solo_id = seed(make)
+
+    open_board(page, shared_id)
+
+    milk, bread = item(page, "Milk").locator(".avatar"), item(page, "Bread").locator(".avatar")
+    expect(milk).to_have_text("D")
+    expect(milk).to_have_attribute("title", "dave")
+    expect(bread).to_have_text("AK")
+    expect(bread).to_have_attribute("title", "Anna Kowalska")
+    expect(item(page, "Eggs").locator(".avatar")).to_have_count(0)
+    # The avatar sits beside the name, not in it: the checkbox is still named by the name alone.
+    expect(page.get_by_role("checkbox", name="Milk", exact=True)).to_have_count(1)
+    add_item(page, "Dairy", "Butter")
+    expect(item(page, "Butter").locator(".avatar")).to_have_text("D")
+
+    open_board(page, solo_id)
+
+    expect(page.locator("#board-content li[data-item-id]")).to_have_count(1)
+    expect(page.locator("#board-content .avatar")).to_have_count(0)
+    assert problems == []
 
 
 def test_drag_item_to_other_category(logged_in_page, seed, user, open_board):

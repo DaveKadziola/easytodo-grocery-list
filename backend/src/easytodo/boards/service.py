@@ -1,6 +1,6 @@
 """Creating, listing, renaming, archiving, restoring and deleting boards, loading a whole board
-for display, and the board's members: listing them, changing their roles, removing them and
-leaving.
+for display, the one query that lists items (``select_item_views``), and the board's members:
+listing them, changing their roles, removing them and leaving.
 
 An archived board is gone for its members (``require_board`` and every list leave it out) but
 keeps its data, until its owner restores it or deletes it for good from the archive.
@@ -8,15 +8,26 @@ keeps its data, until its owner restores it or deletes it for good from the arch
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import BigInteger, ColumnElement, ScalarSelect, Select, bindparam, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from easytodo.boards.permissions import Action, RowLock, is_possible_id, require_board
 from easytodo.content.validation import clean_name
+from easytodo.display import display_name
 from easytodo.errors import Conflict, Forbidden, NotFound, ValidationFailed
-from easytodo.models import Board, BoardMember, BoardRole, Category, Item, User
+from easytodo.models import (
+    Attachment,
+    Board,
+    BoardMember,
+    BoardRole,
+    Category,
+    ChecklistEntry,
+    Item,
+    User,
+)
 from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
 
 _NAME_MAX_LENGTH = 80  # boards.name is String(80)
@@ -24,10 +35,6 @@ OWNER_ROLE_FIXED = "The owner's role can't be changed."
 OWNER_CANNOT_LEAVE = "The owner can't leave. Archive the board instead."
 BOARD_NOT_ARCHIVED = "Archive the board first."
 CONFIRM_BOARD_NAME = "Type the board name to delete it permanently."
-
-# How items are listed in a category, on the board page and in every fragment alike: open ones
-# first, then by name ignoring case.
-ITEM_ORDER = (Item.is_done, func.lower(Item.name), Item.id)
 
 
 @dataclass(frozen=True)
@@ -46,9 +53,31 @@ class ArchivedBoard:
 
 
 @dataclass(frozen=True)
+class Author:
+    """Who added an item: the name they are shown by (their own, or the email's local part)."""
+
+    user_id: int
+    name: str
+
+
+@dataclass(frozen=True)
+class ItemView:
+    """An item as the board shows it: with its author (``None`` once their account is gone),
+    whether to show the author (only on a board with more than one member), and the counts of
+    its checklist entries and attachments."""
+
+    item: Item
+    author: Author | None
+    show_author: bool
+    checklist_done: int
+    checklist_total: int
+    attachment_count: int
+
+
+@dataclass(frozen=True)
 class CategoryView:
     category: Category
-    items: list[Item]
+    items: list[ItemView]
 
 
 @dataclass(frozen=True)
@@ -214,11 +243,87 @@ async def delete_board(db: AsyncSession, board_id: int, user: User, confirm_name
     await commit_and_publish(db)  # nobody can have an archived board open
 
 
+def item_order(user: User) -> list[ColumnElement]:
+    """How items are listed in a category, on the board page and in every fragment alike: open
+    ones first, then by name ignoring case."""
+    return [Item.is_done, func.lower(Item.name), Item.id]
+
+
+_AUTHOR = aliased(User)
+_BOARD_ID = bindparam("board_id", type_=BigInteger)
+_CATEGORY_ID = bindparam("category_id", type_=BigInteger)
+
+
+def _item_views_query(board_ref: ColumnElement | ScalarSelect) -> Select[Any]:
+    """The items with their author's columns, whether the board is shared (the board ``board_ref``
+    has more than one member) and the counts of checklist entries (done, all) and attachments;
+    in no scope yet, and in no order."""
+    # Not tied to an item's row: PostgreSQL counts the members once, not for every item.
+    shared = select(func.count()).where(BoardMember.board_id == board_ref).scalar_subquery() > 1
+    entries = (
+        select(func.count()).select_from(ChecklistEntry).where(ChecklistEntry.item_id == Item.id)
+    )
+    attachments = select(func.count()).select_from(Attachment).where(Attachment.item_id == Item.id)
+    return (
+        select(
+            Item,
+            _AUTHOR.id,
+            _AUTHOR.email,
+            _AUTHOR.display_name,
+            shared,
+            entries.where(ChecklistEntry.is_done.is_(True)).scalar_subquery(),
+            entries.scalar_subquery(),
+            attachments.scalar_subquery(),
+        )
+        .join(Category, Category.id == Item.category_id)
+        .outerjoin(_AUTHOR, _AUTHOR.id == Item.created_by)
+        .where(Category.archived_at.is_(None), Item.deleted_at.is_(None))
+    )
+
+
+# Built once, here: building such a statement takes longer than running it, and every board and
+# category view runs one. Only the order is added per call.
+_BOARD_ITEMS = _item_views_query(_BOARD_ID).where(Item.board_id == _BOARD_ID)
+# An alias of its own: the subquery would correlate to the joined ``Category`` and have no table.
+_in_category = aliased(Category)
+_CATEGORY_ITEMS = _item_views_query(
+    select(_in_category.board_id).where(_in_category.id == _CATEGORY_ID).scalar_subquery()
+).where(Item.category_id == _CATEGORY_ID)
+
+
+async def select_item_views(
+    db: AsyncSession, user: User, *, board_id: int | None = None, category_id: int | None = None
+) -> list[ItemView]:
+    """The items of a board (all its active categories) or of one category, in ``item_order``:
+    not deleted, and not in an archived category. One statement, and no permission check: the
+    caller has found the board or category for ``user`` first (``require_board``,
+    ``load_category``). Exactly one of ``board_id`` and ``category_id`` is given."""
+    if (board_id is None) == (category_id is None):
+        raise TypeError("Give exactly one of board_id and category_id.")
+    if board_id is not None:
+        query, params = _BOARD_ITEMS, {"board_id": board_id}
+    else:
+        query, params = _CATEGORY_ITEMS, {"category_id": category_id}
+    rows = await db.execute(query.order_by(*item_order(user)), params)
+
+    authors: dict[int, Author] = {}  # one Author per person
+    views = []
+    for item, author_id, email, name, is_shared, done, total, files in rows:
+        person = None
+        if author_id is not None:
+            person = authors.get(author_id)
+            if person is None:
+                person = authors[author_id] = Author(author_id, display_name(email, name))
+        views.append(ItemView(item, person, person is not None and is_shared, done, total, files))
+    return views
+
+
 async def get_board_view(db: AsyncSession, board_id: int, user: User) -> BoardView:
     """The board with its active categories (by position) and their items (open first, then by
     name).
 
-    Two queries after the permission check: the categories and the items in them.
+    Two queries after the permission check: the categories and the items in them
+    (``select_item_views``).
     """
     board, role = await require_board(db, board_id, user, Action.VIEW)
     categories = list(
@@ -228,15 +333,9 @@ async def get_board_view(db: AsyncSession, board_id: int, user: User) -> BoardVi
             .order_by(Category.position, Category.id)
         )
     )
-    items = await db.scalars(
-        select(Item)
-        .join(Category, Category.id == Item.category_id)
-        .where(Item.board_id == board.id, Item.deleted_at.is_(None), Category.archived_at.is_(None))
-        .order_by(*ITEM_ORDER)
-    )
-    by_category: dict[int, list[Item]] = {}
-    for item in items:
-        by_category.setdefault(item.category_id, []).append(item)
+    by_category: dict[int, list[ItemView]] = {}
+    for item_view in await select_item_views(db, user, board_id=board.id):
+        by_category.setdefault(item_view.item.category_id, []).append(item_view)
     views = [CategoryView(c, by_category.get(c.id, [])) for c in categories]
     return BoardView(board, role, views)
 

@@ -1,14 +1,17 @@
 """Shared test steps that drive the app over HTTP, the names that test escaping and typed
-confirmations, reading pages and toasts, and waiting for another connection's row lock."""
+confirmations, reading pages and toasts, counting the SQL a block runs, and waiting for another
+connection's row lock."""
 
 import asyncio
 import json
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from urllib.parse import quote, unquote
 
 import httpx
 from factories import DEFAULT_PASSWORD
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
 from easytodo.web import FLASH_COOKIE
@@ -59,6 +62,22 @@ def flash_of(response: httpx.Response) -> dict:
     """The toast ``response`` leaves for the next page (its flash cookie), as
     ``{"level": ..., "message": ...}``."""
     return json.loads(unquote(response.cookies[FLASH_COOKIE]))
+
+
+@contextmanager
+def count_queries(db) -> Iterator[list[str]]:
+    """The SQL statements ``db``'s engine runs inside the block."""
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    engine = db.bind.sync_engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        yield statements
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
 
 
 async def wait_until_a_query_waits_for_a_lock(db) -> None:

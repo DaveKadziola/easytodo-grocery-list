@@ -67,7 +67,7 @@ async def test_items_sorted_open_first_then_alphabetically(db):
     view, role = await get_category_view(db, fruit.id, owner)
 
     assert (view.category.id, role) == (fruit.id, BoardRole.OWNER)
-    assert [i.name for i in view.items] == ["Apple", "cherry", "banana"]
+    assert [i.item.name for i in view.items] == ["Apple", "cherry", "banana"]
 
 
 async def test_create_item_returns_the_category_fragment(

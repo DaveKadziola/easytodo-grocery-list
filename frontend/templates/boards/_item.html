@@ -1,6 +1,7 @@
 {# One item; done items are struck through. The name opens the item modal, which reads the item
    from the data-* attributes only (autoescaped like any other value).
-   Context: item (Item), can_edit. -#}
+   Context: iv (ItemView), can_edit, avatar (the macro of partials/_avatar.html). -#}
+{% set item = iv.item %}
 <li id="item-{{ item.id }}" data-item-id="{{ item.id }}" class="flex items-start{% if item.is_done %} text-slate-500 dark:text-slate-400 line-through{% endif %}">
   {% if can_edit %}
   <label class="tap-target -ml-2.5">
@@ -15,4 +16,8 @@
     {% endif %}
     {% if item.description %}<p class="-mt-1.5 whitespace-pre-line break-words pb-2 text-sm text-slate-600 dark:text-slate-400">{{ item.description }}</p>{% endif %}
   </div>
+  {#- A block around the inline-flex avatar, not a flex box: the <li>'s line-through reaches the text of a flex item, but not that of an inline-flex one. *:align-top keeps the row 44 px high. #}
+  {% if iv.show_author %}
+  <div class="shrink-0 py-2.5 pl-2 *:align-top">{{ avatar(iv.author.user_id, iv.author.name) }}</div>
+  {% endif %}
 </li>

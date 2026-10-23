@@ -1,13 +1,11 @@
 import json
 import re
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import pytest
 from factories import DEFAULT_PASSWORD, create_board, create_category, create_item, create_user
-from helpers import NASTY, NASTY_ESCAPED, login
-from sqlalchemy import event, func, select
+from helpers import NASTY, NASTY_ESCAPED, count_queries, login
+from sqlalchemy import func, select
 
 from easytodo.boards import service
 from easytodo.boards.permissions import Action
@@ -25,22 +23,6 @@ async def client_for(client_factory, email: str):
     client = await client_factory()
     await login(client, email)
     return client
-
-
-@contextmanager
-def count_queries(db) -> Iterator[list[str]]:
-    """The SQL statements ``db``'s engine runs inside the block."""
-    statements: list[str] = []
-
-    def record(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
-
-    engine = db.bind.sync_engine
-    event.listen(engine, "before_cursor_execute", record)
-    try:
-        yield statements
-    finally:
-        event.remove(engine, "before_cursor_execute", record)
 
 
 async def count_rows(db, model) -> int:
@@ -410,7 +392,7 @@ async def test_board_view_uses_two_queries(db, monkeypatch):
     assert authorized == [Action.VIEW]
     assert len(statements) == 2
     assert (view.board.id, view.role) == (board.id, BoardRole.OWNER)
-    assert [(c.category.name, [i.name for i in c.items]) for c in view.categories] == [
+    assert [(c.category.name, [i.item.name for i in c.items]) for c in view.categories] == [
         ("Fruit", ["Apple", "cherry", "banana"]),  # open first, then by name ignoring case
         ("Dairy", ["milk"]),
         ("Empty", []),

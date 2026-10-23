@@ -9,16 +9,13 @@ import pytest
 from factories import create_board
 from playwright.sync_api import Locator, Page, expect
 
+from e2e.locators import TAP_TARGETS, category
+
 pytestmark = pytest.mark.e2e
 
 TOAST_MS = 4000  # how long a toast stays
 UNDO_TOAST_MS = 5000  # how long one with an Undo button stays
 AA = 4.5  # WCAG AA contrast for text
-# What a finger must be able to hit: every control at least 44×44 px (the checkbox through the
-# label around it).
-TAP_TARGETS = (
-    "a, button, summary, select, input:not([type=checkbox]), label:has(> input[type=checkbox])"
-)
 # Text the theme leaves hard to read: under 4.5:1 (WCAG AA) against what is behind it, done
 # items included (greyed, still to be read). Decorations (aria-hidden) are no text to read, and
 # screen-reader-only text is not seen.
@@ -64,12 +61,6 @@ LOW_CONTRAST_TEXT = r"""
     .map(([el, ratio]) => `${el.outerHTML.slice(0, 80)} has ${ratio.toFixed(2)}:1`);
 }
 """
-
-
-def category(page: Page, name: str) -> Locator:
-    return page.locator("section[data-category-id]").filter(
-        has=page.get_by_role("heading", name=name, exact=True)
-    )
 
 
 def category_cards(page: Page) -> list[Locator]:

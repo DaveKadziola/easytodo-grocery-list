@@ -31,7 +31,7 @@ from easytodo.boards.permissions import (
     load_for_member,
     require_board,
 )
-from easytodo.boards.service import ITEM_ORDER, CategoryView
+from easytodo.boards.service import CategoryView, select_item_views
 from easytodo.content.validation import (
     CATEGORY_NAME_MAX_LENGTH,
     ITEM_NAME_MAX_LENGTH,
@@ -337,12 +337,7 @@ async def get_category_view(
 ) -> tuple[CategoryView, BoardRole]:
     """The category with its items (open first, then by name) and ``user``'s role."""
     category, role = await load_category(db, category_id, user, Action.VIEW)
-    items = await db.scalars(
-        select(Item)
-        .where(Item.category_id == category.id, Item.deleted_at.is_(None))
-        .order_by(*ITEM_ORDER)
-    )
-    return CategoryView(category, list(items)), role
+    return CategoryView(category, await select_item_views(db, user, category_id=category.id)), role
 
 
 async def create_item(
@@ -358,6 +353,7 @@ async def create_item(
         name=_clean_item_name(name),
         description=clean_description(description),
         is_done=False,
+        created_by=user.id,
     )
     db.add(item)
     await commit_and_publish(db, _category_changed(category.board_id, category.id))
