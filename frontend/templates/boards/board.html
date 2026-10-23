@@ -1,7 +1,9 @@
-{# Context: view (BoardView), boards (the user's BoardSummary list, for the board switcher). The
-   board is rendered inline, so the first view is ready HTML; then realtime.js keeps it current over
-   the board's WebSocket, and shows the connection in the header (#conn-status). On a phone a bar
-   along the bottom holds the board switcher and "New category". -#}
+{# Context: view (BoardView), boards (the user's BoardChoice list, for the board switcher and the
+   boards a category can move to). The board is rendered inline, so the first view is ready HTML;
+   then realtime.js keeps it current over the board's WebSocket, and shows the connection in the
+   header (#conn-status). On a phone a bar along the bottom holds the board switcher and "New
+   category". A member who may edit gets the dialog that moves a category to another board, when
+   there is one to move it to; it is outside the board content, so that a reload leaves it alone. -#}
 {% extends "base.html" %}
 {% block title %}{{ view.board.name }} · EasyToDo{% endblock %}
 {% block scripts %}
@@ -13,6 +15,12 @@
 {% endblock %}
 {% block content %}
 {% set can_edit = can(view.role, Action.EDIT_CONTENT) %}
+{#- The other boards where the member may edit: where a category can go. #}
+{% set targets = namespace(boards=[]) %}
+{% for s in boards if s.id != view.board.id and can(s.role, Action.EDIT_CONTENT) %}
+{% set targets.boards = targets.boards + [s] %}
+{% endfor %}
+{% set move_targets = targets.boards %}
 {% if can_edit %}
 <div x-data="itemModal">
   {% include "boards/_board_content.html" %}
@@ -24,12 +32,15 @@
   {% include "boards/_item_viewer.html" %}
 </div>
 {% endif %}
+{% if can_edit and move_targets %}
+{% include "boards/_move_category.html" %}
+{% endif %}
 <nav id="bottom-bar" aria-label="Board" class="bottom-bar">
   <details class="relative">
     <summary class="btn-secondary cursor-pointer list-none [&::-webkit-details-marker]:hidden">Boards</summary>
     <div class="menu bottom-full left-0 right-auto mt-0 mb-2 max-h-[60dvh] overflow-y-auto">
       {% for s in boards %}
-      <a href="/boards/{{ s.board.id }}" class="menu-item break-all aria-[current=page]:text-emerald-700 dark:aria-[current=page]:text-emerald-400"{% if s.board.id == view.board.id %} aria-current="page"{% endif %}>{{ s.board.name }}</a>
+      <a href="/boards/{{ s.id }}" class="menu-item break-all aria-[current=page]:text-emerald-700 dark:aria-[current=page]:text-emerald-400"{% if s.id == view.board.id %} aria-current="page"{% endif %}>{{ s.name }}</a>
       {% endfor %}
       <a href="/boards" class="menu-item">All boards</a>
     </div>

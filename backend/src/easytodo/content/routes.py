@@ -1,7 +1,7 @@
 """Categories, items and checklist entries over HTMX, and the board's "Archived categories" page.
 Each route answers with the HTML fragment to swap in: the whole board content, one category, an
-item's details (also after a change to its checklist), or nothing (an archived category, a new
-order); a category restored or deleted for good from the archive page reloads that page
+item's details (also after a change to its checklist), or nothing (an archived or moved category, a
+new order); a category restored or deleted for good from the archive page reloads that page
 instead."""
 
 import json
@@ -31,6 +31,7 @@ from easytodo.content.service import (
     get_category_view,
     get_item_details,
     list_archived_categories,
+    move_category,
     move_item,
     rename_category,
     reorder_categories,
@@ -40,7 +41,7 @@ from easytodo.content.service import (
     update_item,
 )
 from easytodo.errors import ValidationFailed
-from easytodo.models import User
+from easytodo.models import Board, User
 from easytodo.web import flash, prompt_answer, render
 
 router = APIRouter()
@@ -133,6 +134,24 @@ async def archive(db: DbSession, user: CurrentUser, category_id: int) -> Respons
     await archive_category(db, category_id, user)
     # An empty 200: HTMX swaps the category out.
     toast = {"toast": {"level": "info", "message": "Category archived."}}
+    return Response(headers={"HX-Trigger": json.dumps(toast)})
+
+
+@router.post("/categories/{category_id}/move")
+async def move_to_board(
+    db: DbSession,
+    user: CurrentUser,
+    category_id: int,
+    board_id: Annotated[int, Form()],
+    name: FormField = "",
+) -> Response:
+    """Move the category, with its items, to the end of another board (see ``move_category``)
+    under ``name``. An empty 200: HTMX swaps the category out of this board's page."""
+    category, _ = await move_category(db, category_id, user, board_id, name)
+    # By primary key: the session's identity map no longer holds the Board the permission check
+    # loaded (it is weak, and nothing refers to it any more), so this is one more statement.
+    target = await db.get(Board, category.board_id)
+    toast = {"toast": {"level": "info", "message": f"Moved to “{target.name}”."}}
     return Response(headers={"HX-Trigger": json.dumps(toast)})
 
 

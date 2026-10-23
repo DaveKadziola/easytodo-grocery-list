@@ -54,6 +54,11 @@ OWNER_CANNOT_LEAVE = "The owner can't leave. Archive the board instead."
 BOARD_NOT_ARCHIVED = "Archive the board first."
 CONFIRM_BOARD_NAME = "Type the board name to delete it permanently."
 
+# The ids that the statements built once in this module take as parameters (see _BOARD_ITEMS).
+_BOARD_ID = bindparam("board_id", type_=BigInteger)
+_CATEGORY_ID = bindparam("category_id", type_=BigInteger)
+_USER_ID = bindparam("user_id", type_=BigInteger)
+
 
 @dataclass(frozen=True)
 class BoardSummary:
@@ -62,6 +67,15 @@ class BoardSummary:
     member_count: int
     open_items: int
     owner_email: str
+
+
+@dataclass(frozen=True)
+class BoardChoice:
+    """A board to pick from (the board switcher, the boards a category can move to): no counts."""
+
+    id: int
+    name: str
+    role: BoardRole
 
 
 @dataclass(frozen=True)
@@ -204,6 +218,24 @@ async def list_boards(db: AsyncSession, user: User) -> list[BoardSummary]:
     return [BoardSummary(*row) for row in rows]
 
 
+# Built once, like the item statements below. The order of list_boards: change them together.
+_BOARD_CHOICES = (
+    select(Board.id, Board.name, BoardMember.role)
+    .join(BoardMember, BoardMember.board_id == Board.id)
+    .where(BoardMember.user_id == _USER_ID, Board.archived_at.is_(None))
+    .order_by((Board.owner_id == _USER_ID).desc(), func.lower(Board.name), Board.id)
+)
+
+
+async def list_board_choices(db: AsyncSession, user: User) -> list[BoardChoice]:
+    """The active boards ``user`` is a member of, in the order of ``list_boards``, with their
+    role and nothing more: one light statement, for the pages that only name the boards (the
+    board page's switcher and its "Move to board" dialog) and have no use for the counts of
+    ``list_boards``."""
+    rows = await db.execute(_BOARD_CHOICES, {"user_id": user.id})
+    return [BoardChoice(*row) for row in rows]
+
+
 def _archived_by(user: User) -> tuple[ColumnElement[bool], ...]:
     return Board.owner_id == user.id, Board.archived_at.is_not(None)
 
@@ -328,9 +360,6 @@ def _account_sort(user: User) -> dict[str, Any]:
 
 
 _AUTHOR = aliased(User)
-_BOARD_ID = bindparam("board_id", type_=BigInteger)
-_CATEGORY_ID = bindparam("category_id", type_=BigInteger)
-_USER_ID = bindparam("user_id", type_=BigInteger)
 
 
 def _item_views_query(board_ref: ColumnElement | ScalarSelect) -> Select[Any]:

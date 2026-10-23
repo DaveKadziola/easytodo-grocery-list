@@ -252,3 +252,9 @@
 #categories > section:last-of-type [data-move="down"] {
   display: none;
 }
+
+/* A category's "Move to board…" only on a page that has the dialog (there is another board to move
+   it to): the category fragments are the same on every page, and do not know. */
+body:not(:has(#move-category)) [data-move-category-id] {
+  display: none;
+}

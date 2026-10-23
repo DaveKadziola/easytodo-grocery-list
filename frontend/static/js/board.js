@@ -1,7 +1,8 @@
 // Board page: drag and drop (SortableJS) and Move up / Move down for categories, the item modal
 // of those who may edit and the read-only dialog of those who may not (Alpine components
 // "itemModal" and "itemViewer", both with the open item's details fetched into their slot, and in
-// them the checklist: ticks, and drag and drop or ArrowUp / ArrowDown for its entries), ticks that
+// them the checklist: ticks, and drag and drop or ArrowUp / ArrowDown for its entries), the dialog
+// that moves a category to another board (the component "moveCategory"), ticks that
 // show at once, fields that are ready for the next entry and keep what the user typed when their
 // category or the details are swapped, folding categories away (per device), the bottom bar's "New
 // category", and a board reload when a change did not go through.
@@ -12,7 +13,8 @@
 // the modal is in progress, the open item and a fetch of its details), a "board:idle" event on
 // the document when that ends, a "board:stale" event when the page no longer shows what the
 // server has (it then queues a reload), and a "board:changed" event ({categoryId}) when the modal
-// closes after a change to the checklist (the category's tile shows its count).
+// closes after a change to the checklist (the category's tile shows its count). The category menu's
+// "Move to board…" opens the dialog with a "move-category" event on the window ({id, label}).
 (() => {
   "use strict";
 
@@ -34,10 +36,11 @@
   // settle delay), so a form in it never submits as a plain page request before htmx has it.
   const RELOAD_SWAP = "outerHTML settle:0ms";
   let dragging = false; // a Sortable drag is running
-  let editing = false; // the item modal or dialog is open
+  let editing = false; // the item modal or dialog, or the dialog that moves a category, is open
   let openId = null; // the id (a number) of the item that is open in it
   let detailsChanged = false; // the open item's checklist was changed from this tab
   let newCategoryShown = false; // on a phone the bottom bar's button showed the "New category" form
+  let moveOpener = null; // the menu's button ("summary") that opened the move dialog, to get the focus back
 
   function boardContent() {
     return document.querySelector(BOARD_CONTENT);
@@ -478,6 +481,16 @@
       next.focus();
       return;
     }
+    // A category menu's "Move to board…": the menu closes, and the dialog opens for the category.
+    const moveToBoard = event.target.closest("[data-move-category-id]");
+    if (moveToBoard) {
+      const menu = moveToBoard.closest("details");
+      menu.open = false;
+      moveOpener = menu.querySelector("summary");
+      const detail = { id: moveToBoard.dataset.moveCategoryId, label: moveToBoard.dataset.moveCategoryLabel };
+      window.dispatchEvent(new CustomEvent("move-category", { detail }));
+      return;
+    }
     // A category's fold button: hides or shows its items on this device.
     const collapseButton = event.target.closest("[data-collapse]");
     if (collapseButton) {
@@ -688,6 +701,89 @@
           });
         }
         this.close();
+      },
+    }));
+
+    // The dialog that moves a category, with its items, to another board (_move_category.html): the
+    // category's menu opens it ("move-category" on the window), and it holds live updates back and
+    // makes the page behind inert while it is open, as the item modal does. The request swaps the
+    // category's section for the empty answer, which removes it from this board's page.
+    Alpine.data("moveCategory", () => ({
+      open: false,
+      categoryId: "",
+      label: "",
+      taken: false, // the target board has a category of that name: the field holds a free one
+      sending: false, // the request is on its way: one at a time
+
+      get closed() {
+        return !this.open;
+      },
+
+      // @move-category.window. The values go into the dialog as text (x-text, .value).
+      openFor(event) {
+        const { id, label } = event.detail;
+        const { board, name } = this.$refs;
+        this.categoryId = id;
+        this.label = label;
+        this.taken = false;
+        this.sending = false;
+        board.selectedIndex = 0;
+        name.value = label;
+        this.open = true;
+        editing = true;
+        setPageInert(true);
+        this.$nextTick(() => board.focus());
+      },
+
+      trapFocus,
+
+      close() {
+        if (!this.open) return;
+        this.open = false;
+        editing = false;
+        setPageInert(false);
+        const opener = moveOpener;
+        moveOpener = null;
+        // Not there after a move (the category's section is gone with its menu).
+        if (opener && opener.isConnected) opener.focus();
+        becameIdle();
+      },
+
+      // @submit.prevent on the form: to the board picked, under the name typed.
+      move() {
+        if (this.sending) return;
+        const section = document.getElementById(`category-${this.categoryId}`);
+        if (!section) {
+          this.close(); // not on the page (any more): what it shows is out of date
+          stale();
+          return;
+        }
+        this.taken = false;
+        this.sending = true;
+        Promise.resolve(
+          htmx.ajax("POST", `/categories/${this.categoryId}/move`, { source: this.$refs.form, target: section }),
+        ).catch(() => {}); // a failed request shows its own error
+      },
+
+      // @htmx:after-request, from the form. The dialog closes when the category has gone, or has
+      // gone elsewhere (a 403 or 404 answer: the toast says why, and the board is reloaded), and
+      // stays for a name that is taken (409), a refused input (422) or no answer at all.
+      afterRequest(event) {
+        if (!this.sending) return; // the answer to a request of a dialog closed (or reopened) since
+        this.sending = false;
+        const { successful, xhr } = event.detail;
+        const status = xhr ? xhr.status : 0;
+        if (successful || status === 403 || status === 404) this.close();
+      },
+
+      // @category-name-taken (the 409's HX-Trigger, which htmx sends in kebab-case too): the field
+      // gets the free name the server found, selected so that typing replaces it.
+      nameTaken(event) {
+        const { name } = this.$refs;
+        this.taken = true;
+        name.value = event.detail.suggestion;
+        name.focus();
+        name.select();
       },
     }));
 

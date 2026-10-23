@@ -14,6 +14,7 @@ from helpers import NASTY
 from playwright.sync_api import Locator, Page, expect
 from sqlalchemy import func, update
 
+from e2e import test_responsive
 from e2e.conftest import open_board_menu, watch_console
 from e2e.locators import TAP_TARGETS, add_item, category, item, items_of
 from easytodo.models import BoardRole, Category, Item
@@ -874,3 +875,61 @@ def test_sort_menu_reorders_one_category_and_remembers_it(logged_in_page, seed, 
         [re.compile("Butter"), re.compile("Milk"), re.compile("Yogurt")]
     )
     assert problems == []
+
+
+def test_move_category_to_a_board_with_the_same_name(logged_in_page_mobile, seed, user, open_board):
+    page = logged_in_page_mobile
+    problems = watch_console(page)
+    groceries = seed_board(seed, user, {"Dairy": ["Milk"], "Bakery": ["Bread"]})
+    open_board(page, groceries)
+    category(page, "Dairy").get_by_label("Category actions").click()
+    # Nowhere to move it to: the board is the user's only one.
+    expect(category(page, "Dairy").locator("[data-move-category-id]")).to_be_hidden()
+    expect(page.locator("#move-category")).to_have_count(0)
+
+    async def more_boards(db) -> int:
+        vic = await create_user(db, "vic@example.com")
+        weekend = await create_board(db, user, "Weekend")
+        await create_item(db, await create_category(db, weekend, "Dairy"), "Cream")
+        await create_board(db, vic, "Vic's", {user: BoardRole.VIEWER})  # one to read, not to edit
+        return weekend.id
+
+    weekend = seed(more_boards)
+    open_board(page, groceries)
+    category(page, "Dairy").get_by_label("Category actions").click()
+    category(page, "Dairy").get_by_role("button", name="Move to board…").click()
+    dialog = page.get_by_role("dialog", name="Move to board")
+    expect(dialog).to_be_visible()
+    expect(dialog.locator("select option")).to_have_text(["Weekend"])
+    expect(dialog.get_by_label("Category name")).to_have_value("Dairy")
+    expect(dialog.get_by_label("Board")).to_be_focused()
+
+    page.keyboard.press("Escape")
+
+    expect(dialog).to_be_hidden()
+    expect(category(page, "Dairy").get_by_label("Category actions")).to_be_focused()
+
+    category(page, "Dairy").get_by_label("Category actions").click()
+    category(page, "Dairy").get_by_role("button", name="Move to board…").click()
+    dialog.get_by_role("button", name="Move", exact=True).click()
+
+    # Weekend has a "Dairy": the dialog stays, with the free name in the field and the reason.
+    expect(dialog.get_by_label("Category name")).to_have_value("Dairy (2)")
+    expect(dialog.get_by_label("Category name")).to_be_focused()
+    expect(dialog.get_by_role("alert")).to_have_text(
+        "That board already has a category with this name."
+    )
+    assert test_responsive.too_small_targets(page) == []
+    assert page.evaluate(test_responsive.LOW_CONTRAST_TEXT, test_responsive.AA) == []
+
+    with page.expect_response(re.compile(r"/categories/\d+/move$")) as moved:
+        dialog.get_by_role("button", name="Move", exact=True).click()
+
+    assert moved.value.status == 200
+    expect(dialog).to_be_hidden()
+    expect(category(page, "Dairy")).to_have_count(0)
+    expect(page.locator("#toasts")).to_have_text("Moved to “Weekend”.")
+    page.goto(f"/boards/{weekend}")
+    expect(page.locator("section[data-category-id] h2")).to_have_text(["Dairy", "Dairy (2)"])
+    expect(items_of(page, "Dairy (2)")).to_have_text([re.compile("Milk")])
+    assert all("409" in problem for problem in problems), problems  # the one refused move

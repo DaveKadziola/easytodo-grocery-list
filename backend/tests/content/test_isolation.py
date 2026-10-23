@@ -28,6 +28,7 @@ ROUTES = [
     ("GET", "/categories/{category}", None),
     ("PATCH", "/categories/{category}", {"name": "Hijacked"}),
     ("POST", "/categories/{category}/archive", None),
+    ("POST", "/categories/{category}/move", {"board_id": "{board}", "name": "Moved"}),
     ("POST", "/categories/{category}/restore", None),
     ("DELETE", "/categories/{category}", None),
     ("POST", "/categories/{category}/items", {"name": "Hijacked", "description": "x"}),
@@ -123,6 +124,8 @@ async def test_unknown_or_impossible_ids_are_404(editor_client, item, db, conten
     )
     requests = [fill(route, **ids) for route in ROUTES] + [
         ("POST", f"/items/{item.id}/move", {"category_id": bad_id}),
+        # The editor's own category, to a board that cannot be one.
+        ("POST", f"/categories/{item.category_id}/move", {"board_id": bad_id, "name": "Moved"}),
     ]
     for method, path, data in requests:
         r = await editor_client.request(method, path, data=data, headers=HX)
@@ -162,6 +165,8 @@ async def test_other_users_ids_are_404_everywhere(
         # Bob's own item into Alice's category, and Alice's item into Bob's category.
         ("POST", f"/items/{bobs_item.id}/move", {"category_id": str(dairy.id)}),
         ("POST", f"/items/{milk.id}/move", {"category_id": str(bobs_category.id)}),
+        # Bob's own category into Alice's board.
+        ("POST", f"/categories/{bobs_category.id}/move", {"board_id": str(board.id), "name": "X"}),
     ]
     for method, path, data in requests:
         for headers in ({}, HX):

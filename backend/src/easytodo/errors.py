@@ -1,7 +1,8 @@
 """Application errors and their HTTP handlers.
 
 HTMX requests get an empty body with ``HX-Reswap: none`` and an ``HX-Trigger`` toast (plus
-``resync`` for ``NotFound``, so the client reloads a board that changed elsewhere); other
+``resync`` for ``NotFound``, so the client reloads a board that changed elsewhere, and
+``categoryNameTaken`` with the free name to offer for ``NameTaken``); other
 requests get the error page, or a redirect to the login page for ``NotAuthenticated`` (and to
 the location of a ``RedirectRequired``: the password form, or the second sign-in step).
 Starlette's errors (unknown page, wrong method) and HTTPExceptions get the same treatment.
@@ -39,6 +40,16 @@ class Forbidden(AppError):
 
 class Conflict(AppError):
     status_code = 409
+
+
+class NameTaken(Conflict):
+    """A name that is taken where the thing is going (a category moved to a board that has one of
+    that name): ``suggestion`` is the first free one, which the dialog offers instead (htmx
+    gets it as the event ``categoryNameTaken``)."""
+
+    def __init__(self, message: str, *, suggestion: str) -> None:
+        super().__init__(message)
+        self.suggestion = suggestion
 
 
 class PayloadTooLarge(AppError):
@@ -116,6 +127,8 @@ async def app_error_handler(request: Request, exc: AppError) -> Response:
         trigger: dict[str, object] = {"toast": {"level": "error", "message": exc.message}}
         if isinstance(exc, NotFound):
             trigger["resync"] = True
+        if isinstance(exc, NameTaken):
+            trigger["categoryNameTaken"] = {"suggestion": exc.suggestion}
         # json.dumps escapes non-ASCII, so the header stays latin-1 encodable.
         headers = {"HX-Reswap": "none", "HX-Trigger": json.dumps(trigger)}
         return Response(status_code=exc.status_code, headers=headers)

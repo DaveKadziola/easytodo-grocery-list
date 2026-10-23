@@ -49,7 +49,7 @@ from easytodo.content.validation import (
     clean_name,
 )
 from easytodo.display import display_name
-from easytodo.errors import Conflict, NotFound, ValidationFailed
+from easytodo.errors import Conflict, NameTaken, NotFound, ValidationFailed
 from easytodo.models import (
     Attachment,
     Board,
@@ -64,6 +64,8 @@ from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
 
 CATEGORY_GONE = "This category no longer exists."
 CATEGORY_NAME_TAKEN = "A category with this name already exists."
+NAME_TAKEN_ON_TARGET = "A category named “{name}” already exists on that board."
+SAME_BOARD = "Choose another board."
 CATEGORY_NOT_ARCHIVED = "Archive the category first."
 CONFIRM_CATEGORY_NAME = "Type the category name to delete it permanently."
 ITEM_GONE = "This item no longer exists."
@@ -340,6 +342,46 @@ async def restore_category(db: AsyncSession, category_id: int, user: User) -> tu
     return category, renamed
 
 
+async def move_category(
+    db: AsyncSession, category_id: int, user: User, target_board_id: int, name: str
+) -> tuple[Category, int]:
+    """Move the category, with all its items, to the end of another board, under ``name``; returns
+    it and the id of the board it left. ``user`` must be able to edit both boards.
+
+    A name that an active category of the target board has already (ignoring case) is a
+    ``NameTaken`` with the first free numbered name, which the dialog offers instead.
+
+    The items need no update: their foreign key to the category (``category_id``, ``board_id``) is
+    ``ON UPDATE CASCADE``, so the category's new board reaches every one of them, the deleted ones
+    too (their "Undo" goes on working), without touching their ``updated_at``. Their checklist
+    entries and files hang on the item, and so follow. People who are not members of the target
+    board lose all of it at once. Everyone's own sort order for the category stays with it (the
+    rows of ``category_sort_prefs``); those of people who cannot see it any more do nothing.
+    """
+    category, _ = await load_category(db, category_id, user, Action.EDIT_CONTENT)
+    target, _ = await require_board(db, target_board_id, user, Action.EDIT_CONTENT)
+    if target.id == category.board_id:
+        raise ValidationFailed(SAME_BOARD)
+    name = _clean_category_name(name)
+    free = await suggest_category_name(db, target.id, name)
+    if free != name:
+        raise NameTaken(NAME_TAKEN_ON_TARGET.format(name=name), suggestion=free)
+    # Before the change: the query would flush it first, outside the savepoint.
+    position = await _next_position(db, target.id)
+    source_id = category.board_id
+    async with _unique_category_name(db):  # also the target deleted meanwhile (a foreign key)
+        category.board_id = target.id
+        category.name = name
+        category.position = position
+        await db.flush()
+    await commit_and_publish(
+        db,
+        BoardEvent(EventType.CATEGORY_DELETED, board_id=source_id, category_ids=(category.id,)),
+        _category_changed(target.id, category.id),
+    )
+    return category, source_id
+
+
 async def delete_category(db: AsyncSession, category_id: int, user: User, confirm_name: str) -> int:
     """Delete an archived category for good, once ``confirm_name`` is its name (around spaces
     aside); its items go with it (FK cascade). Returns the id of its board."""
@@ -586,7 +628,9 @@ async def move_item(
             )
             .with_for_update(read=True)
         )
-    if target is None:  # also an archived one, or one on another board: items never change boards
+    # Also an archived one, or one on another board: an item changes boards only with its
+    # category (move_category).
+    if target is None:
         raise NotFound(CATEGORY_GONE)
     old_category_id = item.category_id
     item.category_id = target.id

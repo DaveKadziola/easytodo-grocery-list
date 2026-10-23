@@ -12,6 +12,7 @@ from easytodo.boards.service import (
     delete_board,
     get_board_view,
     list_archived_boards,
+    list_board_choices,
     list_boards,
     rename_board,
     restore_board,
@@ -62,8 +63,9 @@ async def archived_page(request: Request, db: DbSession, user: CurrentUser) -> R
 @router.get("/{board_id}")
 async def board_page(request: Request, db: DbSession, user: CurrentUser, board_id: int) -> Response:
     view = await get_board_view(db, board_id, user)  # first: a non-member gets the 404
-    # The user's boards, for the board switcher in the phone's bottom bar.
-    context = {"view": view, "boards": await list_boards(db, user)}
+    # The user's boards, for the board switcher in the phone's bottom bar and the dialog that
+    # moves a category to another board: their names and roles, not the counts of the list.
+    context = {"view": view, "boards": await list_board_choices(db, user)}
     response = render(request, "boards/board.html", context)
     # Where "/" (the app's start page) opens next time on this device.
     response.set_cookie(

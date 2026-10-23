@@ -58,6 +58,8 @@
         {% if done_count %}
         <button type="button" class="menu-item" hx-post="/categories/{{ category.id }}/clear-done" hx-target="#category-{{ category.id }}">Clear done ({{ done_count }})</button>
         {% endif %}
+        {#- Hidden by input.css unless the page has the dialog (_move_category.html): the fragment does not know whether there is a board to move to. #}
+        <button type="button" class="menu-item" data-move-category-id="{{ category.id }}" data-move-category-label="{{ category.name }}" aria-haspopup="dialog">Move to board…</button>
         {#- Deleting it for good is on the board's "Archived categories" page. #}
         <button type="button" class="menu-item text-red-700 dark:text-red-400" hx-post="/categories/{{ category.id }}/archive" hx-target="#category-{{ category.id }}" hx-confirm="Archive “{{ category.name }}” with its items? You can restore it from the board's archive.">Archive category</button>
       </div>

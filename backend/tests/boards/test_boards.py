@@ -7,9 +7,9 @@ from factories import DEFAULT_PASSWORD, create_board, create_category, create_it
 from helpers import NASTY, NASTY_ESCAPED, count_queries, login
 from sqlalchemy import func, select
 
-from easytodo.boards import service
+from easytodo.boards import routes, service
 from easytodo.boards.permissions import Action
-from easytodo.boards.service import get_board_view, list_boards
+from easytodo.boards.service import BoardChoice, get_board_view, list_board_choices, list_boards
 from easytodo.models import Board, BoardMember, BoardRole, CategorySortPref, User
 from easytodo.realtime.events import BoardEvent, EventType, current_origin
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
@@ -156,6 +156,53 @@ async def test_list_boards_puts_own_boards_first_then_sorts_by_name_in_one_query
         ("Cherry list", BoardRole.OWNER, 1, 0, "dave@example.com"),
         ("Apple club", BoardRole.EDITOR, 3, 2, "eve@example.com"),
     ]
+
+
+async def test_board_page_lists_boards_with_one_light_statement(client_factory, db, monkeypatch):
+    dave = await create_user(db, "dave@example.com")
+    eve = await create_user(db, "eve@example.com")
+    cherry = await create_board(db, dave, "Cherry list")
+    banana = await create_board(db, dave, "banana list")
+    club = await create_board(db, eve, "Apple club", members={dave: BoardRole.EDITOR})
+    await create_board(db, eve, "Eve private plans")
+    await create_board(db, dave, "Archived list", archived_at=datetime(2026, 10, 1, tzinfo=UTC))
+    await create_board(
+        db, eve, "Archived club", {dave: BoardRole.EDITOR}, archived_at=datetime.now(UTC)
+    )
+    await create_item(db, await create_category(db, club, "Bread"), "Rye")
+
+    with count_queries(db) as statements:
+        choices = await list_board_choices(db, dave)
+
+    assert len(statements) == 1
+    assert "count(" not in statements[0].lower()  # the board list counts members and items
+    assert choices == [  # in the order of the board list, which the switcher keeps
+        BoardChoice(banana.id, "banana list", BoardRole.OWNER),
+        BoardChoice(cherry.id, "Cherry list", BoardRole.OWNER),
+        BoardChoice(club.id, "Apple club", BoardRole.EDITOR),
+    ]
+    assert [c.id for c in choices] == [s.board.id for s in await list_boards(db, dave)]
+
+    async def not_the_board_list(*args, **kwargs):
+        raise AssertionError("the board page does not need the counts of the board list")
+
+    monkeypatch.setattr(routes, "list_boards", not_the_board_list)
+    client = await client_for(client_factory, "dave@example.com")
+
+    r = await client.get(f"/boards/{banana.id}")
+
+    assert r.status_code == 200
+    bar = re.findall(
+        r'<a href="/boards/(\d+)" class="menu-item[^>]*?( aria-current="page")?>', r.text
+    )
+    assert bar == [
+        (str(banana.id), ' aria-current="page"'),
+        (str(cherry.id), ""),
+        (str(club.id), ""),
+    ]
+    for name in ("banana list", "Cherry list", "Apple club"):
+        assert f">{name}</a>" in r.text
+    assert "Archived" not in r.text.split('id="bottom-bar"')[1]
 
 
 async def test_create_board_redirects_to_it_with_the_creator_as_owner(client, db):

@@ -26,6 +26,8 @@ EDIT_CONTROLS = (
     "New category",
     'x-data="itemModal"',
     'name="description"',
+    "data-move-category-id",
+    'x-data="moveCategory"',
 )
 
 

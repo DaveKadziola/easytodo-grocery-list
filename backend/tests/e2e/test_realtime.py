@@ -608,6 +608,40 @@ def test_archived_category_leaves_and_comes_back_on_the_other_device(two_logged_
     assert b.locator("#toasts > *").all_inner_texts() == []
 
 
+def test_moved_category_leaves_one_board_and_arrives_on_the_other(
+    signed_in_page, signed_in_as, seed, user, open_board
+):
+    async def make(db):
+        vic = await create_user(db, "vic@example.com")
+        groceries = await create_board(db, user, "Groceries")
+        await create_item(db, await create_category(db, groceries, "Dairy"), "Milk")
+        weekend = await create_board(db, user, "Weekend", members={vic: BoardRole.VIEWER})
+        await create_category(db, weekend, "Bakery")
+        return groceries.id, weekend.id
+
+    groceries_id, weekend_id = seed(make)
+    a, b, c = signed_in_page(), signed_in_page(), signed_in_as("vic@example.com")
+    for page, board_id in ((a, groceries_id), (b, groceries_id), (c, weekend_id)):
+        open_board(page, board_id)
+    b.evaluate("window.notReloaded = true")
+    reloads = board_reloads(b)
+
+    category(a, "Dairy").get_by_label("Category actions").click()
+    category(a, "Dairy").get_by_role("button", name="Move to board…").click()
+    dialog = a.get_by_role("dialog", name="Move to board")
+    dialog.get_by_role("button", name="Move", exact=True).click()  # Weekend, still "Dairy"
+
+    expect(category(b, "Dairy")).to_have_count(0, timeout=LIVE_UPDATE_MS)
+    assert board_reloads(b) == reloads  # only that section went, the board was not fetched again
+    assert b.evaluate("window.notReloaded") is True
+    assert b.locator("#toasts > *").all_inner_texts() == []
+    expect(c.locator("section[data-category-id] h2")).to_have_text(
+        ["Bakery", "Dairy"], timeout=LIVE_UPDATE_MS
+    )
+    expect(items_of(c, "Dairy")).to_have_text([re.compile("Milk")])
+    expect(a.locator("#toasts")).to_have_text("Moved to “Weekend”.")
+
+
 def test_text_typed_into_add_item_survives_changes_to_its_category(two_logged_in_pages):
     a, b = two_logged_in_pages
     field = category(b, "Dairy").get_by_placeholder("Add item")

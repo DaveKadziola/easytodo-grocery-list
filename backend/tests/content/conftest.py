@@ -19,6 +19,7 @@ from easytodo.models import (
     Category,
     ChecklistEntry,
     Item,
+    User,
 )
 from easytodo.realtime.events import BoardEvent, current_origin
 
@@ -68,6 +69,15 @@ async def editor_client(signed_in_client, db, board) -> httpx.AsyncClient:
 @pytest.fixture
 async def viewer_client(signed_in_client, db, board) -> httpx.AsyncClient:
     return await _member_client(signed_in_client, db, board, "viewer@example.com", BoardRole.VIEWER)
+
+
+@pytest.fixture
+async def target_board(db, editor_client) -> Board:
+    """The board "Weekend" of target-owner@example.com, on which editor@example.com
+    (``editor_client``) is an editor: where a category of ``board`` can be moved to."""
+    owner = await create_user(db, "target-owner@example.com")
+    editor = await db.scalar(select(User).where(User.email == "editor@example.com"))
+    return await create_board(db, owner, "Weekend", {editor: BoardRole.EDITOR})
 
 
 @pytest.fixture
