@@ -139,6 +139,9 @@ async def test_stats_counts(admin_client, db, admin):
     await create_item(db, dairy, "Butter")
     await create_item(db, bakery, "Bread", is_done=True)
     await create_item(db, garden, "Mow the lawn")
+    deleted = await create_item(db, garden, "Rake the leaves")  # open, but deleted (Undo window)
+    await db.execute(update(Item).where(Item.id == deleted.id).values(deleted_at=func.now()))
+    await db.commit()
 
     expected = AdminStats(
         users_total=3,

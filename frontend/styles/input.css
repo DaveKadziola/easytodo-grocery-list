@@ -138,6 +138,12 @@
   .toast-error {
     @apply bg-red-700;
   }
+
+  /* The Undo button in a toast: sky-300 on slate-900 (and on dark mode's slate-700) is over 4.5:1. */
+  .toast-action {
+    @apply min-h-11 min-w-11 shrink-0 rounded font-semibold text-sky-300 underline;
+    @apply focus-visible:outline-2 focus-visible:outline-sky-300;
+  }
 }
 
 /* With the bottom bar on a phone, the page ends above it and toasts show above it. */

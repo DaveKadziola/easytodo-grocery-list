@@ -102,8 +102,8 @@ async def get_stats(db: AsyncSession) -> AdminStats:
                 count(Board),
                 select(func.count()).select_from(shared).scalar_subquery(),
                 count(Category),
-                count(Item),
-                count(Item, Item.is_done.is_(False)),
+                count(Item, Item.deleted_at.is_(None)),
+                count(Item, Item.deleted_at.is_(None), Item.is_done.is_(False)),
             )
         )
     ).one()

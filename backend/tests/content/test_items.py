@@ -4,14 +4,21 @@ import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from factories import create_board, create_category, create_item, create_user
+from factories import (
+    create_board,
+    create_category,
+    create_checklist_entry,
+    create_item,
+    create_user,
+)
 from helpers import wait_until_a_query_waits_for_a_lock
 from sqlalchemy import delete, func, select, text, update
 
+from easytodo.boards.service import list_boards
 from easytodo.content.service import clear_done, get_category_view
 from easytodo.content.validation import clean_description, clean_name
 from easytodo.errors import ValidationFailed
-from easytodo.models import BoardRole, Category, Item, User
+from easytodo.models import Attachment, Board, BoardRole, Category, ChecklistEntry, Item, User
 from easytodo.realtime.events import BoardEvent, EventType
 
 HX = {"HX-Request": "true"}
@@ -29,6 +36,23 @@ def changed(board_id: int, *category_ids: int) -> BoardEvent:
 
 def item_ids_in(html: str) -> list[int]:
     return [int(i) for i in re.findall(r'id="item-(\d+)"', html)]
+
+
+async def item_row(db, item_id: int) -> dict:
+    """Every column of the item's row (the author, ``updated_at`` and ``deleted_at`` too), and how
+    many checklist entries and attachments it has."""
+    entries = select(func.count()).where(ChecklistEntry.item_id == Item.id).scalar_subquery()
+    attachments = select(func.count()).where(Attachment.item_id == Item.id).scalar_subquery()
+    row = await db.execute(
+        select(*Item.__table__.c, entries.label("entries"), attachments.label("attachments")).where(
+            Item.id == item_id
+        )
+    )
+    return dict(row.one()._mapping)
+
+
+def resync_with(message: str) -> dict:
+    return {"toast": {"level": "error", "message": message}, "resync": True}
 
 
 async def test_items_sorted_open_first_then_alphabetically(db):
@@ -181,7 +205,7 @@ async def test_move_item_to_another_category_of_the_board(
     assert [events for events, _ in published if events] == []  # there already: no change
 
 
-async def test_delete_item_returns_the_category_without_it(
+async def test_delete_item_hides_it_and_offers_undo(
     editor_client, board, category, item, db, published
 ):
     butter = await create_item(db, category, "Butter")
@@ -191,8 +215,190 @@ async def test_delete_item_returns_the_category_without_it(
     assert r.status_code == 200
     assert f'id="category-{category.id}"' in r.text
     assert item_ids_in(r.text) == [butter.id]
-    assert list(await db.scalars(select(Item.id))) == [butter.id]
+    assert json.loads(r.headers["hx-trigger"]) == {
+        "toast": {
+            "level": "info",
+            "message": "Item deleted.",
+            "undo": {"url": f"/items/{item.id}/restore", "swap_into": f"#category-{category.id}"},
+        }
+    }
+    # The row stays, marked as deleted just now; "Milk" is on none of the pages.
+    deleted_at = await db.scalar(select(Item.deleted_at).where(Item.id == item.id))
+    assert abs(datetime.now(UTC) - deleted_at) < timedelta(minutes=1)
+    for path in (
+        f"/boards/{board.id}",
+        f"/boards/{board.id}/content",
+        f"/categories/{category.id}",
+    ):
+        page = await editor_client.get(path)
+        assert item_ids_in(page.text) == [butter.id], path
+        assert "Milk" not in page.text, path
+    owner = await db.get_one(User, board.owner_id)
+    assert [summary.open_items for summary in await list_boards(db, owner)] == [1]
     assert published == [((changed(board.id, category.id),), "tab-1")]
+
+
+async def test_undo_restores_the_item_unchanged(editor_client, board, category, db, published):
+    editor = await db.scalar(select(User).where(User.email == "editor@example.com"))
+    milk = await create_item(
+        db, category, "Milk", is_done=True, created_by=editor, description="2 litres"
+    )
+    await create_checklist_entry(db, milk, "Skimmed")
+    db.add(
+        Attachment(
+            item_id=milk.id,
+            filename="receipt.png",
+            kind="image",
+            content_type="image/png",
+            size_bytes=12,
+            storage_key="a" * 32,
+            uploaded_by=editor.id,
+        )
+    )
+    # Long ago, to show that neither the delete nor the undo touches it.
+    await db.execute(
+        update(Item)
+        .where(Item.id == milk.id)
+        .values(updated_at=datetime.now(UTC) - timedelta(days=3))
+    )
+    await db.commit()
+    before = await item_row(db, milk.id)
+    assert (before["created_by"], before["is_done"], before["description"]) == (
+        editor.id,
+        True,
+        "2 litres",
+    )
+    assert (before["entries"], before["attachments"]) == (1, 1)
+
+    r = await editor_client.delete(f"/items/{milk.id}", headers=HX)
+    assert r.status_code == 200
+    gone = await item_row(db, milk.id)
+    assert gone["deleted_at"] is not None
+    assert gone | {"deleted_at": None} == before  # nothing else changes, updated_at included
+    assert (gone["entries"], gone["attachments"]) == (1, 1)  # kept for the undo
+    published.clear()
+
+    r = await editor_client.post(f"/items/{milk.id}/restore", headers=HX | {"X-Client-Id": "tab-1"})
+
+    assert r.status_code == 200
+    assert f'id="category-{category.id}"' in r.text
+    assert item_ids_in(r.text) == [milk.id]
+    assert await item_row(db, milk.id) == before  # also updated_at
+    assert published == [((changed(board.id, category.id),), "tab-1")]
+
+    r = await editor_client.post(f"/items/{milk.id}/restore", headers=HX)  # not deleted any more
+    assert r.status_code == 404
+    assert json.loads(r.headers["hx-trigger"]) == resync_with(ITEM_GONE)
+    assert await item_row(db, milk.id) == before
+
+
+@pytest.mark.parametrize(("seconds_ago", "status"), [(59, 200), (61, 404)])
+async def test_undo_works_only_for_60_seconds(editor_client, item, db, seconds_ago, status):
+    await editor_client.delete(f"/items/{item.id}", headers=HX)
+    deleted_at = datetime.now(UTC) - timedelta(seconds=seconds_ago)
+    await db.execute(update(Item).where(Item.id == item.id).values(deleted_at=deleted_at))
+    await db.commit()
+
+    r = await editor_client.post(f"/items/{item.id}/restore", headers=HX)
+
+    assert r.status_code == status
+    if status == 404:
+        assert json.loads(r.headers["hx-trigger"]) == resync_with(ITEM_GONE)
+        assert await db.scalar(select(Item.deleted_at).where(Item.id == item.id)) == deleted_at
+    else:
+        assert item_ids_in(r.text) == [item.id]
+        assert await db.scalar(select(Item.deleted_at).where(Item.id == item.id)) is None
+
+
+@pytest.mark.parametrize("archived", ["category", "board"])
+async def test_undo_after_the_category_was_archived_is_404(  # Review Focus 4
+    editor_client, board, category, item, db, archived
+):
+    await editor_client.delete(f"/items/{item.id}", headers=HX)
+    if archived == "category":
+        r = await editor_client.post(f"/categories/{category.id}/archive", headers=HX)
+        assert r.status_code == 200
+    else:
+        await db.execute(update(Board).where(Board.id == board.id).values(archived_at=func.now()))
+        await db.commit()
+    deleted_at = await db.scalar(select(Item.deleted_at).where(Item.id == item.id))
+    assert deleted_at is not None
+
+    r = await editor_client.post(f"/items/{item.id}/restore", headers=HX)
+
+    assert r.status_code == 404
+    assert json.loads(r.headers["hx-trigger"]) == resync_with(ITEM_GONE)
+    assert await db.scalar(select(Item.deleted_at).where(Item.id == item.id)) == deleted_at
+
+
+async def test_actions_on_a_soft_deleted_item_are_404_with_resync(  # Review Focus 4
+    editor_client, item, db, content_snapshot
+):
+    await editor_client.delete(f"/items/{item.id}", headers=HX)
+    before = await content_snapshot()
+    assert [row for row in before[1] if row.deleted_at is not None] != []
+
+    for method, path, data in (
+        ("POST", f"/items/{item.id}/toggle", None),
+        ("POST", f"/items/{item.id}/toggle", {"done": "true"}),
+        ("PATCH", f"/items/{item.id}", {"name": "Oat milk", "description": ""}),
+        ("POST", f"/items/{item.id}/move", {"category_id": item.category_id}),
+        ("DELETE", f"/items/{item.id}", None),
+    ):
+        r = await editor_client.request(method, path, data=data, headers=HX)
+        assert r.status_code == 404, (method, path, data)
+        assert json.loads(r.headers["hx-trigger"]) == resync_with(ITEM_GONE), (method, path)
+
+    assert await content_snapshot() == before
+
+
+async def test_viewer_gets_404_for_a_soft_deleted_item_not_403(  # Review Focus 4
+    editor_client, viewer_client, item, db, content_snapshot
+):
+    """The unlocked lookup that tells a missing row from a missing permission leaves the deleted
+    item out too: a viewer is not told there is one."""
+    await editor_client.delete(f"/items/{item.id}", headers=HX)
+    before = await content_snapshot()
+
+    for method, path, data in (
+        ("POST", f"/items/{item.id}/toggle", None),
+        ("PATCH", f"/items/{item.id}", {"name": "Oat milk"}),
+        ("POST", f"/items/{item.id}/move", {"category_id": item.category_id}),
+        ("DELETE", f"/items/{item.id}", None),
+    ):
+        r = await viewer_client.request(method, path, data=data, headers=HX)
+        assert r.status_code == 404, (method, path)
+        assert json.loads(r.headers["hx-trigger"]) == resync_with(ITEM_GONE), (method, path)
+
+    assert await content_snapshot() == before
+
+
+@pytest.mark.parametrize("seconds_ago", [0, 120])
+async def test_viewer_cannot_undo(editor_client, viewer_client, item, db, seconds_ago):
+    """403 whether the window is open or not: the role is checked before the clock."""
+    await editor_client.delete(f"/items/{item.id}", headers=HX)
+    deleted_at = datetime.now(UTC) - timedelta(seconds=seconds_ago)
+    await db.execute(update(Item).where(Item.id == item.id).values(deleted_at=deleted_at))
+    await db.commit()
+
+    r = await viewer_client.post(f"/items/{item.id}/restore", headers=HX)
+
+    assert r.status_code == 403
+    assert toast(r) == "You don't have permission to do that."
+    assert await db.scalar(select(Item.deleted_at).where(Item.id == item.id)) == deleted_at
+
+
+async def test_clear_done_leaves_soft_deleted_items_for_undo(editor_client, board, category, db):
+    old_milk = await create_item(db, category, "Old milk", is_done=True)
+    await create_item(db, category, "Cheese", is_done=True)
+    await editor_client.delete(f"/items/{old_milk.id}", headers=HX)
+    owner = await db.get_one(User, board.owner_id)
+
+    assert await clear_done(db, category.id, owner) == 1  # "Cheese" only
+
+    r = await editor_client.post(f"/items/{old_milk.id}/restore", headers=HX)
+    assert r.status_code == 200
+    assert item_ids_in(r.text) == [old_milk.id]
 
 
 async def test_clear_done_removes_only_done_items(editor_client, board, category, db, published):
@@ -223,29 +429,6 @@ async def test_clear_done_removes_only_done_items(editor_client, board, category
     assert await clear_done(db, category.id, owner) == 2
 
 
-# Review Focus 2
-async def test_action_on_deleted_item_returns_404_with_resync(editor_client, item, db):
-    await editor_client.delete(f"/items/{item.id}")
-    r = await editor_client.post(f"/items/{item.id}/toggle", headers={"HX-Request": "true"})
-    assert r.status_code == 404
-    assert json.loads(r.headers["hx-trigger"]) == {
-        "toast": {"level": "error", "message": "This item no longer exists."},
-        "resync": True,
-    }
-
-    for method, path, data in (
-        ("PATCH", f"/items/{item.id}", {"name": "Milk", "description": ""}),
-        ("POST", f"/items/{item.id}/move", {"category_id": item.category_id}),
-        ("DELETE", f"/items/{item.id}", None),
-    ):
-        r = await editor_client.request(method, path, data=data, headers=HX)
-        assert r.status_code == 404, (method, path)
-        assert json.loads(r.headers["hx-trigger"]) == {
-            "toast": {"level": "error", "message": ITEM_GONE},
-            "resync": True,
-        }
-
-
 async def test_action_on_archived_category_returns_404_with_resync(editor_client, category):
     r = await editor_client.post(f"/categories/{category.id}/archive")
     assert r.status_code == 200
@@ -269,6 +452,7 @@ async def test_action_on_archived_category_returns_404_with_resync(editor_client
     [
         ("item", "POST", "/items/{item}/toggle", None, ITEM_GONE),
         ("item", "PATCH", "/items/{item}", {"name": "Oat milk"}, ITEM_GONE),
+        ("soft", "POST", "/items/{item}/toggle", None, ITEM_GONE),  # Review Focus 4
         ("category", "POST", "/categories/{category}/items", {"name": "Eggs"}, CATEGORY_GONE),
         ("category", "POST", "/items/{item}/move", {"category_id": "{category}"}, CATEGORY_GONE),
         ("archive", "POST", "/categories/{category}/items", {"name": "Eggs"}, CATEGORY_GONE),
@@ -279,15 +463,20 @@ async def test_action_on_archived_category_returns_404_with_resync(editor_client
 async def test_change_racing_a_delete_on_another_device_is_404_not_500(  # Review Focus 2
     editor_client, board, category, item, db, deletion, method, path, data, message
 ):
-    """The other device's delete (or archiving of the category) holds its row lock until it
-    commits; the change waits for it and then finds the row gone."""
+    """The other device's delete (or soft delete of the item, or archiving of the category) holds
+    its row lock until it commits; the change waits for it and then finds the row gone."""
     source = await create_category(db, board, "Source", position=1)
     moving = await create_item(db, source, "Moving")
-    ids = {"item": item.id if deletion == "item" else moving.id, "category": category.id}
+    ids = {
+        "item": item.id if deletion in ("item", "soft") else moving.id,
+        "category": category.id,
+    }
     if data is not None:
         data = {k: v.format(**ids) for k, v in data.items()}
     deleted = delete(Item).where(Item.id == item.id)
-    if deletion == "category":
+    if deletion == "soft":
+        deleted = update(Item).where(Item.id == item.id).values(deleted_at=func.now())
+    elif deletion == "category":
         deleted = delete(Category).where(Category.id == category.id)
     elif deletion == "archive":
         deleted = update(Category).where(Category.id == category.id).values(archived_at=func.now())
@@ -323,11 +512,12 @@ async def test_change_racing_a_delete_on_another_device_is_404_not_500(  # Revie
             "/items/{item}/move",
             {"category_id": "{other_category}"},
         ),
-        # A rename, an archiving or a tick changes no key: a row a new child row points to (its
-        # foreign key check holds FOR KEY SHARE) can still change.
+        # A rename, an archiving, a tick or a soft delete changes no key: a row a new child row
+        # points to (its foreign key check holds FOR KEY SHARE) can still change.
         ("category", "FOR KEY SHARE", "PATCH", "/categories/{category}", {"name": "Fridge"}),
         ("category", "FOR KEY SHARE", "POST", "/categories/{category}/archive", None),
         ("item", "FOR KEY SHARE", "POST", "/items/{item}/toggle", None),
+        ("item", "FOR KEY SHARE", "DELETE", "/items/{item}", None),
     ],
 )
 async def test_writes_take_only_the_row_lock_they_need(
@@ -349,6 +539,20 @@ async def test_writes_take_only_the_row_lock_they_need(
     assert r.status_code == 200, r.headers.get("hx-trigger")
 
 
+async def test_undo_takes_only_the_row_lock_it_needs(editor_client, item, db):
+    """As the soft delete: a checklist entry or an attachment being added to the item (its foreign
+    key check holds FOR KEY SHARE) does not hold up the undo."""
+    await editor_client.delete(f"/items/{item.id}", headers=HX)
+    async with db.bind.connect() as other_device, other_device.begin():
+        await other_device.execute(
+            text("SELECT 1 FROM items WHERE id = :id FOR KEY SHARE"), {"id": item.id}
+        )
+        request = editor_client.post(f"/items/{item.id}/restore", headers=HX)
+        r = await asyncio.wait_for(request, 2)
+
+    assert r.status_code == 200, r.headers.get("hx-trigger")
+
+
 async def test_viewer_write_is_403_without_waiting_for_a_row_lock(viewer_client, item, db):
     """An editor's change holds the item and its category locked: a viewer's write is refused at
     once instead of queueing behind it (and, had it got there first, would hold up the editor)."""
@@ -361,6 +565,7 @@ async def test_viewer_write_is_403_without_waiting_for_a_row_lock(viewer_client,
             ("POST", f"/items/{item.id}/toggle", None),
             ("PATCH", f"/items/{item.id}", {"name": "Oat milk"}),
             ("DELETE", f"/items/{item.id}", None),
+            ("POST", f"/items/{item.id}/restore", None),
             ("POST", f"/categories/{item.category_id}/items", {"name": "Eggs"}),
             ("POST", f"/categories/{item.category_id}/clear-done", None),
             ("PATCH", f"/categories/{item.category_id}", {"name": "Fridge"}),

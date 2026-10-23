@@ -118,8 +118,8 @@ async def landing_board_id(db: AsyncSession, user: User, last_opened: int | None
 
 async def list_boards(db: AsyncSession, user: User) -> list[BoardSummary]:
     """The active boards ``user`` is a member of: their own first, then the shared ones, each by
-    name; one query, with each board's owner's e-mail and its open items (in active
-    categories)."""
+    name; one query, with each board's owner's e-mail and its open items (in active categories,
+    not deleted)."""
     owner = aliased(User)
     members = aliased(BoardMember)
     member_count = select(func.count()).where(members.board_id == Board.id).scalar_subquery()
@@ -127,7 +127,12 @@ async def list_boards(db: AsyncSession, user: User) -> list[BoardSummary]:
         select(func.count())
         .select_from(Item)
         .join(Category, Category.id == Item.category_id)
-        .where(Item.board_id == Board.id, Item.is_done.is_(False), Category.archived_at.is_(None))
+        .where(
+            Item.board_id == Board.id,
+            Item.is_done.is_(False),
+            Item.deleted_at.is_(None),
+            Category.archived_at.is_(None),
+        )
         .scalar_subquery()
     )
     rows = await db.execute(
@@ -226,7 +231,7 @@ async def get_board_view(db: AsyncSession, board_id: int, user: User) -> BoardVi
     items = await db.scalars(
         select(Item)
         .join(Category, Category.id == Item.category_id)
-        .where(Item.board_id == board.id, Category.archived_at.is_(None))
+        .where(Item.board_id == board.id, Item.deleted_at.is_(None), Category.archived_at.is_(None))
         .order_by(*ITEM_ORDER)
     )
     by_category: dict[int, list[Item]] = {}

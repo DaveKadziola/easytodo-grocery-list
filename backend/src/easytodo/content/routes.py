@@ -25,6 +25,7 @@ from easytodo.content.service import (
     rename_category,
     reorder_categories,
     restore_category,
+    restore_item,
     toggle_item,
     update_item,
 )
@@ -34,6 +35,7 @@ from easytodo.web import flash, prompt_answer, render
 
 router = APIRouter()
 
+ITEM_DELETED = "Item deleted."
 OptionalFormField = Annotated[str | None, Form()]
 
 
@@ -194,5 +196,20 @@ async def move(
 
 @router.delete("/items/{item_id}")
 async def remove_item(request: Request, db: DbSession, user: CurrentUser, item_id: int) -> Response:
+    """Delete the item (see ``delete_item``); the toast offers "Undo", which app.js answers with a
+    POST to ``undo.url``, swapped into ``undo.swap_into``."""
     category_id = await delete_item(db, item_id, user)
-    return await _current_category(request, db, user, category_id)
+    response = await _current_category(request, db, user, category_id)
+    undo = {"url": f"/items/{item_id}/restore", "swap_into": f"#category-{category_id}"}
+    toast = {"toast": {"level": "info", "message": ITEM_DELETED, "undo": undo}}
+    response.headers["HX-Trigger"] = json.dumps(toast)
+    return response
+
+
+@router.post("/items/{item_id}/restore")
+async def restore_deleted_item(
+    request: Request, db: DbSession, user: CurrentUser, item_id: int
+) -> Response:
+    """The "Undo" of a delete."""
+    item = await restore_item(db, item_id, user)
+    return await _current_category(request, db, user, item.category_id)

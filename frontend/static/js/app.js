@@ -1,11 +1,12 @@
 // Page shell: headers for every HTMX request (and the page's id, window.easytodo.clientId), toasts
-// (from HX-Trigger, the flash cookie, or a request that failed without one), menus that close
-// themselves, and copy and download buttons.
+// (from HX-Trigger, the flash cookie, or a request that failed without one; one can offer Undo),
+// menus that close themselves, and copy and download buttons.
 (() => {
   "use strict";
 
   const FLASH_COOKIE = "easytodo_flash";
   const TOAST_MS = 4000; // how long a toast stays
+  const UNDO_TOAST_MS = 5000; // one with an Undo button stays a little longer
   const DOWNLOAD_URL_MS = 40000; // how long a saved file's blob URL lives (see data-download)
 
   function randomId() {
@@ -36,21 +37,61 @@
   // realtime.js names the tab the same way when it subscribes to the board.
   window.easytodo = { clientId };
 
+  // The Undo button of a toast: one POST to undo.url, its answer swapped over undo.swap_into. No
+  // source element, so a 404 ("resync": the window is over, or the item is gone) comes from the
+  // body and reloads the board (realtime.js). Without that element on the page (the board was
+  // reloaded meanwhile) the answer is not swapped in: the target would be missing, and htmx then
+  // sends nothing at all.
+  function sendUndo(undo) {
+    const swap = document.querySelector(undo.swap_into)
+      ? { target: undo.swap_into, swap: "outerHTML" }
+      : { target: "body", swap: "none" };
+    htmx.ajax("POST", undo.url, swap).catch(() => {}); // a failed request shows its own error
+  }
+
   // The message may quote names that other board members chose, so it is only ever set as text.
-  function showToast(level, message) {
+  // With undo ({url, swap_into}) the toast has an Undo button after the message (see sendUndo).
+  function showToast(level, message, undo) {
     const container = document.getElementById("toasts");
     if (!container || !message) return;
     const toast = document.createElement("div");
     toast.className = level === "error" ? "toast toast-error" : "toast";
-    toast.textContent = message;
+    if (!(undo && undo.url && undo.swap_into)) {
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), TOAST_MS);
+      return;
+    }
+    toast.className += " flex items-center gap-3";
+    const text = document.createElement("span");
+    text.textContent = message;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "toast-action";
+    button.textContent = "Undo";
+    button.addEventListener("click", () => {
+      toast.remove();
+      sendUndo(undo);
+    });
+    toast.append(text, button);
     container.appendChild(toast);
-    setTimeout(() => toast.remove(), TOAST_MS);
+    // The deleted item's name held the focus, and the swap that removes it comes after the
+    // HX-Trigger that brings this toast: once it has happened, a focus that fell back to the page
+    // goes to the button, so that Undo can be reached from the keyboard.
+    setTimeout(() => {
+      const focused = document.activeElement;
+      if (toast.isConnected && (focused === null || focused === document.body)) {
+        button.focus({ preventScroll: true });
+      }
+    }, 0);
+    setTimeout(() => toast.remove(), UNDO_TOAST_MS); // no pause while it is hovered or focused
   }
 
-  // HX-Trigger: {"toast": {"level": "error", "message": "..."}}
+  // HX-Trigger: {"toast": {"level": "error", "message": "...", "undo": {"url": "...", "swap_into": "#..."}}}
+  // (undo is optional).
   document.addEventListener("toast", (event) => {
-    const { level, message } = event.detail || {};
-    showToast(level, message);
+    const { level, message, undo } = event.detail || {};
+    showToast(level, message, undo);
   });
 
   // What the user just did did not happen (and board.js has undone a tick): no answer at all, or

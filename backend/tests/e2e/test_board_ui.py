@@ -12,7 +12,7 @@ import pytest
 from factories import create_board, create_category, create_item
 from helpers import NASTY
 from playwright.sync_api import Locator, Page, expect
-from sqlalchemy import delete, update
+from sqlalchemy import func, update
 
 from e2e.conftest import open_board_menu, watch_console
 from easytodo.models import Category, Item
@@ -298,6 +298,60 @@ def test_item_modal_moves_and_deletes_items(logged_in_page, seed, user, open_boa
     expect(items_of(page, "Bakery")).to_have_text([re.compile("Bread"), re.compile("Milk")])
 
 
+def test_delete_item_then_undo(two_logged_in_pages):
+    a, b = two_logged_in_pages
+    problems = {"a": watch_console(a), "b": watch_console(b)}
+
+    a.get_by_role("button", name="Milk", exact=True).click()
+    a.once("dialog", lambda question: question.accept())  # "Delete this item?"
+    a.get_by_role("dialog").get_by_role("button", name="Delete item").click()
+
+    expect(a.locator("#toasts")).to_have_text("Item deleted.Undo")
+    undo = a.get_by_role("button", name="Undo")
+    box = undo.bounding_box()
+    assert box["width"] >= 44 and box["height"] >= 44, box
+    expect(items_of(a, "Dairy")).to_have_count(0)
+    expect(items_of(b, "Dairy")).to_have_count(0, timeout=2000)
+
+    undo.click()
+
+    expect(a.locator("#toasts > *")).to_have_count(0)
+    expect(items_of(a, "Dairy")).to_have_text([re.compile("Milk")])
+    expect(items_of(b, "Dairy")).to_have_text([re.compile("Milk")], timeout=2000)
+    a.reload()
+    expect(items_of(a, "Dairy")).to_have_text([re.compile("Milk")])
+    assert problems == {"a": [], "b": []}
+
+
+def test_undo_is_reachable_from_the_keyboard(logged_in_page, seed, user, open_board):
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
+    open_board(page, board_id)
+    problems = watch_console(page)
+    dialog = page.get_by_role("dialog")
+
+    page.get_by_role("button", name="Milk", exact=True).focus()
+    page.keyboard.press("Enter")
+    expect(dialog.get_by_label("Name")).to_be_focused()
+    for control in (
+        dialog.get_by_label("Description"),
+        dialog.get_by_label("Category"),
+        dialog.get_by_role("button", name="Delete item"),
+    ):
+        page.keyboard.press("Tab")
+        expect(control).to_be_focused()
+    page.once("dialog", lambda question: question.accept())  # "Delete this item?"
+    page.keyboard.press("Enter")
+
+    expect(items_of(page, "Dairy")).to_have_count(0)
+    expect(page.get_by_role("button", name="Undo")).to_be_focused()  # not lost on the page
+    page.keyboard.press("Enter")
+
+    expect(items_of(page, "Dairy")).to_have_text([re.compile("Milk")])
+    expect(page.locator("#toasts > *")).to_have_count(0)
+    assert problems == []
+
+
 def test_new_category_goes_last_and_the_field_is_ready_for_the_next(
     logged_in_page, seed, user, open_board
 ):
@@ -412,7 +466,8 @@ def test_ticking_an_item_deleted_on_another_device_resyncs_the_board(
     open_board(page, board_id)
 
     async def other_device(db) -> None:
-        await db.execute(delete(Item).where(Item.name == "Milk"))
+        # Deleted on the other device, as a delete there leaves it: a marked row.
+        await db.execute(update(Item).where(Item.name == "Milk").values(deleted_at=func.now()))
         bakery = Category(board_id=board_id, name="Bakery", position=1)
         db.add(bakery)
         await db.commit()

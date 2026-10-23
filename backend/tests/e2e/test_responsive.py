@@ -12,6 +12,7 @@ from playwright.sync_api import Locator, Page, expect
 pytestmark = pytest.mark.e2e
 
 TOAST_MS = 4000  # how long a toast stays
+UNDO_TOAST_MS = 5000  # how long one with an Undo button stays
 AA = 4.5  # WCAG AA contrast for text
 # What a finger must be able to hit: every control at least 44×44 px (the checkbox through the
 # label around it).
@@ -207,11 +208,11 @@ def test_connection_status_is_in_the_header(logged_in_page_with_seed):
     expect(status).to_have_attribute("data-state", "live")
 
 
-def test_toasts_close_by_themselves_after_4_seconds(logged_in_page_with_seed):
-    page = logged_in_page_with_seed
-
-    shown, removed_after_ms = page.evaluate(
-        """(TOAST_MS) => new Promise((resolve) => {
+def toast_lifetime(page: Page, detail: dict, lifetime_ms: int) -> tuple[str, float | None]:
+    """Show the toast ``detail`` describes, as an HX-Trigger toast header does; returns its text and
+    how long it stayed in ms (None: it was still there after twice ``lifetime_ms``)."""
+    return page.evaluate(
+        """({ detail, lifetimeMs }) => new Promise((resolve) => {
             const toasts = document.getElementById("toasts");
             let shown = "", start = 0;
             new MutationObserver((records, observer) => {
@@ -223,18 +224,35 @@ def test_toasts_close_by_themselves_after_4_seconds(logged_in_page_with_seed):
                 }
               }
             }).observe(toasts, { childList: true });
-            setTimeout(() => resolve([shown, null]), 2 * TOAST_MS);  // never removed
-            // What an HX-Trigger toast header dispatches.
-            document.body.dispatchEvent(
-              new CustomEvent("toast", { bubbles: true, detail: { level: "info", message: "Saved." } }),
-            );
+            setTimeout(() => resolve([shown, null]), 2 * lifetimeMs);  // never removed
+            document.body.dispatchEvent(new CustomEvent("toast", { bubbles: true, detail }));
         })""",
-        TOAST_MS,
+        {"detail": detail, "lifetimeMs": lifetime_ms},
     )
+
+
+def test_toasts_close_by_themselves_after_4_seconds(logged_in_page_with_seed):
+    detail = {"level": "info", "message": "Saved."}
+
+    shown, removed_after_ms = toast_lifetime(logged_in_page_with_seed, detail, TOAST_MS)
 
     assert shown == "Saved."
     assert removed_after_ms is not None, "the toast stayed"
     assert TOAST_MS - 50 <= removed_after_ms <= TOAST_MS + 500
+
+
+def test_undo_toast_closes_after_5_seconds(logged_in_page_with_seed):
+    detail = {  # as the answer to a DELETE of an item brings it
+        "level": "info",
+        "message": "Item deleted.",
+        "undo": {"url": "/items/1/restore", "swap_into": "#category-1"},
+    }
+
+    shown, removed_after_ms = toast_lifetime(logged_in_page_with_seed, detail, UNDO_TOAST_MS)
+
+    assert shown == "Item deleted.Undo"
+    assert removed_after_ms is not None, "the toast stayed"
+    assert UNDO_TOAST_MS - 50 <= removed_after_ms <= UNDO_TOAST_MS + 500
 
 
 def test_item_modal_keeps_the_keyboard_inside_and_closes_on_escape(logged_in_page_with_seed):

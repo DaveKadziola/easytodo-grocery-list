@@ -8,6 +8,10 @@ together with the board event it causes.
 An archived category is gone from its board, with its items, for every member (each lookup
 leaves it out), but keeps its data until it is restored or deleted for good from the board's
 archive; meanwhile its name is free for a new category.
+
+Deleting an item only marks it (``deleted_at``): it is gone from every page and lookup at once,
+but its row, author, checklist and attachments stay for ``UNDO_WINDOW``, in which "Undo" brings it
+back as it was. Every read of items leaves the marked ones out.
 """
 
 from collections.abc import AsyncIterator
@@ -43,6 +47,9 @@ CATEGORY_NAME_TAKEN = "A category with this name already exists."
 CATEGORY_NOT_ARCHIVED = "Archive the category first."
 CONFIRM_CATEGORY_NAME = "Type the category name to delete it permanently."
 ITEM_GONE = "This item no longer exists."
+UNDO_WINDOW = timedelta(seconds=60)  # how long after the delete "Undo" still works
+# How long a deleted item's row is kept before the purge removes it for good.
+SOFT_DELETE_PURGE_AFTER = timedelta(minutes=10)
 _UNIQUE_VIOLATION = "23505"  # PostgreSQL SQLSTATEs
 _FOREIGN_KEY_VIOLATION = "23503"
 # How many numbered names suggest_category_name tries: "Dairy (2)" to "Dairy (100)".
@@ -74,10 +81,13 @@ async def _load[M: (Category, Item)](
     lock: RowLock,
     *,
     archived: bool | None = False,
+    include_deleted: bool = False,
 ) -> tuple[M, BoardRole]:
     """The row and ``user``'s role on its board, in one query joined with ``board_members``, the
     board, which must not be archived, and the category (the row itself, or the item's):
-    an active one, or with ``archived`` an archived one (True) or either (None).
+    an active one, or with ``archived`` an archived one (True) or either (None). An item that
+    was deleted (``deleted_at``) is not found either, unless ``include_deleted`` asks for it; that
+    lifts only this condition, never the archived ones.
 
     For a change (any action but VIEW) the row stays locked in mode ``lock`` until the commit: a
     delete from another device that got there first makes this ``NotFound``, a later one waits
@@ -95,6 +105,8 @@ async def _load[M: (Category, Item)](
     )
     if model is Item:
         query = query.join(Category, Category.id == Item.category_id)
+        if not include_deleted:
+            query = query.where(Item.deleted_at.is_(None))
     query = query.where(*_category_state(archived))
     row_lock = None if action is Action.VIEW else lock
     found, role = await load_for_member(db, query, action, gone, lock=row_lock, of=model)
@@ -124,10 +136,13 @@ async def load_item(
     action: Action,
     *,
     lock: RowLock = RowLock.NO_KEY_UPDATE,
+    include_deleted: bool = False,
 ) -> tuple[Item, BoardRole]:
-    """The item, in an active category, and ``user``'s role; for a change, locked in mode
-    ``lock`` (see ``_load``)."""
-    return await _load(db, Item, item_id, user, action, ITEM_GONE, lock)
+    """The item, in an active category, and ``user``'s role; a deleted one only with
+    ``include_deleted``. For a change, locked in mode ``lock`` (see ``_load``)."""
+    return await _load(
+        db, Item, item_id, user, action, ITEM_GONE, lock, include_deleted=include_deleted
+    )
 
 
 def _category_changed(board_id: int, *category_ids: int) -> BoardEvent:
@@ -323,7 +338,9 @@ async def get_category_view(
     """The category with its items (open first, then by name) and ``user``'s role."""
     category, role = await load_category(db, category_id, user, Action.VIEW)
     items = await db.scalars(
-        select(Item).where(Item.category_id == category.id).order_by(*ITEM_ORDER)
+        select(Item)
+        .where(Item.category_id == category.id, Item.deleted_at.is_(None))
+        .order_by(*ITEM_ORDER)
     )
     return CategoryView(category, list(items)), role
 
@@ -406,22 +423,51 @@ async def move_item(
     return item, old_category_id
 
 
+def _keep_updated_at(item: Item) -> None:
+    """Delete and undo are no edit: have the UPDATE write ``updated_at`` back as it is (the
+    column's ``onupdate`` stays silent for a value that is set). The attribute is expired after
+    the flush, so do not read it afterwards (async code cannot load it lazily)."""
+    item.updated_at = Item.updated_at
+
+
 async def delete_item(db: AsyncSession, item_id: int, user: User) -> int:
-    """Delete the item; returns the id of the category it was in."""
-    item, _ = await load_item(db, item_id, user, Action.EDIT_CONTENT, lock=RowLock.UPDATE)
-    event = _category_changed(item.board_id, item.category_id)
-    await db.delete(item)
-    await commit_and_publish(db, event)
+    """Delete the item, for now: it is only marked, and ``restore_item`` brings it back for
+    ``UNDO_WINDOW``. Returns the id of the category it was in."""
+    # The default lock: marking the row changes no key, so a checklist entry or an attachment
+    # being added to it at the same time does not wait.
+    item, _ = await load_item(db, item_id, user, Action.EDIT_CONTENT)
+    # The clock that restore_item checks the window with, so not func.now(): that would expire
+    # the attribute, and async code cannot load it lazily.
+    item.deleted_at = datetime.now(UTC)
+    _keep_updated_at(item)
+    await commit_and_publish(db, _category_changed(item.board_id, item.category_id))
     return item.category_id
 
 
+async def restore_item(db: AsyncSession, item_id: int, user: User) -> Item:
+    """Bring the item back, just as it was, within ``UNDO_WINDOW`` of its deletion. An item that
+    is not deleted, or whose window is over, or whose category or board was archived meanwhile,
+    is gone (``NotFound``)."""
+    # Role first: a viewer gets Forbidden whatever the clock says.
+    item, _ = await load_item(db, item_id, user, Action.EDIT_CONTENT, include_deleted=True)
+    if item.deleted_at is None or item.deleted_at <= datetime.now(UTC) - UNDO_WINDOW:
+        raise NotFound(ITEM_GONE)
+    item.deleted_at = None
+    _keep_updated_at(item)
+    await commit_and_publish(db, _category_changed(item.board_id, item.category_id))
+    return item
+
+
 async def clear_done(db: AsyncSession, category_id: int, user: User) -> int:
-    """Delete the category's done items; returns how many there were."""
+    """Delete the category's done items for good; returns how many there were. (Items deleted a
+    moment ago are left alone: they wait for their "Undo".)"""
     category, _ = await load_category(
         db, category_id, user, Action.EDIT_CONTENT, lock=RowLock.SHARE
     )
     result = await db.execute(
-        delete(Item).where(Item.category_id == category.id, Item.is_done.is_(True))
+        delete(Item).where(
+            Item.category_id == category.id, Item.is_done.is_(True), Item.deleted_at.is_(None)
+        )
     )
     removed = result.rowcount
     events = [_category_changed(category.board_id, category.id)] if removed else []
