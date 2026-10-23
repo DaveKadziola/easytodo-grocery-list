@@ -41,6 +41,7 @@ FIRST_RUN_DELAY_S = 300  # a task waits this long (or one interval, if shorter) 
 # How long the purge waits for a row lock before it gives up (``lock_timeout`` of its transaction).
 LOCK_TIMEOUT_S = 5
 PURGE_BUSY = "Another purge is running. Try again later."
+PURGE_LOCK_TIMEOUT = "The purge waited too long for a lock. Try again later."
 
 
 @dataclass(frozen=True)

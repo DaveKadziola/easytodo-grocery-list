@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 
 import asyncpg
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.attachments.storage import AttachmentStore
@@ -38,11 +38,12 @@ from easytodo.legacy_import import (
     ImportReport,
     import_legacy,
 )
-from easytodo.maintenance import PURGE_BUSY, purge
+from easytodo.maintenance import PURGE_BUSY, PURGE_LOCK_TIMEOUT, purge
 from easytodo.models import User, UserSession
 from easytodo.security.passwords import hash_password, validate_password
 
 ACCOUNT_EXISTS = "An account with this email already exists."
+_LOCK_NOT_AVAILABLE = "55P03"  # the PostgreSQL SQLSTATE of a lock_timeout
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -147,6 +148,10 @@ async def _purge() -> str:
             report = await purge(
                 db, AttachmentStore(settings.attachments_dir), now=datetime.now(UTC)
             )
+    except DBAPIError as exc:  # only a row lock held too long; any other error is a bug
+        if getattr(exc.orig, "sqlstate", None) != _LOCK_NOT_AVAILABLE:
+            raise
+        raise ValidationFailed(PURGE_LOCK_TIMEOUT) from exc
     finally:
         await engine.dispose()
     if report is None:

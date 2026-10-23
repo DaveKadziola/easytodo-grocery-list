@@ -34,6 +34,7 @@ from easytodo.maintenance import (
     FIRST_RUN_DELAY_S,
     PURGE_BUSY,
     PURGE_LOCK_ID,
+    PURGE_LOCK_TIMEOUT,
     PurgeReport,
     PurgeTask,
     purge,
@@ -322,6 +323,38 @@ async def test_cli_purge(db, cli_env, store, capsys, _db_engine):
         await other.rollback()
     assert capsys.readouterr().err == f"error: {PURGE_BUSY}\n"
     assert PURGE_BUSY == "Another purge is running. Try again later."
+
+
+async def test_cli_purge_reports_a_lock_it_waited_too_long_for(
+    db, cli_env, store, capsys, _db_engine, monkeypatch
+):
+    monkeypatch.setattr(maintenance, "LOCK_TIMEOUT_S", 0.3)
+    owner = await user_with(db, "week@example.com", 7)
+    expired = await create_board(
+        db, owner, "Old", archived_at=datetime.now(UTC) - timedelta(days=8)
+    )
+
+    async with _db_engine.connect() as other:
+        await other.execute(
+            text("SELECT id FROM boards WHERE id = :id FOR UPDATE"), {"id": expired.id}
+        )
+        assert await asyncio.to_thread(main, ["purge"]) == 1
+        await other.rollback()
+
+    out, err = capsys.readouterr()
+    assert (out, err) == ("", "error: The purge waited too long for a lock. Try again later.\n")
+    assert PURGE_LOCK_TIMEOUT == "The purge waited too long for a lock. Try again later."
+    assert await names(db, Board) == ["Old"]  # nothing was deleted
+
+
+async def test_cli_purge_does_not_hide_other_database_errors(db, cli_env, store, monkeypatch):
+    async def purge_that_breaks(*args, **kwargs):
+        raise DBAPIError("SELECT 1", {}, Exception("something else"))
+
+    monkeypatch.setattr("easytodo.cli.purge", purge_that_breaks)
+
+    with pytest.raises(DBAPIError):
+        await asyncio.to_thread(main, ["purge"])
 
 
 async def wait_until(condition, seconds: float = 2) -> None:
