@@ -10,6 +10,7 @@ from sqlalchemy import delete, select
 
 from easytodo.models import Category, Item
 from easytodo.realtime.events import BoardEvent, EventType
+from easytodo.security.csrf import CSRF_FIELD, CSRF_HEADER
 
 HX = {"HX-Request": "true"}
 DUPLICATE = "A category with this name already exists."
@@ -145,6 +146,34 @@ async def test_on_top_finds_its_position_in_one_unlocked_statement(app, editor_c
     [position] = [q for q in statements["top"] if "min(categories.position)" in q]
     assert "FOR " not in position  # no lock, as for the max()
     assert not any("max(categories.position)" in q for q in statements["top"])
+
+
+async def post_as_a_plain_form(client, url, data):
+    """A post without the X-CSRF-Token header, the token in the form instead (the CSRF check then
+    reads the form itself, before the route does)."""
+    token = client.headers.pop(CSRF_HEADER)
+    try:
+        return await client.post(url, data=data | {CSRF_FIELD: token}, headers=HX)
+    finally:
+        client.headers[CSRF_HEADER] = token
+
+
+async def test_placement_is_read_from_a_plain_form_post_too(editor_client, board, db):
+    url = f"/boards/{board.id}/categories"
+    await create_category(db, board, "Dairy", position=3)
+
+    r = await post_as_a_plain_form(editor_client, url, {"name": "Fruit", "placement": "top"})
+    assert r.status_code == 201 and r.headers["hx-reswap"] == "afterbegin"
+    assert await position_of(db, "Fruit") == 2
+
+    r = await post_as_a_plain_form(editor_client, url, {"name": "Bread"})
+    assert r.status_code == 201 and "hx-reswap" not in r.headers
+    assert await position_of(db, "Bread") == 4
+
+    # An empty field is not the default "bottom" but a refused input.
+    r = await post_as_a_plain_form(editor_client, url, {"name": "Eggs", "placement": ""})
+    assert r.status_code == 422 and toast(r) == PLACEMENT_INVALID
+    assert await categories_in_order(db, board) == ["Fruit", "Dairy", "Bread"]
 
 
 async def test_new_category_name_is_escaped_on_top_too(editor_client, board):

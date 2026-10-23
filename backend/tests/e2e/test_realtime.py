@@ -95,6 +95,17 @@ def wait_until(page: Page, condition: Callable[[], object], what: str) -> None:
     pytest.fail(f"{what} did not happen")
 
 
+def add_category(page: Page, name: str, *, on_top: bool = False) -> None:
+    """Add the category through the "New category" dialog and wait for it to close."""
+    page.get_by_role("button", name="New category").click()
+    dialog = page.get_by_role("dialog", name="New category")
+    dialog.get_by_label("Category name").fill(name)
+    if on_top:
+        dialog.get_by_label("On top").check()
+    dialog.get_by_label("Category name").press("Enter")
+    expect(dialog).to_be_hidden()
+
+
 def wait_for_message(page: Page, messages: list[dict], type_: str) -> None:
     wait_until(
         page,
@@ -200,9 +211,10 @@ def test_new_category_answered_after_its_dialog_was_closed_just_appears(two_logg
     page.route(re.compile(r"/boards/\d+/categories$"), lambda route: held.append(route))
     opener = page.get_by_role("button", name="New category")
     dialog = page.get_by_role("dialog", name="New category")
+    name = dialog.get_by_label("Category name")
     opener.click()
-    dialog.get_by_label("Category name").fill("Bakery")
-    dialog.get_by_label("Category name").press("Enter")
+    name.fill("Bakery")
+    name.press("Enter")
     wait_until(page, lambda: held, "the new category's request")
 
     dialog.get_by_role("button", name="Cancel").click()  # the answer is slow: given up on
@@ -214,6 +226,79 @@ def test_new_category_answered_after_its_dialog_was_closed_just_appears(two_logg
     expect(opener).to_be_focused()  # the focus stays where the user left it
     expect(dialog).to_be_hidden()
     expect(page.locator("#board-content")).not_to_have_attribute("inert", "")
+    opener.click()
+    expect(name).to_have_value("")  # the category is added: its name is not offered again
+
+
+def test_new_category_answer_of_an_earlier_opening_leaves_the_reopened_dialog_alone(
+    two_logged_in_pages,
+):
+    page, _ = two_logged_in_pages
+    held: list[Route] = []
+    page.route(re.compile(r"/boards/\d+/categories$"), lambda route: held.append(route))
+    opener = page.get_by_role("button", name="New category")
+    dialog = page.get_by_role("dialog", name="New category")
+    name = dialog.get_by_label("Category name")
+    opener.click()
+    name.fill("Bakery")
+    name.press("Enter")
+    wait_until(page, lambda: held, "the new category's request")
+    dialog.get_by_role("button", name="Cancel").click()  # the answer is slow: given up on
+    opener.click()
+    expect(dialog).to_be_visible()
+    name.fill("Bread")
+
+    held[0].continue_()  # the first answer lands now
+
+    expect(category(page, "Bakery")).to_be_visible()  # the category was added all the same
+    page.wait_for_timeout(SETTLE_MS)
+    expect(dialog).to_be_visible()  # but the dialog is the user's, as they left it
+    expect(name).to_have_value("Bread")
+    expect(name).to_be_focused()
+    expect(page.locator("#board-content")).to_have_attribute("inert", "")
+    dialog.get_by_role("button", name="Cancel").click()
+    expect(dialog).to_be_hidden()
+    expect(page.locator("#board-content")).not_to_have_attribute("inert", "")
+
+
+@pytest.mark.parametrize("close_with", ["Escape", "Cancel"])
+def test_closing_the_new_category_dialog_gives_the_focus_to_the_button_a_reload_replaced(
+    two_logged_in_pages, close_with
+):
+    a, b = two_logged_in_pages
+    opener = b.get_by_role("button", name="New category")
+    dialog = b.get_by_role("dialog", name="New category")
+    sections = b.locator("section[data-category-id] h2")
+    opener.click()
+    expect(dialog).to_be_visible()
+    add_category(a, "Bakery")  # b is sent the whole board, which waits for the dialog
+    b.wait_for_timeout(SETTLE_MS)
+    expect(sections).to_have_text(["Dairy"])
+    b.evaluate("document.querySelector('[data-new-category]').dataset.original = 'yes'")
+
+    if close_with == "Escape":
+        b.keyboard.press("Escape")
+    else:
+        dialog.get_by_role("button", name="Cancel").click()
+
+    expect(sections).to_have_text(["Dairy", "Bakery"])
+    expect(b.locator("#board-content [data-new-category]")).not_to_have_attribute(
+        "data-original", "yes"
+    )  # a new button: the reload replaced the one that had the focus
+    expect(opener).to_be_focused()  # the reload took the button the focus was on, and gave it back
+    b.wait_for_timeout(SETTLE_MS)
+    expect(opener).to_be_focused()
+
+
+def test_new_category_added_on_top_arrives_first_on_the_other_device(two_logged_in_pages):
+    a, b = two_logged_in_pages
+
+    add_category(a, "Fruit", on_top=True)
+
+    expect(a.locator("section[data-category-id] h2")).to_have_text(["Fruit", "Dairy"])
+    expect(b.locator("section[data-category-id] h2")).to_have_text(
+        ["Fruit", "Dairy"], timeout=LIVE_UPDATE_MS
+    )
 
 
 def publish_item_event(seed, board_id: int, category_id: int, *item_ids: int) -> None:

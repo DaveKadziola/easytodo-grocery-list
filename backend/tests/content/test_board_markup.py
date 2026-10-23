@@ -142,6 +142,11 @@ async def test_board_content_carries_the_board_header(signed_in_client, editor_c
     # "New category" is a button that opens the dialog, which is on the page, not in the content.
     assert f'hx-post="/boards/{board.id}/categories"' not in editor_html
     assert 'data-new-category aria-haspopup="dialog">New category</button>' in editor_html
+    # With an id: a board reload held back while the dialog was open replaces this button, and the
+    # focus that Esc gave it is found again by the id (board.js, restoreKept).
+    assert re.search(
+        r'<button type="button" id="new-category-open"[^>]* data-new-category', editor_html
+    )
     assert re.search(r'<div id="categories"[^>]* data-sortable-categories>', editor_html)
 
 
@@ -276,7 +281,8 @@ async def test_new_category_dialog_is_on_the_board_page_outside_the_content(
     dialog = re.search(r'<div x-data="newCategory".*?</form>', page, re.DOTALL)[0]
     assert (
         '<div x-data="newCategory" @open-new-category.window="show"'
-        ' @htmx:after-swap.window="added">'
+        ' @htmx:after-swap.window="added" @htmx:before-request="sent"'
+        ' @htmx:after-request="requested">'
     ) in dialog
     assert re.search(
         r'<div hidden :hidden="closed" class="[^"]*" @click.self="close" @keydown.escape="close">',
@@ -303,9 +309,11 @@ async def test_new_category_dialog_is_on_the_board_page_outside_the_content(
     assert re.search(
         r'<fieldset>\s*<legend class="label">Add it</legend>\s*'
         r'<label class="flex min-h-11 items-center gap-3">'
-        r'<input type="radio" name="placement" value="bottom" checked> At the bottom</label>\s*'
+        r'<input type="radio" class="size-5 accent-emerald-600" name="placement" value="bottom"'
+        r" checked> At the bottom</label>\s*"
         r'<label class="flex min-h-11 items-center gap-3">'
-        r'<input type="radio" name="placement" value="top"> On top</label>\s*</fieldset>',
+        r'<input type="radio" class="size-5 accent-emerald-600" name="placement" value="top">'
+        r" On top</label>\s*</fieldset>",
         dialog,
     )
     assert re.search(
@@ -320,6 +328,7 @@ async def test_new_category_dialog_is_on_the_board_page_outside_the_content(
 
     # The buttons: one in the board header (in the content), one in the phone's bottom bar.
     assert page.count("data-new-category") == 2 and content.count("data-new-category") == 1
+    assert page.count('id="new-category-open"') == 1  # the bar's button is outside the content
     assert "new-category-form" not in content and "newCategory" not in content
     # After the dialog that moves a category (there is a board to move to here), before the bar.
     assert page.index('x-data="moveCategory"') < page.index('x-data="newCategory"')

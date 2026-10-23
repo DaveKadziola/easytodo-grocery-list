@@ -568,18 +568,6 @@
     becameIdle();
   }
 
-  // The submit button of the dialog that adds a category is disabled while its request is on its way,
-  // and a browser takes the focus from a button that gets disabled. After a refusal (409, 422, no
-  // answer) the dialog is still open, so the focus goes back into it, to the name, ready to be put
-  // right: Esc is heard only from inside the dialog. (A category that was added closed it already.)
-  document.addEventListener("htmx:afterRequest", (event) => {
-    const form = event.detail.elt;
-    if (!addingCategory || form.id !== "new-category-form") return;
-    if (!form.closest("[role=dialog]").contains(document.activeElement)) {
-      document.getElementById("new-category-name").focus();
-    }
-  });
-
   // What opening an item does in the modal and in the dialog alike: the details are fetched into
   // the slot (an empty #item-details holds the place for the answer), the board is held (live
   // updates wait, as a new #board-content would not be inert), and the page behind is inert.
@@ -807,19 +795,22 @@
     // holds live updates back (addingCategory) and makes the page behind inert while it is open.
     // The form's request swaps the new section into #categories (first for "On top", the answer's
     // HX-Reswap header says so, otherwise last); a refused one (409, 422) swaps nothing and the
-    // dialog stays, with the name.
+    // dialog stays, with the name. What was typed stays through closing and reopening, until a
+    // category is added: a stray tap beside the dialog on a phone must not cost the name.
     Alpine.data("newCategory", () => ({
       open: false,
       opener: null, // the button that opened it, to get the focus back
+      request: null, // the XHR of the form's request that this opening waits for
 
       get closed() {
         return !this.open;
       },
 
-      // @open-new-category.window: an empty form (the name, "At the bottom") every time.
+      // @open-new-category.window: with the name and the placement as they were left. A request
+      // still on its way from an earlier opening is no longer waited for.
       show(event) {
         this.opener = event.detail.opener;
-        this.$refs.form.reset();
+        this.request = null;
         this.open = true;
         addingCategory = true;
         setPageInert(true);
@@ -832,13 +823,22 @@
         leaveNewCategory(this, true);
       },
 
+      // @htmx:before-request, from the form: this is the request the dialog waits for.
+      sent(event) {
+        if (event.detail.elt === this.$refs.form) this.request = event.detail.xhr;
+      },
+
       // @htmx:after-swap.window: the form's own request has put the new section in. (Alpine hands a
       // method the event, so this does not call close(): that would take it for an argument.) The
-      // dialog closes, and the focus goes to the section's "Add item" field, ready for its items;
-      // when the dialog was closed meanwhile (the answer was slow) the section just appears.
+      // form is emptied, and the dialog closes with the focus going to the section's "Add item"
+      // field, ready for its items. When the dialog was closed meanwhile (the answer was slow) the
+      // section just appears, and one that was opened again since is none of this answer's business.
       added(event) {
         const { requestConfig, xhr } = event.detail;
-        if (!this.open || !requestConfig || requestConfig.elt !== this.$refs.form) return;
+        if (!xhr || xhr !== this.request || !requestConfig || requestConfig.elt !== this.$refs.form) return;
+        this.request = null;
+        this.$refs.form.reset();
+        if (!this.open) return;
         const list = event.target;
         const section = xhr.getResponseHeader("HX-Reswap") === "afterbegin" ? list.firstElementChild : list.lastElementChild;
         leaveNewCategory(this, false);
@@ -846,6 +846,22 @@
         if (field) {
           field.scrollIntoView({ block: "center" });
           field.focus();
+        }
+      },
+
+      // @htmx:after-request, from the form. An answer that added the category has closed the dialog
+      // already. A refusal of the board (403 or 404: the toast says why, and a 404 asks for the
+      // board to be reloaded) closes it, so that what the page waited for can run. Any other
+      // refusal (a taken name, an input refused, no answer) leaves it open to be put right, with
+      // the focus in it: the submit button was disabled while the request was on its way, and a
+      // browser takes the focus from a button that gets disabled (Esc is heard only from inside).
+      requested(event) {
+        const { elt, xhr } = event.detail;
+        if (!this.open || elt !== this.$refs.form || xhr !== this.request) return;
+        if (xhr.status === 403 || xhr.status === 404) {
+          leaveNewCategory(this, true);
+        } else if (!this.$el.contains(document.activeElement)) {
+          this.$refs.name.focus();
         }
       },
     }));

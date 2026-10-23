@@ -2,15 +2,19 @@
    board content, for a member who may edit. The "New category" buttons (the board header's, and
    the phone's bottom bar's) open it with an "open-new-category" event on the window; it asks for
    the name and whether the category goes on top or at the bottom (radio buttons: Tab enters the
-   group once, the arrow keys move within it). The request swaps the new section into
-   #categories, which the answer's HX-Reswap header puts first for "On top"; a name that is taken
-   (409) or refused (422) leaves the dialog open with what was typed. It is shown and hidden with
-   its hidden attribute ("closed"), as the item modal is (see _item_modal.html), and while it is
-   open the page behind is inert and live updates wait. Esc, or a tap on the dimmed page, closes
-   it; Tab keeps to its controls. The panel has tabindex -1 so that Esc is still heard after a
-   click on its text.
+   group once, the arrow keys move within it). What was typed stays through Cancel, Esc and a tap
+   beside the dialog (a stray tap on a phone must not cost the name), and goes only once the
+   category is added. The request swaps the new section into #categories, which the answer's
+   HX-Reswap header puts first for "On top"; a name that is taken (409) or refused (422) leaves
+   the dialog open with what was typed, and one the board refuses (403, 404) closes it, so that
+   the reload that follows can run. Only the answer to the request of the dialog's current opening
+   counts (an older one lands in a page that is no longer waiting for it). It is shown and hidden
+   with its hidden attribute ("closed"), as the item modal is (see _item_modal.html), and while it
+   is open the page behind is inert and live updates wait. Esc, or a tap on the dimmed page,
+   closes it; Tab keeps to its controls. The panel has tabindex -1 so that Esc is still heard
+   after a click on its text.
    Context: view (BoardView). -#}
-<div x-data="newCategory" @open-new-category.window="show" @htmx:after-swap.window="added">
+<div x-data="newCategory" @open-new-category.window="show" @htmx:after-swap.window="added" @htmx:before-request="sent" @htmx:after-request="requested">
   <div hidden :hidden="closed" class="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/50 dark:bg-black/60 sm:items-center sm:p-4" @click.self="close" @keydown.escape="close">
     <div role="dialog" aria-modal="true" aria-labelledby="new-category-title" tabindex="-1" class="max-h-dvh w-full max-w-md overflow-y-auto rounded-t-2xl bg-white dark:bg-slate-900 p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-xl focus:outline-none sm:rounded-2xl" @keydown.tab="trapFocus">
       <h2 id="new-category-title" class="text-lg font-semibold">New category</h2>
@@ -21,8 +25,8 @@
         </div>
         <fieldset>
           <legend class="label">Add it</legend>
-          <label class="flex min-h-11 items-center gap-3"><input type="radio" name="placement" value="bottom" checked> At the bottom</label>
-          <label class="flex min-h-11 items-center gap-3"><input type="radio" name="placement" value="top"> On top</label>
+          <label class="flex min-h-11 items-center gap-3"><input type="radio" class="size-5 accent-emerald-600" name="placement" value="bottom" checked> At the bottom</label>
+          <label class="flex min-h-11 items-center gap-3"><input type="radio" class="size-5 accent-emerald-600" name="placement" value="top"> On top</label>
         </fieldset>
         <div class="flex justify-end gap-2 pt-2">
           <button type="button" class="btn-secondary" @click="close">Cancel</button>

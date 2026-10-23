@@ -9,6 +9,8 @@
       board's ⋮ menu on the board list, and "New category" is in the bottom bar. From a tablet up
       the same button is here, beside the name. Both open the dialog on the board page
       (_new_category.html), which this content does not contain, so that a reload leaves it alone.
+      This one has an id: a reload held back while the dialog was open replaces it, and the focus
+      that Esc or Cancel gave it is found again by its id (board.js, restoreKept).
       The board's archived categories are a link beside "All boards", for every member. #}
   <div class="flex items-end gap-2">
     <div class="min-w-0 flex-1">
@@ -19,7 +21,7 @@
       <h1 class="break-words text-2xl font-semibold">{{ view.board.name }}</h1>
     </div>
     {% if can_edit %}
-    <button type="button" class="btn-secondary hidden shrink-0 sm:inline-flex" data-new-category aria-haspopup="dialog">New category</button>
+    <button type="button" id="new-category-open" class="btn-secondary hidden shrink-0 sm:inline-flex" data-new-category aria-haspopup="dialog">New category</button>
     {% endif %}
   </div>
 

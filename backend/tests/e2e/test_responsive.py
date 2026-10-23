@@ -476,9 +476,13 @@ def test_new_category_dialog_keeps_the_keyboard_inside_and_the_radios_one_stop(
     expect(opener).to_be_focused()
 
 
-def test_new_category_dialog_keeps_the_keyboard_after_a_refusal(logged_in_page_with_seed):
+@pytest.mark.parametrize("close_with", ["Escape", "Cancel"])
+def test_new_category_dialog_keeps_the_keyboard_after_a_refusal(
+    logged_in_page_with_seed, close_with
+):
     page = logged_in_page_with_seed
-    page.get_by_role("button", name="New category").click()
+    opener = page.get_by_role("button", name="New category")
+    opener.click()
     dialog = page.get_by_role("dialog", name="New category")
     name = dialog.get_by_label("Category name")
     name.fill("Dairy")  # taken
@@ -489,8 +493,14 @@ def test_new_category_dialog_keeps_the_keyboard_after_a_refusal(logged_in_page_w
     expect(dialog.get_by_role("button", name="Add category")).to_be_enabled()
     expect(name).to_be_focused()  # not lost with the button: Escape is still heard
     expect(name).to_have_value("Dairy")
-    page.keyboard.press("Escape")
+    expect(page.locator("#board-content")).to_have_attribute("inert", "")
+    if close_with == "Escape":
+        page.keyboard.press("Escape")
+    else:
+        dialog.get_by_role("button", name="Cancel").click()
     expect(dialog).to_be_hidden()
+    expect(page.locator("#board-content")).not_to_have_attribute("inert", "")
+    expect(opener).to_be_focused()
 
 
 def test_every_icon_control_has_a_label(logged_in_page_with_seed):

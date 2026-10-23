@@ -5,6 +5,7 @@ violations anywhere. (Renaming and archiving a board are tested on the board lis
 test_board_list_ui.py.)"""
 
 import re
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs
 
@@ -17,7 +18,7 @@ from sqlalchemy import func, update
 from e2e import test_responsive
 from e2e.conftest import open_board_menu, watch_console
 from e2e.locators import TAP_TARGETS, add_item, category, item, items_of
-from easytodo.models import BoardRole, Category, Item
+from easytodo.models import Board, BoardMember, BoardRole, Category, Item
 
 pytestmark = pytest.mark.e2e
 
@@ -503,6 +504,123 @@ def test_new_category_dialog_adds_at_the_bottom_or_on_top(logged_in_page, seed, 
     expect(dialog).to_be_visible()
     expect(name).to_have_value("dairy")
     expect(sections).to_have_text(["Fruit", "Dairy", "Bakery"])
+
+
+def test_new_category_dialog_keeps_what_was_typed_until_the_category_is_added(
+    logged_in_page, seed, user, open_board
+):
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
+    open_board(page, board_id)
+    opener = page.get_by_role("button", name="New category")
+    dialog = page.get_by_role("dialog", name="New category")
+    name = dialog.get_by_label("Category name")
+    bottom, top = dialog.get_by_label("At the bottom"), dialog.get_by_label("On top")
+    opener.click()
+    name.fill("Bak")
+    top.check()
+
+    # A stray tap beside the dialog on a phone (Escape and "Cancel" too) must not cost the name.
+    for close in (
+        lambda: page.keyboard.press("Escape"),
+        lambda: page.mouse.click(x=5, y=5),
+        lambda: dialog.get_by_role("button", name="Cancel").click(),
+    ):
+        close()
+        expect(dialog).to_be_hidden()
+        opener.click()
+        expect(dialog).to_be_visible()
+        expect(name).to_be_focused()
+        expect(name).to_have_value("Bak")
+        expect(top).to_be_checked()
+
+    name.fill("Bakery")
+    name.press("Enter")
+    expect(dialog).to_be_hidden()
+    expect(page.locator("section[data-category-id] h2")).to_have_text(["Bakery", "Dairy"])
+
+    opener.click()  # an added category takes the name and the choice with it
+    expect(name).to_have_value("")
+    expect(bottom).to_be_checked()
+
+
+def test_new_category_on_top_of_an_empty_board_goes_before_its_placeholder(
+    logged_in_page, seed, user, open_board
+):
+    page = logged_in_page
+    board_id = seed_board(seed, user, {})
+    open_board(page, board_id)
+    opener = page.get_by_role("button", name="New category")
+    dialog = page.get_by_role("dialog", name="New category")
+    sections = page.locator("section[data-category-id] h2")
+    children = page.locator("#categories > *")
+
+    for name in ("Fruit", "Nuts"):
+        opener.click()
+        dialog.get_by_label("Category name").fill(name)
+        dialog.get_by_label("On top").check()
+        dialog.get_by_label("Category name").press("Enter")
+        expect(dialog).to_be_hidden()
+        expect(category(page, name).get_by_placeholder("Add item")).to_be_focused()
+
+    expect(sections).to_have_text(["Nuts", "Fruit"])
+    expect(page.get_by_text("Add your first category")).to_be_hidden()
+    expect(children.first).to_have_attribute("data-category-id", re.compile(r"^\d+$"))
+    expect(children.last).to_have_text("Add your first category")  # the placeholder stays last
+    first = page.locator("section[data-category-id]").first
+    first.get_by_label("Category actions").click()
+    expect(first.get_by_role("button", name="Move up")).to_be_hidden()  # it is the first
+    expect(first.get_by_role("button", name="Move down")).to_be_visible()
+
+    page.reload()
+    expect(sections).to_have_text(["Nuts", "Fruit"])
+
+
+@pytest.mark.parametrize("refusal", ["forbidden", "gone"])
+def test_new_category_dialog_closes_when_the_board_refuses(
+    signed_in_as, seed, user, open_board, refusal
+):
+    async def make(db) -> tuple[int, int]:
+        vic = await create_user(db, "vic@example.com")
+        board = await create_board(db, user, "Groceries", {vic: BoardRole.EDITOR})
+        await create_category(db, board, "Dairy")
+        return board.id, vic.id
+
+    board_id, vic_id = seed(make)
+    page = signed_in_as("vic@example.com")
+    open_board(page, board_id)
+    dialog = page.get_by_role("dialog", name="New category")
+    page.get_by_role("button", name="New category").click()
+    dialog.get_by_label("Category name").fill("Bakery")
+
+    async def change_elsewhere(db) -> None:  # on another device, and this page was not told
+        if refusal == "forbidden":
+            await db.execute(
+                update(BoardMember)
+                .where(BoardMember.board_id == board_id, BoardMember.user_id == vic_id)
+                .values(role=BoardRole.VIEWER)
+            )
+        else:
+            await db.execute(
+                update(Board).where(Board.id == board_id).values(archived_at=datetime.now(UTC))
+            )
+        await db.commit()
+
+    seed(change_elsewhere)
+
+    # A 404 asks for the board to be reloaded: the reload was held back by the open dialog, and
+    # runs once the dialog has closed on its own (nothing here closes it but the refusal).
+    if refusal == "gone":
+        reload_wait = page.expect_request(re.compile(rf"/boards/{board_id}/content$"))
+    else:
+        reload_wait = nullcontext()
+    with reload_wait:
+        dialog.get_by_label("Category name").press("Enter")
+        expect(dialog).to_be_hidden()
+        expect(page.locator("#board-content")).not_to_have_attribute("inert", "")
+    expect(page.locator("#toasts")).to_contain_text(
+        "You don't have permission to do that." if refusal == "forbidden" else "Board not found."
+    )
 
 
 def test_category_menu_renames_clears_done_and_archives(logged_in_page, seed, user, open_board):
