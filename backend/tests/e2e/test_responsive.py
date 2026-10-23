@@ -334,6 +334,7 @@ def test_item_modal_keeps_the_keyboard_inside_and_closes_on_escape(logged_in_pag
     dialog = page.get_by_role("dialog")
     name = dialog.get_by_label("Name")
     expect(name).to_be_focused()
+    expect(dialog.get_by_label("Add entry")).to_be_visible()  # the details are loaded
 
     for control in (
         dialog.get_by_label("Description"),
@@ -341,12 +342,14 @@ def test_item_modal_keeps_the_keyboard_inside_and_closes_on_escape(logged_in_pag
         dialog.get_by_role("button", name="Delete item"),
         dialog.get_by_role("button", name="Cancel"),
         dialog.get_by_role("button", name="Save"),
+        dialog.get_by_label("Add entry"),  # the checklist's controls come after the form
+        dialog.get_by_role("button", name="Add", exact=True),
         name,  # round again: never out to the page behind
     ):
         page.keyboard.press("Tab")
         expect(control).to_be_focused()
     page.keyboard.press("Shift+Tab")
-    expect(dialog.get_by_role("button", name="Save")).to_be_focused()
+    expect(dialog.get_by_role("button", name="Add", exact=True)).to_be_focused()
 
     page.keyboard.press("Escape")
 
@@ -385,8 +388,13 @@ def test_item_modal_focus_trap_skips_what_cannot_take_focus(logged_in_page_with_
     link = dialog.get_by_role("link", name="Link")
     dialog.get_by_role("button", name="Save").focus()
 
-    page.keyboard.press("Tab")
-    expect(link).to_be_focused()
+    for control in (
+        dialog.get_by_label("Add entry"),
+        dialog.get_by_role("button", name="Add", exact=True),
+        link,
+    ):
+        page.keyboard.press("Tab")
+        expect(control).to_be_focused()
     page.keyboard.press("Tab")
     expect(dialog.get_by_label("Name")).to_be_focused()  # round again, not into the disabled one
     page.keyboard.press("Shift+Tab")

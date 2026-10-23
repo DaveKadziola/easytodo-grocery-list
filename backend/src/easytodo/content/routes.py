@@ -1,7 +1,8 @@
-"""Categories and items over HTMX, and the board's "Archived categories" page. Each route
-answers with the HTML fragment to swap in: the whole board content, one category, an item's
-details, or nothing (an archived category, a new order); a category restored or deleted for good
-from the archive page reloads that page instead."""
+"""Categories, items and checklist entries over HTMX, and the board's "Archived categories" page.
+Each route answers with the HTML fragment to swap in: the whole board content, one category, an
+item's details (also after a change to its checklist), or nothing (an archived category, a new
+order); a category restored or deleted for good from the archive page reloads that page
+instead."""
 
 import json
 from typing import Annotated
@@ -12,6 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.auth.deps import CurrentUser, DbSession, FormField
 from easytodo.boards.service import BoardView, get_board_view
+from easytodo.content.checklist import (
+    add_entry,
+    check_entry,
+    delete_entry,
+    rename_entry,
+    reorder_entries,
+)
 from easytodo.content.service import (
     archive_category,
     clear_done,
@@ -38,6 +46,14 @@ router = APIRouter()
 
 ITEM_DELETED = "Item deleted."
 OptionalFormField = Annotated[str | None, Form()]
+
+
+def _wanted_state(done: str | None) -> bool | None:
+    """The state a tick asks for: "true" or "false" (the checkbox's new state, which board.js
+    sends), or None when it sends none and the item or entry flips."""
+    if done not in (None, "true", "false"):
+        raise ValidationFailed("done must be true or false.")
+    return None if done is None else done == "true"
 
 
 def _board_content(request: Request, view: BoardView) -> Response:
@@ -170,6 +186,55 @@ async def item_details(
     return await _current_details(request, db, user, item_id)
 
 
+@router.post("/items/{item_id}/checklist")
+async def new_entry(
+    request: Request, db: DbSession, user: CurrentUser, item_id: int, text: FormField = ""
+) -> Response:
+    await add_entry(db, item_id, user, text)
+    return await _current_details(request, db, user, item_id)
+
+
+@router.put("/items/{item_id}/checklist/order")
+async def reorder_checklist(
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    item_id: int,
+    ids: Annotated[list[int], Form(default_factory=list)],
+) -> Response:
+    await reorder_entries(db, item_id, user, ids)
+    return await _current_details(request, db, user, item_id)
+
+
+@router.patch("/checklist/{entry_id}")
+async def edit_entry(
+    request: Request, db: DbSession, user: CurrentUser, entry_id: int, text: FormField = ""
+) -> Response:
+    entry = await rename_entry(db, entry_id, user, text)
+    return await _current_details(request, db, user, entry.item_id)
+
+
+@router.post("/checklist/{entry_id}/check")
+async def check(
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    entry_id: int,
+    done: OptionalFormField = None,
+) -> Response:
+    """Like ``toggle``: ``done`` ("true" or "false") sets the state, without it the entry flips."""
+    entry = await check_entry(db, entry_id, user, _wanted_state(done))
+    return await _current_details(request, db, user, entry.item_id)
+
+
+@router.delete("/checklist/{entry_id}")
+async def remove_entry(
+    request: Request, db: DbSession, user: CurrentUser, entry_id: int
+) -> Response:
+    item_id = await delete_entry(db, entry_id, user)
+    return await _current_details(request, db, user, item_id)
+
+
 @router.patch("/items/{item_id}")
 async def edit_item(
     request: Request,
@@ -194,9 +259,7 @@ async def toggle(
     """``done`` ("true" or "false": the checkbox's new state, which board.js sends) sets the
     state; without it the item flips. (A str, not a bool: FastAPI reads a missing bool form
     field as False, the way an unticked HTML checkbox is left out.)"""
-    if done not in (None, "true", "false"):
-        raise ValidationFailed("done must be true or false.")
-    item = await toggle_item(db, item_id, user, None if done is None else done == "true")
+    item = await toggle_item(db, item_id, user, _wanted_state(done))
     return await _current_category(request, db, user, item.category_id)
 
 

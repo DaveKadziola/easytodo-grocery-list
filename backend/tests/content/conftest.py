@@ -9,7 +9,7 @@ from factories import create_board, create_category, create_item, create_user
 from helpers import login
 from sqlalchemy import select
 
-from easytodo.content import service
+from easytodo.content import checklist, service
 from easytodo.models import (
     Attachment,
     Board,
@@ -71,16 +71,19 @@ async def viewer_client(signed_in_client, db, board) -> httpx.AsyncClient:
 
 @pytest.fixture
 def published(monkeypatch) -> list[tuple[tuple[BoardEvent, ...], str | None]]:
-    """Every ``commit_and_publish`` call the content service makes: its events and the request's
-    origin (``X-Client-Id``)."""
+    """Every ``commit_and_publish`` call the content services (categories and items, checklists)
+    make: its events and the request's origin (``X-Client-Id``)."""
     calls: list[tuple[tuple[BoardEvent, ...], str | None]] = []
-    commit_and_publish = service.commit_and_publish
 
-    async def spy(db, *events):
-        calls.append((events, current_origin.get()))
-        await commit_and_publish(db, *events)
+    def spying_on(commit_and_publish):
+        async def spy(db, *events):
+            calls.append((events, current_origin.get()))
+            await commit_and_publish(db, *events)
 
-    monkeypatch.setattr(service, "commit_and_publish", spy)
+        return spy
+
+    for module in (service, checklist):
+        monkeypatch.setattr(module, "commit_and_publish", spying_on(module.commit_and_publish))
     return calls
 
 

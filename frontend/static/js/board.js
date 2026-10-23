@@ -1,27 +1,34 @@
 // Board page: drag and drop (SortableJS) and Move up / Move down for categories, the item modal
 // of those who may edit and the read-only dialog of those who may not (Alpine components
-// "itemModal" and "itemViewer", both with the open item's details fetched into their slot), ticks
-// that show at once, fields that are ready for the next entry and keep what the user typed when
-// their category is swapped, folding categories away (per device), the bottom bar's "New
-// category", and a board reload when a change did not go through.
+// "itemModal" and "itemViewer", both with the open item's details fetched into their slot, and in
+// them the checklist: ticks, and drag and drop of its entries), ticks that show at once, fields
+// that are ready for the next entry and keep what the user typed when their category or the
+// details are swapped, folding categories away (per device), the bottom bar's "New category", and
+// a board reload when a change did not go through.
 // Loaded before Alpine (see base.html), so the components are registered on alpine:init. They read
 // items only from data-* attributes, which the templates escape; no page data is ever written into
 // a script.
 // For realtime.js: window.easytodoBoard (the board reload and its swap style, whether a drag or
 // the modal is in progress, the open item and a fetch of its details), a "board:idle" event on
-// the document when that ends, and a "board:stale" event when the page no longer shows what the
-// server has (it then queues a reload).
+// the document when that ends, a "board:stale" event when the page no longer shows what the
+// server has (it then queues a reload), and a "board:changed" event ({categoryId}) when the modal
+// closes after a change to the checklist (the category's tile shows its count).
 (() => {
   "use strict";
 
   const BOARD_CONTENT = "#board-content";
   const TICK = 'input[type="checkbox"][hx-post$="/toggle"]';
+  // An entry of the checklist in the item's details: ticked like an item, but nothing is struck.
+  const CHECK = 'input[type="checkbox"][hx-post$="/check"]';
+  const TICKS = `${TICK}, ${CHECK}`;
   const FOCUSABLE = "a[href], input, textarea, select, button";
   const TEXT_FIELDS = "input[id]:not([type=checkbox]):not([type=hidden]), textarea[id]";
   // Requests whose failure leaves the page out of step: Sortable has already moved the element.
   const DRAG_REQUEST = /\/items\/\d+\/move$|\/categories\/order$/;
   // The answer to a fetch of an item's details (the path of its request).
   const DETAILS_PATH = /^\/items\/(\d+)\/details$/;
+  // The new order of the open item's checklist: if it did not go through, the list is put right.
+  const CHECKLIST_ORDER = /\/items\/\d+\/checklist\/order$/;
   const COLLAPSED_KEY = "easytodo.collapsedCategories";
   // A reload that the user did not ask for just now: htmx sets the new content up at once (no
   // settle delay), so a form in it never submits as a plain page request before htmx has it.
@@ -29,6 +36,7 @@
   let dragging = false; // a Sortable drag is running
   let editing = false; // the item modal or dialog is open
   let openId = null; // the id (a number) of the item that is open in it
+  let detailsChanged = false; // the open item's checklist was changed from this tab
   let newCategoryShown = false; // on a phone the bottom bar's button showed the "New category" form
 
   function boardContent() {
@@ -97,6 +105,22 @@
       .catch(stale);
   }
 
+  function checklistIds(list) {
+    return Array.from(list.querySelectorAll("[data-entry-id]"), (el) => el.dataset.entryId);
+  }
+
+  // The answer is the item's details again, in the new order. A request that fails is put right
+  // by failed() below (it hears the same error), so there is nothing to catch here.
+  function saveChecklistOrder(list) {
+    return htmx
+      .ajax("PUT", `/items/${openId}/checklist/order`, {
+        source: list,
+        target: "#item-details",
+        values: { ids: checklistIds(list) },
+      })
+      .catch(() => {});
+  }
+
   function initSortable(root) {
     matching(root, "[data-sortable-items]").forEach((list) => {
       if (Sortable.get(list)) return;
@@ -118,6 +142,22 @@
             const category = event.to.closest("[data-category-id]");
             moveItem(event.item.dataset.itemId, category.dataset.categoryId, event.item);
           }
+          becameIdle();
+        },
+      });
+    });
+    matching(root, "[data-sortable-checklist]").forEach((list) => {
+      if (Sortable.get(list)) return;
+      Sortable.create(list, {
+        group: "checklist",
+        handle: ".checklist-handle", // touch-action: none, so a finger on it drags, not scrolls
+        draggable: "[data-entry-id]",
+        supportPointer: false, // as for categories: touch events, which end properly on every phone
+        onStart: dragStarted,
+        onEnd(event) {
+          dragging = false;
+          if (event.item.getAttribute("style") === "") event.item.removeAttribute("style");
+          if (event.oldIndex !== event.newIndex) saveChecklistOrder(list);
           becameIdle();
         },
       });
@@ -203,7 +243,7 @@
 
   document.addEventListener("htmx:configRequest", (event) => {
     const { elt, parameters } = event.detail;
-    if (elt.matches(TICK)) parameters.done = String(elt.checked); // the state its user wants
+    if (elt.matches(TICKS)) parameters.done = String(elt.checked); // the state its user wants
     if (elt instanceof HTMLFormElement) {
       const sent = {};
       for (const field of elt.querySelectorAll(TEXT_FIELDS)) sent[field.id] = field.value;
@@ -260,33 +300,36 @@
   document.addEventListener("htmx:afterSwap", (event) => {
     if (event.target instanceof Element) setUp(event.target);
     restoreKept();
-    // A form with data-refocus="<input id>" is ready for the next entry after a successful
-    // submit: emptied, with the cursor in that input (which the swap may have replaced).
-    const form = event.detail.requestConfig && event.detail.requestConfig.elt;
-    if (form instanceof HTMLFormElement && form.dataset.refocus) {
-      form.reset();
-      const input = document.getElementById(form.dataset.refocus);
+    // An element with data-refocus="<input id>" (a form, or the button that deletes an entry)
+    // leaves the cursor in that input after a successful request (which the swap may have
+    // replaced), a form emptied: ready for the next entry.
+    const sender = event.detail.requestConfig && event.detail.requestConfig.elt;
+    if (sender && sender.dataset && sender.dataset.refocus) {
+      if (sender instanceof HTMLFormElement) sender.reset();
+      const input = document.getElementById(sender.dataset.refocus);
       if (input) input.focus();
     }
   });
 
-  // A tick (or untick) shows at once, struck through or not, before the server has answered;
-  // the answer then replaces the category. If the request fails, it is undone (app.js says so).
+  // A tick (or untick) of an item shows at once, struck through or not, before the server has
+  // answered; the answer then replaces the category. If the request fails, it is undone (app.js
+  // says so). An entry of the checklist shows its own state, the checkbox, and nothing else.
   function strike(checkbox) {
     checkbox.closest("[data-item-id]").classList.toggle("line-through", checkbox.checked);
   }
 
   // A tap on a checkbox whose last tap is still on its way (a quick double tap): htmx holds the
   // new request back on that checkbox until the answer comes, but the answer replaces the
-  // category, checkbox and all, and htmx then drops what it held for an element that is gone. So
-  // the state its user wants is noted here and sent from the new checkbox once it is set up.
+  // category (or the details), checkbox and all, and htmx then drops what it held for an element
+  // that is gone. So the state its user wants is noted here and sent from the new checkbox once
+  // it is set up.
   const ticking = new WeakSet(); // checkboxes whose request is on its way
   const heldTicks = new Map(); // checkbox id -> {from: checkbox tapped, checked: wanted state}
 
   document.addEventListener("htmx:beforeRequest", (event) => {
     const checkbox = event.detail.elt;
-    if (!checkbox.matches(TICK)) return;
-    strike(checkbox);
+    if (!checkbox.matches(TICKS)) return;
+    if (checkbox.matches(TICK)) strike(checkbox);
     ticking.add(checkbox);
     const held = heldTicks.get(checkbox.id);
     if (held && held.from === checkbox) heldTicks.delete(checkbox.id); // htmx sends it itself
@@ -296,21 +339,29 @@
     "change",
     (event) => {
       const checkbox = event.target;
-      if (!(checkbox instanceof Element) || !checkbox.matches(TICK) || !ticking.has(checkbox)) return;
+      if (!(checkbox instanceof Element) || !checkbox.matches(TICKS) || !ticking.has(checkbox)) return;
       heldTicks.set(checkbox.id, { from: checkbox, checked: checkbox.checked });
-      strike(checkbox);
+      if (checkbox.matches(TICK)) strike(checkbox);
     },
     true, // before htmx's own listener on the checkbox, which may send a request at once
   );
 
-  document.addEventListener("htmx:afterRequest", (event) => ticking.delete(event.detail.elt));
+  // A write that replaced the details (a tick, rename, delete, new entry or order of the
+  // checklist): the item's tile on the board has its old count until the modal closes.
+  // The server tells the other devices; this tab's own change it leaves out (realtime.js).
+  document.addEventListener("htmx:afterRequest", (event) => {
+    const { elt, successful, requestConfig, target } = event.detail;
+    ticking.delete(elt);
+    const verb = requestConfig && String(requestConfig.verb).toLowerCase();
+    if (successful && verb !== "get" && target && target.id === "item-details") detailsChanged = true;
+  });
 
   document.addEventListener("htmx:afterSettle", () => {
     for (const [id, { from, checked }] of heldTicks) {
       const checkbox = document.getElementById(id);
       if (checkbox === from) continue; // not replaced: htmx still sends it from there
       heldTicks.delete(id);
-      if (!checkbox || !checkbox.matches(TICK) || checkbox.checked === checked) continue;
+      if (!checkbox || !checkbox.matches(TICKS) || checkbox.checked === checked) continue;
       checkbox.checked = checked;
       htmx.trigger(checkbox, "change");
     }
@@ -318,12 +369,15 @@
 
   function failed(event) {
     const checkbox = event.detail.elt;
-    if (checkbox.matches(TICK) && checkbox.isConnected) {
+    if (checkbox.matches(TICKS) && checkbox.isConnected) {
       checkbox.checked = !checkbox.checked;
-      strike(checkbox);
+      if (checkbox.matches(TICK)) strike(checkbox);
     }
     const config = event.detail.requestConfig;
     if (config && DRAG_REQUEST.test(config.path)) stale(); // put the dragged element back
+    if (config && CHECKLIST_ORDER.test(config.path)) {
+      Promise.resolve(refreshDetails()).catch(() => {}); // put the dragged entry back
+    }
   }
   document.addEventListener("htmx:responseError", failed);
   document.addEventListener("htmx:sendError", failed);
@@ -404,6 +458,7 @@
     refresh: refreshBoard,
     reloadSwap: RELOAD_SWAP,
     isBusy: () => dragging || editing,
+    isDragging: () => dragging,
     openItemId: () => openId,
     refreshDetails,
   };
@@ -446,6 +501,7 @@
   function enterItem(component, itemId) {
     component.itemId = itemId;
     openId = Number(itemId);
+    detailsChanged = false;
     const placeholder = document.createElement("div");
     placeholder.id = "item-details";
     component.$refs.details.replaceChildren(placeholder);
@@ -455,7 +511,8 @@
     setPageInert(true);
   }
 
-  // The reverse of enterItem; the focus goes back to the name that opened it.
+  // The reverse of enterItem; the focus goes back to the name that opened it. After a change to
+  // the checklist from this tab the item's category is fetched again (its tile shows the count).
   function leaveItem(component) {
     if (!component.open) return;
     component.open = false;
@@ -463,6 +520,12 @@
     openId = null;
     component.$refs.details.replaceChildren();
     setPageInert(false);
+    const item = itemElement(component.itemId);
+    if (detailsChanged && item) {
+      const categoryId = Number(item.closest("[data-category-id]").dataset.categoryId);
+      document.dispatchEvent(new CustomEvent("board:changed", { detail: { categoryId } }));
+    }
+    detailsChanged = false;
     const opener = document.getElementById(`item-${component.itemId}-name`);
     if (opener) opener.focus();
     becameIdle();

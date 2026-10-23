@@ -1,13 +1,65 @@
 {# An item's details, the fragment GET /items/{id}/details answers with: it replaces the (empty)
    #item-details in the slot of the editor's item modal or of the viewer's dialog, and again
-   whenever an event names the item (static/js/realtime.js). Read-only markup for every role.
-   Context: details (ItemDetails). Who added the item is named only on a shared board. -#}
+   whenever an event names the item (static/js/realtime.js). Every checklist route answers with it
+   too. Read-only markup for a member who may not edit.
+   Context: details (ItemDetails). Who added the item is named only on a shared board.
+   Nothing in it may look like an item or a category of the board (data-item-id,
+   data-category-*, id="item-<n>"): the board's scripts look for those on the whole page. -#}
+{% from "partials/_checklist_count.html" import checklist_count %}
 {% set item = details.item %}
+{% set entries = details.entries %}
+{% set can_edit = can(details.role, Action.EDIT_CONTENT) %}
 <div id="item-details" data-details-item-id="{{ item.id }}" class="mt-6 space-y-4 border-t border-slate-200 pt-4 dark:border-slate-700">
   <p class="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600 dark:text-slate-400">
     <span>{% if details.show_author %}Added by {{ details.author.name }} · {% else %}Added {% endif %}<time datetime="{{ item.created_at.isoformat() }}" class="whitespace-nowrap">{{ item.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</time></span>
     <span>Modified <time datetime="{{ item.updated_at.isoformat() }}" class="whitespace-nowrap">{{ item.updated_at.strftime("%Y-%m-%d %H:%M") }} UTC</time></span>
   </p>
-  {#- The checklist goes here: <section id="item-checklist"> (details.entries). #}
+  {#- The checklist: an editor ticks, renames, deletes, drags and adds entries, each in a request of its own whose answer replaces #item-details (hx-target); a viewer reads it, and sees nothing when it is empty. #}
+  <section id="item-checklist"{% if can_edit %} hx-target="#item-details"{% endif %}>
+    {% if can_edit or entries %}
+    <div class="mb-1 flex items-center gap-2 font-semibold">
+      <h3 id="item-checklist-title">Checklist</h3>
+      {% if entries %}{{ checklist_count(entries|selectattr("is_done")|list|length, entries|length) }}{% endif %}
+    </div>
+    {% endif %}
+    {% if can_edit %}
+    {#- The list is outside the forms: its checkboxes and fields send no more than their own. #}
+    <ul data-sortable-checklist>
+      {% for entry in entries %}
+      <li id="checklist-entry-{{ entry.id }}" data-entry-id="{{ entry.id }}" class="flex items-center py-0.5">
+        <span class="checklist-handle btn-icon shrink-0 cursor-grab touch-none text-slate-400 dark:text-slate-500" title="Drag to reorder" aria-hidden="true">⠿</span>
+        <label class="tap-target">
+          <input type="checkbox" id="checklist-{{ entry.id }}-done" class="size-5 accent-emerald-600" aria-label="{{ entry.text }}" hx-post="/checklist/{{ entry.id }}/check"{% if entry.is_done %} checked{% endif %}>
+        </label>
+        {#- Saved with Enter. #}
+        <form hx-patch="/checklist/{{ entry.id }}" class="min-w-0 flex-1">
+          <input id="checklist-{{ entry.id }}-text" name="text" value="{{ entry.text }}" aria-label="Edit {{ entry.text }}" required maxlength="200" autocomplete="off" class="input">
+        </form>
+        <button type="button" class="btn-icon shrink-0 text-slate-600 dark:text-slate-400" hx-delete="/checklist/{{ entry.id }}" data-refocus="checklist-new-{{ item.id }}" aria-label="Delete {{ entry.text }}" title="Delete"><span aria-hidden="true">✕</span></button>
+      </li>
+      {% endfor %}
+    </ul>
+    <form hx-post="/items/{{ item.id }}/checklist" data-refocus="checklist-new-{{ item.id }}" hx-disabled-elt="find button" class="mt-2 flex gap-2">
+      <label for="checklist-new-{{ item.id }}" class="sr-only">Add entry</label>
+      <input id="checklist-new-{{ item.id }}" name="text" placeholder="Add entry" required maxlength="200" autocomplete="off" class="input">
+      <button type="submit" class="btn-primary shrink-0">Add</button>
+    </form>
+    {% elif entries %}
+    <ul class="space-y-1">
+      {% for entry in entries %}
+      {#- The struck-through text is its own box: the icon beside it keeps its mark. #}
+      <li class="flex items-start gap-2 py-1">
+        {% if entry.is_done %}
+        <span class="shrink-0 text-emerald-700 dark:text-emerald-400"><span role="img" aria-label="done">✓</span></span>
+        <span class="min-w-0 break-words text-slate-500 line-through dark:text-slate-400">{{ entry.text }}</span>
+        {% else %}
+        <span class="shrink-0 text-slate-600 dark:text-slate-400"><span role="img" aria-label="not done">○</span></span>
+        <span class="min-w-0 break-words">{{ entry.text }}</span>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
   {#- The attached files go here: <section id="item-attachments"> (details.attachments). #}
 </div>

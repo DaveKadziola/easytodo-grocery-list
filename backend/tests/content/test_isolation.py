@@ -3,7 +3,13 @@
 import json
 
 import pytest
-from factories import create_board, create_category, create_item, create_user
+from factories import (
+    create_board,
+    create_category,
+    create_checklist_entry,
+    create_item,
+    create_user,
+)
 from sqlalchemy import select
 
 from easytodo.content.routes import router
@@ -31,6 +37,11 @@ ROUTES = [
     ("POST", "/items/{item}/restore", None),
     ("GET", "/items/{item}/details", None),
     ("POST", "/categories/{category}/clear-done", None),
+    ("POST", "/items/{item}/checklist", {"text": "Hijacked"}),
+    ("PUT", "/items/{item}/checklist/order", {"ids": ["{entry}"]}),
+    ("PATCH", "/checklist/{entry}", {"text": "Hijacked"}),
+    ("POST", "/checklist/{entry}/check", None),
+    ("DELETE", "/checklist/{entry}", None),
 ]
 WRITES = [route for route in ROUTES if route[0] != "GET"]
 
@@ -59,8 +70,9 @@ def test_routes_cover_every_content_route():
 async def test_viewer_can_read_but_not_modify(viewer_client, board, item, db, content_snapshot):
     other = await create_category(db, board, "Bakery", position=1)
     await create_item(db, other, "Old bread", is_done=True)
+    entry = await create_checklist_entry(db, item, "Eggs")
     before = await content_snapshot()
-    ids = {"board": board.id, "category": item.category_id, "item": item.id}
+    ids = {"board": board.id, "category": item.category_id, "item": item.id, "entry": entry.id}
 
     for path in ("/boards/{board}", "/boards/{board}/content", "/categories/{category}"):
         r = await viewer_client.get(path.format(**ids))
@@ -81,7 +93,7 @@ async def test_viewer_can_read_but_not_modify(viewer_client, board, item, db, co
 @pytest.mark.parametrize("bad_id", ["999999", "0", "-1", str(2**63)])
 async def test_unknown_or_impossible_ids_are_404(editor_client, item, db, content_snapshot, bad_id):
     before = await content_snapshot()
-    ids = dict.fromkeys(("board", "category", "other_category", "item"), bad_id)
+    ids = dict.fromkeys(("board", "category", "other_category", "item", "entry"), bad_id)
     requests = [fill(route, **ids) for route in ROUTES] + [
         ("POST", f"/items/{item.id}/move", {"category_id": bad_id}),
     ]
@@ -102,6 +114,7 @@ async def test_other_users_ids_are_404_everywhere(
     fruit = await create_category(db, board, "Fruit", position=1)
     milk = await create_item(db, dairy, "Milk")
     await create_item(db, dairy, "Old cheese", is_done=True)
+    skim_milk = await create_checklist_entry(db, milk, "Skim Milk")
     bobs_board = await create_board(db, bob, "Bob's list")
     bobs_category = await create_category(db, bobs_board, "Bob's things")
     bobs_item = await create_item(db, bobs_category, "Bob's item")
@@ -113,6 +126,7 @@ async def test_other_users_ids_are_404_everywhere(
         "category": dairy.id,
         "other_category": fruit.id,
         "item": milk.id,
+        "entry": skim_milk.id,
     }
     requests = [fill(route, **alices_ids) for route in ROUTES] + [
         ("GET", f"/boards/{board.id}", None),

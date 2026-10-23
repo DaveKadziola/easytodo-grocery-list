@@ -23,6 +23,7 @@ from easytodo.realtime.events import BoardEvent, EventType
 
 HX = {"HX-Request": "true"}
 ITEM_GONE = "This item no longer exists."
+ENTRY_GONE = "This checklist entry no longer exists."
 CATEGORY_GONE = "This category no longer exists."
 
 
@@ -455,6 +456,8 @@ async def test_action_on_archived_category_returns_404_with_resync(editor_client
     [
         ("item", "POST", "/items/{item}/toggle", None, ITEM_GONE),
         ("item", "PATCH", "/items/{item}", {"name": "Oat milk"}, ITEM_GONE),
+        ("item", "POST", "/items/{item}/checklist", {"text": "Eggs"}, ITEM_GONE),
+        ("item", "POST", "/checklist/{entry}/check", None, ENTRY_GONE),
         ("soft", "POST", "/items/{item}/toggle", None, ITEM_GONE),  # Review Focus 4
         ("category", "POST", "/categories/{category}/items", {"name": "Eggs"}, CATEGORY_GONE),
         ("category", "POST", "/items/{item}/move", {"category_id": "{category}"}, CATEGORY_GONE),
@@ -470,9 +473,11 @@ async def test_change_racing_a_delete_on_another_device_is_404_not_500(  # Revie
     its row lock until it commits; the change waits for it and then finds the row gone."""
     source = await create_category(db, board, "Source", position=1)
     moving = await create_item(db, source, "Moving")
+    entry = await create_checklist_entry(db, item, "Skimmed")
     ids = {
         "item": item.id if deletion in ("item", "soft") else moving.id,
         "category": category.id,
+        "entry": entry.id,
     }
     if data is not None:
         data = {k: v.format(**ids) for k, v in data.items()}
@@ -556,30 +561,55 @@ async def test_undo_takes_only_the_row_lock_it_needs(editor_client, item, db):
     assert r.status_code == 200, r.headers.get("hx-trigger")
 
 
-async def test_viewer_write_is_403_without_waiting_for_a_row_lock(viewer_client, item, db):
-    """An editor's change holds the item and its category locked: a viewer's write is refused at
-    once instead of queueing behind it (and, had it got there first, would hold up the editor)."""
+@pytest.mark.parametrize(
+    "method,path,data",
+    [
+        ("POST", "/items/{item}/toggle", None),
+        ("PATCH", "/items/{item}", {"name": "Oat milk"}),
+        ("DELETE", "/items/{item}", None),
+        ("POST", "/items/{item}/restore", None),
+        ("POST", "/categories/{category}/items", {"name": "Eggs"}),
+        ("POST", "/categories/{category}/clear-done", None),
+        ("PATCH", "/categories/{category}", {"name": "Fridge"}),
+        ("POST", "/categories/{category}/archive", None),
+        ("POST", "/categories/{category}/restore", None),
+        ("DELETE", "/categories/{category}", None),
+        ("POST", "/items/{item}/checklist", {"text": "Eggs"}),
+        ("PUT", "/items/{item}/checklist/order", {"ids": ["{entry}"]}),
+        ("PATCH", "/checklist/{entry}", {"text": "Eggs"}),
+        ("POST", "/checklist/{entry}/check", None),
+        ("DELETE", "/checklist/{entry}", None),
+    ],
+)
+async def test_viewer_write_is_403_without_waiting_for_a_row_lock(
+    viewer_client, item, db, method, path, data
+):
+    """An editor's change holds the item, its category and its checklist entries locked: a
+    viewer's write is refused at once instead of queueing behind it (and, had it got there first,
+    would hold up the editor)."""
+    entry = await create_checklist_entry(db, item, "Skimmed")
+    ids = {"item": item.id, "category": item.category_id, "entry": entry.id}
+    if data is not None:
+        data = {
+            key: [v.format(**ids) for v in value]
+            if isinstance(value, list)
+            else value.format(**ids)
+            for key, value in data.items()
+        }
     async with db.bind.connect() as other_device, other_device.begin():
-        for table, row_id in (("categories", item.category_id), ("items", item.id)):
+        for table, row_id in (
+            ("categories", item.category_id),
+            ("items", item.id),
+            ("checklist_entries", entry.id),
+        ):
             await other_device.execute(
                 text(f"SELECT 1 FROM {table} WHERE id = :id FOR UPDATE"), {"id": row_id}
             )
-        for method, path, data in (
-            ("POST", f"/items/{item.id}/toggle", None),
-            ("PATCH", f"/items/{item.id}", {"name": "Oat milk"}),
-            ("DELETE", f"/items/{item.id}", None),
-            ("POST", f"/items/{item.id}/restore", None),
-            ("POST", f"/categories/{item.category_id}/items", {"name": "Eggs"}),
-            ("POST", f"/categories/{item.category_id}/clear-done", None),
-            ("PATCH", f"/categories/{item.category_id}", {"name": "Fridge"}),
-            ("POST", f"/categories/{item.category_id}/archive", None),
-            ("POST", f"/categories/{item.category_id}/restore", None),
-            ("DELETE", f"/categories/{item.category_id}", None),
-        ):
-            request = viewer_client.request(method, path, data=data, headers=HX)
-            r = await asyncio.wait_for(request, 2)
-            assert r.status_code == 403, (method, path)
-            assert toast(r) == "You don't have permission to do that."
+        request = viewer_client.request(method, path.format(**ids), data=data, headers=HX)
+        r = await asyncio.wait_for(request, 2)
+
+    assert r.status_code == 403
+    assert toast(r) == "You don't have permission to do that."
 
 
 async def test_name_length_limits(editor_client, category):

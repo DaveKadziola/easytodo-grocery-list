@@ -7,7 +7,13 @@ import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from factories import create_board, create_category, create_item, create_user
+from factories import (
+    create_board,
+    create_category,
+    create_checklist_entry,
+    create_item,
+    create_user,
+)
 from helpers import NASTY, NASTY_ESCAPED, TYPED_NAMES, flash_of, text_of, toast_message
 from sqlalchemy import select, update
 
@@ -139,6 +145,7 @@ async def test_archived_category_is_404_everywhere(  # Review Focus 1
     bakery = await create_category(db, board, "Bakery", position=1)
     milk = await create_item(db, dairy, "Milk")
     await create_item(db, bakery, "Bread")
+    entry = await create_checklist_entry(db, milk, "Skim")
     owner_client = await signed_in_client("owner@example.com")
     r = await editor_client.post(f"/categories/{dairy.id}/archive", headers=HX)
     assert r.status_code == 200
@@ -146,13 +153,19 @@ async def test_archived_category_is_404_everywhere(  # Review Focus 1
 
     # Every id, though the /boards/ routes are left out: route data may name any of them (the
     # board, for moving a category to another one).
-    ids = {"board": board.id, "category": dairy.id, "other_category": bakery.id, "item": milk.id}
+    ids = {
+        "board": board.id,
+        "category": dairy.id,
+        "other_category": bakery.id,
+        "item": milk.id,
+        "entry": entry.id,
+    }
     requests = [
         fill(route, **ids)
         for route in ROUTES
         if not route[1].startswith("/boards/") and route[:2] not in ARCHIVE_ROUTES
     ]
-    assert len(requests) >= 9
+    assert len(requests) >= 14  # the checklist's five routes among them
     for client in (owner_client, editor_client):
         for method, path, data in requests:
             r = await client.request(method, path, data=data, headers=HX)

@@ -11,7 +11,9 @@
 // runs once they are done. board.js keeps the cursor and any typed text across the swap.
 // The open item's details are another matter: they are in the modal, outside the board, and only
 // #item-details is replaced, so they refresh while the modal is open (and the board waits for it
-// to close); only a finger down, an own request or typing in the details themselves holds them.
+// to close); only a finger down, an own request, a drag of a checklist entry or typing in the
+// details themselves holds them. The closing modal tells this tab's own checklist changes
+// ("board:changed"): the server does not send a tab its own events.
 // Loaded on the board page after board.js; connects once app.js has run (DOMContentLoaded).
 (() => {
   "use strict";
@@ -92,10 +94,16 @@
   }
 
   // Whether replacing the open item's details now would get in the user's way: not the modal (it
-  // is open), nor a menu, but a finger down, one of this tab's own requests or typing in the details.
+  // is open), nor a menu, but a finger down, one of this tab's own requests, a drag (a native one
+  // ends the pointer: pointercancel) or typing in the details.
   function detailsBusy() {
     const details = document.getElementById("item-details");
-    return pointersDown.size > 0 || ownRequests.size > 0 || (details !== null && typingIn(details));
+    return (
+      pointersDown.size > 0 ||
+      ownRequests.size > 0 ||
+      board().isDragging() ||
+      (details !== null && typingIn(details))
+    );
   }
 
   function scheduleFlush() {
@@ -255,12 +263,24 @@
   // A 404 answer (the item or category was deleted on another device) triggers "resync": the
   // whole board is reloaded, through the queue like any update, so nothing stale stays on screen.
   // Not for the board reload's own 404 (the board is gone; its board.deleted event says so).
+  // When the request came from the open item's details (a checklist entry that is gone), the
+  // details are fetched again too: that shows the entry's removal, or says the item is gone. (Not
+  // for the details' own 404, which would then ask for them again and again.)
   document.addEventListener("resync", (event) => {
     const content = document.querySelector(BOARD_CONTENT);
     if (!content || event.target === content) return;
     queueBoard(answering === null || (answering !== refreshXhr && answering !== detailsXhr));
+    if (answering !== detailsXhr && event.target.closest && event.target.closest("#item-details")) {
+      pending.details = true;
+    }
   });
   document.addEventListener("board:stale", () => queueBoard(true));
+  // The modal closed after a change to the checklist from this tab: the category's tile has the
+  // old count, and the hub does not send a tab the events of its own changes.
+  document.addEventListener("board:changed", (event) => {
+    pending.changed.add(event.detail.categoryId);
+    scheduleFlush();
+  });
 
   // Holds that can get stuck when the events that end them are lost (the phone slept, the tab
   // went to the background, the window lost focus mid-touch).

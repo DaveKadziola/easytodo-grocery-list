@@ -8,7 +8,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from content.test_isolation import ROUTES, fill
-from factories import create_board, create_category, create_item, create_user
+from factories import (
+    create_board,
+    create_category,
+    create_checklist_entry,
+    create_item,
+    create_user,
+)
 from helpers import (
     NASTY,
     NASTY_ESCAPED,
@@ -31,7 +37,16 @@ from easytodo.boards.service import (
     count_archived_boards,
     list_boards,
 )
-from easytodo.models import Board, BoardInvite, BoardMember, BoardRole, Category, Item, User
+from easytodo.models import (
+    Board,
+    BoardInvite,
+    BoardMember,
+    BoardRole,
+    Category,
+    ChecklistEntry,
+    Item,
+    User,
+)
 from easytodo.realtime.events import BoardEvent, EventType
 
 HX = {"HX-Request": "true"}
@@ -43,7 +58,8 @@ ARCHIVE_ROUTES = {("POST", "/boards/{board}/restore"), ("DELETE", "/boards/{boar
 
 
 async def rows(db) -> tuple[list, ...]:
-    """Every board, membership, invite, category and item row, to show what changed."""
+    """Every board, membership, invite, category, item and checklist entry row, to show what
+    changed."""
     queries = (
         select(Board.id, Board.name, Board.owner_id, Board.archived_at).order_by(Board.id),
         select(BoardMember.board_id, BoardMember.user_id, BoardMember.role).order_by(
@@ -56,6 +72,9 @@ async def rows(db) -> tuple[list, ...]:
             Category.id
         ),
         select(Item.id, Item.board_id, Item.category_id, Item.name, Item.is_done).order_by(Item.id),
+        select(
+            ChecklistEntry.id, ChecklistEntry.item_id, ChecklistEntry.text, ChecklistEntry.is_done
+        ).order_by(ChecklistEntry.id),
     )
     return tuple([(await db.execute(query)).all() for query in queries])
 
@@ -179,6 +198,7 @@ async def test_archived_board_is_404_everywhere(  # Review Focus 1
     dairy = await create_category(db, board, "Dairy", position=0)
     bakery = await create_category(db, board, "Bakery", position=1)
     milk = await create_item(db, dairy, "Milk")
+    entry = await create_checklist_entry(db, milk, "Skim")
     editor = await user_named(db, "editor@example.com")
     invite_id = await db.scalar(select(BoardInvite.id))
     owner_client = await signed_in(client_factory, "owner@example.com")
@@ -188,7 +208,13 @@ async def test_archived_board_is_404_everywhere(  # Review Focus 1
     assert r.status_code == 200
     before = await rows(db)
 
-    ids = {"board": board.id, "category": dairy.id, "other_category": bakery.id, "item": milk.id}
+    ids = {
+        "board": board.id,
+        "category": dairy.id,
+        "other_category": bakery.id,
+        "item": milk.id,
+        "entry": entry.id,
+    }
     requests = [fill(route, **ids) for route in ROUTES]
     form = {"name": "Hijacked", "role": "viewer"}  # a role, or the sharing routes answer 422
     board_routes_checked = set()

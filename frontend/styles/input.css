@@ -77,6 +77,12 @@
     @apply inline-flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold;
   }
 
+  /* How many of an item's checklist entries are done (partials/_checklist_count.html, which adds the
+     colour). inline-flex like the avatar: the line-through of a done item does not reach it. */
+  .checklist-count {
+    @apply inline-flex h-6 items-center text-xs font-semibold tabular-nums;
+  }
+
   /* A menu opened from a <details> summary: a category's actions, the board switcher. */
   .menu {
     @apply absolute right-0 z-10 mt-1 w-64 rounded-lg bg-white p-1 shadow-lg ring-1 ring-slate-200;

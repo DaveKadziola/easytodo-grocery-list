@@ -24,6 +24,13 @@ from easytodo.content.service import get_category_view
 from easytodo.models import BoardRole, CategorySortPref
 
 HX = {"HX-Request": "true"}
+# An item with a checklist and an author: the count and the avatar in the box at the end of the row.
+COUNT_BEFORE_THE_AVATAR = re.compile(
+    r'<div class="shrink-0 py-2\.5 pl-2 \*:align-top">'
+    r'<span class="checklist-count text-slate-600 dark:text-slate-400"'
+    r' title="2 of 3 checklist entries done">2/3</span>'
+    r' <span class="avatar[^"]*" aria-hidden="true" title="owner">O</span></div>\s*</li>'
+)
 
 
 def statements_of(app):
@@ -69,6 +76,26 @@ async def test_category_fragment_statement_budget(app, client_factory, shared):
     # a bench.
     assert len(added) <= 6, added
     assert len(toggled) <= 6, toggled
+
+
+async def test_checklist_statement_budget(app, client_factory, shared, db):
+    editor = await signed_in(client_factory, "editor@example.com")
+    eggs = await create_checklist_entry(db, shared.milk, "Eggs")
+
+    with statements_of(app) as added:
+        r = await editor.post(
+            f"/items/{shared.milk.id}/checklist", data={"text": "Flour"}, headers=HX
+        )
+    assert r.status_code == 200
+    with statements_of(app) as ticked:
+        r = await editor.post(f"/checklist/{eggs.id}/check", headers=HX)
+    assert r.status_code == 200
+
+    # The session, the item (or the entry), the change, its event and the details' three. The
+    # entries are counted and the last position found in one statement.
+    assert len(added) <= 8, added
+    assert len(ticked) <= 7, ticked
+    assert sum("max(checklist_entries.position)" in statement for statement in added) == 1
 
 
 async def test_board_page_statement_budget(app, client_factory, shared):
@@ -167,8 +194,11 @@ async def test_item_row_macro_renders_like_before(client_factory, db, shared):
         f'<button type="button" id="item-{milk.id}-name" class="item-name" data-name="Milk" '
         'data-description="" @click="openItem">Milk</button>'
     ) in milk_row
-    assert AVATAR_AFTER_THE_NAME.search(milk_row)
+    # Milk has three steps, two done: their count comes first in the box of the avatar.
+    assert not AVATAR_AFTER_THE_NAME.search(milk_row)
+    assert COUNT_BEFORE_THE_AVATAR.search(milk_row)
     bread_row = row_of(html, bread)
+    assert '<div class="shrink-0 py-2.5 pl-2 *:align-top"><span class="avatar' in bread_row
     assert 'class="flex items-start text-slate-500 dark:text-slate-400 line-through"' in bread_row
     assert f'hx-target="#category-{dairy.id}" checked>' in bread_row
     assert (
@@ -188,6 +218,6 @@ async def test_item_row_macro_renders_like_before(client_factory, db, shared):
         f'<button type="button" id="item-{milk.id}-name" class="item-name" data-name="Milk" '
         'data-description="" @click="openItem">Milk</button>'
     ) in viewer_milk
-    assert 'aria-hidden="true" title="owner">O</span>' in viewer_milk
+    assert COUNT_BEFORE_THE_AVATAR.search(viewer_milk)
     assert 'type="checkbox"' not in viewer_html
     assert row_of(viewer_html, nasty).count('data-name="' + NASTY_ESCAPED + '"') == 1
