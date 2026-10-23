@@ -405,8 +405,8 @@ async def select_item_views(
     """The items of a board (all its active categories) or of one category, in ``user``'s order
     for each category (see ``_item_order``): not deleted, and not in an archived category. One
     statement, and no permission check: the caller has found the board or category for ``user``
-    first (``require_board``, ``load_category``). Exactly one of ``board_id`` and ``category_id``
-    is given."""
+    first (``require_board``, ``select_member_category``). Exactly one of ``board_id`` and
+    ``category_id`` is given."""
     if (board_id is None) == (category_id is None):
         raise TypeError("Give exactly one of board_id and category_id.")
     if board_id is not None:
@@ -446,6 +446,7 @@ async def select_sort_pref(
 # An active category of an active board with the role of the member asking and their own sort row
 # of it, when they have one: one statement, as an empty category has no item row to carry the sort
 # row. Built once, with populate_existing like the statements around it.
+# The same visibility rules as content.service._load_lookup: change them together.
 _MEMBER_CATEGORY = (
     select(Category, BoardMember.role, _SORT_PREF)
     .join(Board, Board.id == Category.board_id)

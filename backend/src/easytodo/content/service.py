@@ -88,7 +88,8 @@ def _load_lookup(
     action: Action,
     lock: RowLock | None,
 ) -> MemberLookup:
-    """The statements of ``_load`` for one combination of its options, built once."""
+    """The statements of ``_load`` for one combination of its options, built once. The same
+    visibility rules as ``boards.service._MEMBER_CATEGORY``: change them together."""
     query: Select = (
         select(model, BoardMember.role)
         .join(Board, Board.id == model.board_id)

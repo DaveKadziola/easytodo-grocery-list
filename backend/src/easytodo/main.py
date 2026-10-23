@@ -51,6 +51,15 @@ class CachedStaticFiles(StaticFiles):
         return response
 
 
+def _freeze_startup_heap() -> None:
+    """Everything alive once the app is up (modules, classes, the app) lives as long as the
+    process: collect the garbage the start left, then freeze the rest, so that a full collection
+    walks only what requests create. The lifespan unfreezes it on shutdown. The tests turn this
+    off (every test starts an app, and a full collection takes about 55 ms)."""
+    gc.collect()
+    gc.freeze()
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """App factory: ``uvicorn --factory easytodo.main:create_app``."""
     settings = settings or get_settings()
@@ -69,15 +78,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             on_reconnect=hub.reconnect_all,
         )
         await listener.start()
-        # Everything alive now (modules, classes, the app) lives as long as the process: freeze it,
-        # so a full collection walks only what requests create. Unfrozen on shutdown: frozen
-        # objects are never collected, not even once they are garbage (an app a test is done with).
-        gc.collect()
-        gc.freeze()
+        _freeze_startup_heap()
         try:
             yield
         finally:
-            gc.unfreeze()
+            gc.unfreeze()  # frozen objects are never collected, not even once they are garbage
             await listener.stop()
             await engine.dispose()
 

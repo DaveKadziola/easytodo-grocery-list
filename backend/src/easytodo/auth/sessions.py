@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import Response
 from sqlalchemy import DateTime, String, bindparam, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from easytodo.config import Settings
 from easytodo.models import User, UserSession
@@ -49,12 +50,20 @@ async def create_session(
     return raw_token, session
 
 
-async def _touch(db: AsyncSession, session: UserSession, now: datetime) -> None:
+async def _touch(db: AsyncSession, session: UserSession, now: datetime) -> bool:
     """Bump ``session.last_seen_at`` to ``now`` and commit, unless it is less than
-    ``LAST_SEEN_INTERVAL`` old."""
-    if now - session.last_seen_at >= LAST_SEEN_INTERVAL:
-        session.last_seen_at = now
+    ``LAST_SEEN_INTERVAL`` old. ``False`` when the session is gone by then (revoked, or its user
+    deleted, which takes the session along): the bump's UPDATE matches no row, ``db`` is rolled
+    back, and the caller answers like for an expired session. ``True`` otherwise."""
+    if now - session.last_seen_at < LAST_SEEN_INTERVAL:
+        return True
+    session.last_seen_at = now
+    try:
         await db.commit()
+    except StaleDataError:  # the UPDATE matched 0 rows
+        await db.rollback()
+        return False
+    return True
 
 
 async def load_session(db: AsyncSession, raw_token: str) -> UserSession | None:
@@ -65,8 +74,8 @@ async def load_session(db: AsyncSession, raw_token: str) -> UserSession | None:
             UserSession.token_hash == hash_token(raw_token), UserSession.expires_at > now
         )
     )
-    if session is not None:
-        await _touch(db, session, now)
+    if session is None or not await _touch(db, session, now):
+        return None
     return session
 
 
@@ -90,8 +99,10 @@ async def load_session_and_user(
 
     Only that: a disabled user, a session waiting for its second factor and a password that must
     change are for the caller to judge (``deps``). A deleted user has no session (it goes with the
-    user, ``ON DELETE CASCADE``), so there is no moment in which a request finds the session and
-    then misses the user.
+    user, ``ON DELETE CASCADE``), so the one read never finds a session without its user. The
+    session can still vanish after that read, before the bump's UPDATE (a logout elsewhere, an
+    admin deleting the user): the bump then matches no row and the answer is ``None`` as well
+    (see ``_touch``).
 
     The bump commits after the user was read, so ``db`` must keep loaded objects across a commit
     (the app's sessions do: ``expire_on_commit=False``).
@@ -103,7 +114,8 @@ async def load_session_and_user(
     if row is None:
         return None
     session, user = row
-    await _touch(db, session, now)
+    if not await _touch(db, session, now):
+        return None
     return session, user
 
 

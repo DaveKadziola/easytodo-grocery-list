@@ -28,7 +28,8 @@ HX = {"HX-Request": "true"}
 
 def statements_of(app):
     """``count_queries`` for the statements the running ``app`` runs (its own engine, not the
-    test session's)."""
+    test session's). The budgets below are counted with no ``last_seen_at`` bump due (the session
+    is new): a request that bumps it runs one more statement, once in 5 minutes per session."""
     return count_queries(SimpleNamespace(bind=app.state.engine))
 
 
@@ -73,13 +74,17 @@ async def test_category_fragment_statement_budget(app, client_factory, shared):
 async def test_board_page_statement_budget(app, client_factory, shared):
     editor = await signed_in(client_factory, "editor@example.com")
 
-    with statements_of(app) as statements:
+    with statements_of(app) as page:
         r = await editor.get(f"/boards/{shared.board.id}")
-
     assert r.status_code == 200
     assert "Milk" in r.text
+    with statements_of(app) as content:  # the fragment the page fetches again over its socket
+        r = await editor.get(f"/boards/{shared.board.id}/content")
+    assert r.status_code == 200
+
     # The page is the request people wait for most. Raise this only with a bench.
-    assert len(statements) <= 5, statements
+    assert len(page) <= 5, page
+    assert len(content) <= 4, content
 
 
 async def test_category_view_takes_two_statements(db):

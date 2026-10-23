@@ -25,6 +25,7 @@ from websockets.exceptions import ConnectionClosed
 from easytodo.admin import service
 from easytodo.admin.routes import router
 from easytodo.admin.service import AdminStats, delete_user, get_stats, list_users
+from easytodo.auth import sessions
 from easytodo.auth.sessions import SESSION_COOKIE, load_session_and_user
 from easytodo.auth.twofa import begin_setup, confirm_setup
 from easytodo.errors import Conflict
@@ -531,8 +532,8 @@ async def test_reset_2fa_turns_it_off_and_ends_pending_sign_ins(
 
 
 async def test_request_of_a_deleted_user_is_signed_out(client_factory, db, admin):
-    """The session goes with its user (a cascade), and the session and the user are read in one
-    statement, so there is no moment in which a request sees one without the other."""
+    """The session goes with its user (a cascade), so the next request has no session: signed
+    out, and the cookie does not work again."""
     dave = await create_user(db, "dave@example.com")
     device = await signed_in(client_factory, "dave@example.com")
     cookie = device.cookies[SESSION_COOKIE]
@@ -545,6 +546,33 @@ async def test_request_of_a_deleted_user_is_signed_out(client_factory, db, admin
         assert r.status_code == 303
         assert r.headers["location"].startswith("/login")
     assert await load_session_and_user(db, cookie) is None
+
+
+async def test_user_deleted_between_the_session_read_and_its_bump_is_signed_out(
+    client_factory, db, admin, monkeypatch
+):
+    """The one window left: the session and its user are read together, and the user is deleted
+    before the UPDATE of ``last_seen_at`` (due here), which then matches no row."""
+    dave = await create_user(db, "dave@example.com")
+    device = await signed_in(client_factory, "dave@example.com")
+    await db.execute(
+        update(UserSession).values(last_seen_at=datetime.now(UTC) - timedelta(minutes=6))
+    )
+    await db.commit()
+    touch = sessions._touch
+
+    async def delete_the_user_then_touch(session_db, found, now):
+        await delete_user(db, admin, dave.id)  # an admin, just then
+        return await touch(session_db, found, now)
+
+    monkeypatch.setattr(sessions, "_touch", delete_the_user_then_touch)
+
+    r = await device.get("/boards")  # not a 500 (StaleDataError)
+
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/login")
+    monkeypatch.setattr(sessions, "_touch", touch)
+    assert (await device.get("/boards")).headers["location"].startswith("/login")
 
 
 async def test_admin_cannot_open_users_board(admin_client, db):

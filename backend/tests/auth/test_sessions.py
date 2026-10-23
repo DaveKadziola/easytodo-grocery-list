@@ -1,9 +1,12 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from factories import create_user
 from helpers import count_queries
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from easytodo.auth import sessions
 from easytodo.auth.deps import active_session
 from easytodo.auth.sessions import (
     create_session,
@@ -107,6 +110,31 @@ async def test_load_session_and_user_updates_last_seen_at_like_load_session(db, 
     await db.refresh(session)  # re-read from the database: the update was committed
     assert datetime.now(UTC) - session.last_seen_at < timedelta(minutes=1)
     assert found[1].email == user.email  # the user is still usable after that commit
+
+
+@pytest.mark.parametrize("load", [load_session, load_session_and_user])
+async def test_a_session_gone_before_its_bump_is_no_session(db, settings, monkeypatch, load):
+    """The user is deleted (and the session with it) after the session was read and before the
+    UPDATE of ``last_seen_at``: that matches no row. Not an error: no session."""
+    user = await create_user(db)
+    raw_token, session = await new_session(db, user, settings)
+    session.last_seen_at = datetime.now(UTC) - timedelta(minutes=6)  # the bump is due
+    await db.commit()
+    touch = sessions._touch
+
+    async def delete_the_user_then_touch(session_db, found, now):
+        async with AsyncSession(db.bind) as other:  # an admin, just then
+            await other.execute(delete(User).where(User.id == user.id))
+            await other.commit()
+        return await touch(session_db, found, now)
+
+    monkeypatch.setattr(sessions, "_touch", delete_the_user_then_touch)
+
+    assert await load(db, raw_token) is None
+
+    monkeypatch.setattr(sessions, "_touch", touch)
+    assert await load(db, raw_token) is None  # the cookie does not work any more
+    assert await db.scalar(select(func.count()).select_from(UserSession)) == 0  # db is usable
 
 
 async def test_active_session_leaves_out_a_disabled_user_but_not_a_pending_session(db, settings):

@@ -72,6 +72,13 @@ async def _clean_db(_db_engine: AsyncEngine) -> AsyncIterator[None]:
     await truncate_all_tables(_db_engine)
 
 
+@pytest.fixture(autouse=True)
+def _no_gc_freeze(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test starts an app, and freezing the heap at startup costs a full collection
+    (about 55 ms): only ``tests/test_lifespan.py`` runs the real ``_freeze_startup_heap``."""
+    monkeypatch.setattr("easytodo.main._freeze_startup_heap", lambda: None)
+
+
 def _test_settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "database_url": TEST_DATABASE_URL,
