@@ -48,11 +48,18 @@ class AttachmentStore:
         """Write ``source``, from its current position to its end, as the file ``key``."""
         await asyncio.to_thread(self._save, key, source)
 
-    def delete(self, key: str) -> None:
+    def delete(self, key: str) -> bool:
         """Remove the file ``key`` and what was made from it; a file that is not there is no
-        error."""
-        for path in (self.path(key), self.thumb_path(key), self.preview_path(key)):
-            path.unlink(missing_ok=True)
+        error. True if the file itself was there and this call removed it (a second call, or
+        another process that was quicker, gets False)."""
+        removed = True
+        try:
+            self.path(key).unlink()
+        except FileNotFoundError:
+            removed = False
+        self.thumb_path(key).unlink(missing_ok=True)
+        self.preview_path(key).unlink(missing_ok=True)
+        return removed
 
     def _listing(self) -> Iterator[tuple[Path, list[str]]]:
         """Each directory of the store with the names of the files in it; none while the
@@ -74,13 +81,22 @@ class AttachmentStore:
         for _, names in self._listing():
             yield from (name for name in names if _KEY.fullmatch(name))
 
-    def derived_orphans(self) -> Iterator[Path]:
-        """The thumbnails and previews whose file is not there (an upload that was cancelled
-        after they were written leaves them; ``keys`` never names them), in no particular
-        order."""
+    def derived_orphans(self) -> Iterator[tuple[str, Path]]:
+        """The thumbnails and previews whose file is not there, as ``(key, path)`` (an upload that
+        was cancelled after they were written leaves them; ``keys`` never names them), in no
+        particular order."""
         for directory, names in self._listing():
             present = set(names)
             for name in names:
                 derived = _DERIVED.fullmatch(name)
                 if derived is not None and derived["key"] not in present:
-                    yield directory / name
+                    yield derived["key"], directory / name
+
+    def delete_derived(self, path: Path) -> bool:
+        """Remove a thumbnail or preview that ``derived_orphans`` named. True if it was there and
+        this call removed it."""
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        return True

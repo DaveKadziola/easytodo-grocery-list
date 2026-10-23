@@ -2,11 +2,14 @@
 than 10 minutes ago, notifications older than 30 days, and the files no row refers to any more."""
 
 import asyncio
+import inspect
 import logging
 import os
 import secrets
+import time
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from asgi_lifespan import LifespanManager
 from factories import (
     create_attachment,
@@ -18,9 +21,11 @@ from factories import (
 )
 from helpers import count_queries
 from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from easytodo import maintenance
+from easytodo.attachments.storage import AttachmentStore
 from easytodo.boards.service import list_archived_boards
 from easytodo.cli import main
 from easytodo.content.service import list_archived_categories
@@ -42,8 +47,6 @@ from easytodo.models import (
     Notification,
     User,
 )
-
-NOW = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
 
 
 async def user_with(db, email: str, retention: int | None) -> User:
@@ -322,8 +325,15 @@ async def test_cli_purge(db, cli_env, store, capsys, _db_engine):
 
 
 async def wait_until(condition, seconds: float = 2) -> None:
+    """Return once ``condition()`` (a function, or a coroutine function) is true; fail after
+    ``seconds``."""
     deadline = asyncio.get_running_loop().time() + seconds
-    while not await condition():
+    while True:
+        met = condition()
+        if inspect.isawaitable(met):
+            met = await met
+        if met:
+            return
         assert asyncio.get_running_loop().time() < deadline, "the condition never came true"
         await asyncio.sleep(0.02)
 
@@ -347,20 +357,20 @@ async def test_purge_task_runs_on_its_interval_and_survives_errors(
     monkeypatch.setattr(maintenance, "purge", purge_that_fails_once)
     task = PurgeTask(async_sessionmaker(_db_engine, expire_on_commit=False), store, 0.05)
 
-    async def notifications_gone() -> bool:
-        return await count(db, Notification) == 0
+    summary = "Purged: 0 boards, 0 categories, 0 items, 1 notifications, 0 files."
 
     with caplog.at_level(logging.WARNING):
         await task.start()
         try:
             assert task.running
-            await wait_until(notifications_gone)
+            # The line, not the vanished row: it comes after the commit, from the file work.
+            await wait_until(lambda: summary in caplog.text)
         finally:
             await task.stop()
 
     assert task.running is False
     assert "Purge failed" in caplog.text
-    assert "Purged: 0 boards, 0 categories, 0 items, 1 notifications, 0 files." in caplog.text
+    assert await count(db, Notification) == 0
     assert len(calls) >= 2
 
 
@@ -368,11 +378,10 @@ async def test_purge_task_waits_5_minutes_before_its_first_run_and_before_a_retr
     _db_engine, monkeypatch
 ):
     sleeps = []
-    real_sleep = asyncio.sleep
 
     async def quick_sleep(seconds):
         sleeps.append(seconds)
-        await real_sleep(0)
+        await asyncio.sleep(0 if len(sleeps) < 4 else 3600)  # the fourth is never over
 
     outcomes = iter([PurgeReport(0, 0, 0, 0, 0), ConnectionRefusedError("down")])
 
@@ -383,18 +392,171 @@ async def test_purge_task_waits_5_minutes_before_its_first_run_and_before_a_retr
         return outcome
 
     monkeypatch.setattr(maintenance, "purge", purge_that_fails_once)
-    monkeypatch.setattr(maintenance.asyncio, "sleep", quick_sleep)
-    task = PurgeTask(async_sessionmaker(_db_engine), None, 86400)
+    task = PurgeTask(async_sessionmaker(_db_engine), None, 86400, sleep=quick_sleep)
 
     await task.start()
     try:
-        while len(sleeps) < 4:
-            await real_sleep(0.01)
+        await wait_until(lambda: len(sleeps) == 4)
     finally:
         await task.stop()
 
-    assert sleeps[:4] == [FIRST_RUN_DELAY_S, 86400, FIRST_RUN_DELAY_S, 86400]
+    assert sleeps == [FIRST_RUN_DELAY_S, 86400, FIRST_RUN_DELAY_S, 86400]
     assert FIRST_RUN_DELAY_S == 300
+
+
+async def test_a_run_that_deletes_nothing_logs_nothing(db, store, _db_engine, caplog):
+    sleeps = []
+
+    async def quick_sleep(seconds):
+        sleeps.append(seconds)
+        await asyncio.sleep(0 if len(sleeps) < 4 else 3600)  # three runs, then it waits
+
+    task = PurgeTask(async_sessionmaker(_db_engine), store, 86400, sleep=quick_sleep)
+
+    with caplog.at_level(logging.INFO):  # not even below WARNING
+        await task.start()
+        try:
+            await wait_until(lambda: len(sleeps) == 4)
+        finally:
+            await task.stop()
+
+    assert [r for r in caplog.records if r.name == maintenance.log.name] == []
+
+
+async def test_a_file_that_cannot_be_deleted_does_not_stop_the_others(
+    db, store, monkeypatch, caplog
+):
+    """One file with the wrong permissions: it is named in the log and left, the rest of the
+    files are cleaned, and what the database part deleted is still in the report."""
+    await a_row_with_a_file(db, store)
+    user = await create_user(db)
+    await created_at(
+        db, await create_notification(db, user), datetime.now(UTC) - timedelta(days=31)
+    )
+    stuck, gone_1, gone_2 = (file_on_disk(store) for _ in range(3))
+    stuck_derived = file_on_disk(store, main=False, thumb=True)
+    gone_derived = file_on_disk(store, main=False, thumb=True)
+    real_delete, real_delete_derived = AttachmentStore.delete, AttachmentStore.delete_derived
+
+    def delete(self, key):
+        if key == stuck:
+            raise PermissionError(13, "Permission denied")
+        return real_delete(self, key)
+
+    def delete_derived(self, path):
+        if path == store.thumb_path(stuck_derived):
+            raise PermissionError(13, "Permission denied")
+        return real_delete_derived(self, path)
+
+    monkeypatch.setattr(AttachmentStore, "delete", delete)
+    monkeypatch.setattr(AttachmentStore, "delete_derived", delete_derived)
+
+    with caplog.at_level(logging.WARNING):
+        report = await purge(db, store, now=datetime.now(UTC))
+
+    assert report == PurgeReport(0, 0, 0, 1, 3)  # the two files and the derived pair of one key
+    assert store.path(stuck).is_file() and store.thumb_path(stuck_derived).is_file()
+    assert not store.path(gone_1).exists() and not store.path(gone_2).exists()
+    assert not store.thumb_path(gone_derived).exists()
+    warnings = [r.getMessage() for r in caplog.records if "could not delete" in r.getMessage()]
+    assert len(warnings) == 2
+    assert f"{store.path(stuck)}: [Errno 13] Permission denied" in warnings[0] + warnings[1]
+    assert str(store.thumb_path(stuck_derived)) in warnings[0] + warnings[1]
+
+
+async def test_files_that_vanish_during_the_purge_are_skipped_and_not_counted(
+    db, store, monkeypatch, caplog
+):
+    """Another worker (or the CLI) cleans the same files at the same time: whoever deleted a
+    file counts it, and a file that is gone is no failure."""
+    await a_row_with_a_file(db, store)
+    mine, taken = file_on_disk(store), file_on_disk(store)
+    mine_derived = file_on_disk(store, main=False, thumb=True)
+    taken_derived = file_on_disk(store, main=False, thumb=True)
+    unlisted = secrets.token_hex(16)  # in the listing, gone before its age is read
+    real_keys = AttachmentStore.keys
+    real_delete, real_delete_derived = AttachmentStore.delete, AttachmentStore.delete_derived
+
+    def keys(self):
+        yield from real_keys(self)
+        yield unlisted
+
+    def delete(self, key):
+        if key == taken:  # the other sweep is quicker, after this one has read the age
+            real_delete(self, key)
+        return real_delete(self, key)
+
+    def delete_derived(self, path):
+        if path == store.thumb_path(taken_derived):
+            real_delete_derived(self, path)
+        return real_delete_derived(self, path)
+
+    monkeypatch.setattr(AttachmentStore, "keys", keys)
+    monkeypatch.setattr(AttachmentStore, "delete", delete)
+    monkeypatch.setattr(AttachmentStore, "delete_derived", delete_derived)
+
+    with caplog.at_level(logging.WARNING):
+        report = await purge(db, store, now=datetime.now(UTC))
+
+    assert report == PurgeReport(0, 0, 0, 0, 2)  # mine and mine_derived
+    assert not store.path(mine).exists() and not store.thumb_path(mine_derived).exists()
+    assert not store.path(taken).exists() and not store.thumb_path(taken_derived).exists()
+    assert "could not delete" not in caplog.text
+
+
+async def test_a_row_lock_the_purge_cannot_get_fails_the_run_and_deletes_nothing(
+    db, store, _db_engine, monkeypatch
+):
+    """A transaction stuck on a row the purge must delete: the run fails after the lock timeout,
+    instead of holding its connection and the advisory lock for as long as the other lasts."""
+    monkeypatch.setattr(maintenance, "LOCK_TIMEOUT_S", 0.3)
+    owner = await user_with(db, "week@example.com", 7)
+    now = datetime.now(UTC)
+    await create_board(db, owner, "Old", archived_at=now - timedelta(days=8))  # deleted first
+    category = await create_category(db, await create_board(db, owner, "Active"))
+    stuck = await create_item(db, category)
+    await deleted_at(db, stuck, now - timedelta(minutes=11))
+
+    async with _db_engine.connect() as other:
+        await other.execute(
+            text("SELECT id FROM items WHERE id = :id FOR UPDATE"), {"id": stuck.id}
+        )
+        started = time.monotonic()
+        with pytest.raises(DBAPIError, match="lock timeout"):
+            await purge(db, store, now=now)
+        assert time.monotonic() - started < 2
+        await db.rollback()
+        assert await names(db, Board) == ["Active", "Old"]  # not half done: the board is there
+        await other.rollback()
+
+    assert await purge(db, store, now=now) == PurgeReport(1, 0, 1, 0, 0)
+
+
+async def test_the_purge_task_survives_a_row_lock_it_cannot_get(
+    db, store, _db_engine, monkeypatch, caplog
+):
+    monkeypatch.setattr(maintenance, "LOCK_TIMEOUT_S", 0.2)
+    owner = await create_user(db)
+    category = await create_category(db, await create_board(db, owner))
+    stuck = await create_item(db, category)
+    await deleted_at(db, stuck, datetime.now(UTC) - timedelta(minutes=11))
+    task = PurgeTask(async_sessionmaker(_db_engine, expire_on_commit=False), store, 0.05)
+
+    async with _db_engine.connect() as other:
+        await other.execute(
+            text("SELECT id FROM items WHERE id = :id FOR UPDATE"), {"id": stuck.id}
+        )
+        with caplog.at_level(logging.WARNING):
+            await task.start()
+            try:
+                await wait_until(lambda: "Purge failed" in caplog.text)
+                assert task.running
+                await other.rollback()  # the other transaction ends
+                await wait_until(lambda: "0 categories, 1 items" in caplog.text)
+            finally:
+                await task.stop()
+
+    assert await count(db, Item) == 0
 
 
 async def test_lifespan_starts_the_purge_task_only_when_enabled(app, _running_app, settings):

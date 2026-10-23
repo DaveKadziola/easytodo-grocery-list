@@ -3,10 +3,14 @@
 ``purge`` deletes the archived boards and categories older than their owner's retention
 (``users.archive_retention_days``; NULL keeps them), the tasks deleted more than
 ``SOFT_DELETE_PURGE_AFTER`` ago, the notifications older than ``RETENTION``, and then the files
-on disk that no attachment refers to any more. Nobody can see any of these rows, so nothing here
-makes a request wait: every delete is one statement, and the advisory lock is only tried, never
-waited for. What the database cascades (a board's categories, tasks, checklists, attachment rows)
-goes with its parent and is not counted. No realtime events are sent.
+on disk that no attachment refers to any more. Nobody can see any of these rows, so a request
+hardly ever waits for the purge: every delete is one statement, the advisory lock is only tried,
+never waited for, and a row lock the purge cannot get within ``LOCK_TIMEOUT_S`` fails the run (it
+is retried) instead of holding the connection and the lock. The one place where it meets live
+rows: deleting a board sets ``board_id`` to NULL on its members' notifications, and a "mark all
+read" at that moment waits for the purge to commit, a moment. What the database cascades (a
+board's categories, tasks, checklists, attachment rows) goes with its parent and is not counted.
+No realtime events are sent.
 
 ``PurgeTask`` runs it every ``EASYTODO_PURGE_INTERVAL_HOURS`` inside the app; the same function
 is behind ``python -m easytodo.cli purge``. Several workers (or the CLI) may run it at once: one
@@ -15,9 +19,9 @@ at a time gets the lock, and the others do nothing.
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import astuple, dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from sqlalchemy import ColumnElement, Delete, Interval, delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -34,6 +38,8 @@ PURGE_LOCK_ID = 0x45544450  # "ETDP": the advisory lock that lets one purge run 
 # before its row is committed.
 ORPHAN_GRACE = timedelta(hours=1)
 FIRST_RUN_DELAY_S = 300  # a task waits this long (or one interval, if shorter) before it runs
+# How long the purge waits for a row lock before it gives up (``lock_timeout`` of its transaction).
+LOCK_TIMEOUT_S = 5
 PURGE_BUSY = "Another purge is running. Try again later."
 
 
@@ -76,6 +82,10 @@ async def purge(db: AsyncSession, store: AttachmentStore, *, now: datetime) -> P
     if not await db.scalar(select(func.pg_try_advisory_xact_lock(PURGE_LOCK_ID))):
         await db.rollback()
         return None
+    # SET LOCAL: until the commit below, which the file work after it is not part of.
+    await db.execute(
+        select(func.set_config("lock_timeout", f"{int(LOCK_TIMEOUT_S * 1000)}ms", True))
+    )
     # Before the rows go: the files of the attachments deleted now are to be cleaned too.
     had_attachments = await db.scalar(select(exists().select_from(Attachment)))
     boards = await _delete(
@@ -125,34 +135,34 @@ async def _clean_files(
 def _delete_orphans(store: AttachmentStore, in_use: set[str], older_than: float) -> int:
     """Delete the files of keys not in ``in_use`` last written before ``older_than`` (a time
     stamp), with their thumbnails and previews; then the thumbnails and previews of files that
-    are not there, likewise. Returns how many keys. A file that is gone meanwhile (another worker
-    cleans too) is skipped."""
+    are not there, likewise. Returns how many keys this call removed something of: a file that is
+    gone meanwhile (another worker cleans too) is skipped and not counted, and one that cannot
+    be deleted (an ``OSError``) is logged and left, so the others are still done."""
     removed = 0
     for key in set(store.keys()) - in_use:
         try:
             if store.path(key).stat().st_mtime >= older_than:
                 continue  # an upload may be writing it, and its row is not committed yet
+            if store.delete(key):
+                removed += 1
         except FileNotFoundError:
             continue
-        store.delete(key)
-        removed += 1
+        except OSError as exc:
+            log.warning("Purge could not delete %s: %s", store.path(key), exc)
     derived: set[str] = set()
-    for path in store.derived_orphans():
-        # A row whose file is lost keeps its thumbnail, as it keeps its other data.
-        if _key_of(path) in in_use:
+    for key, path in store.derived_orphans():
+        if key in in_use:  # a row whose file is lost keeps its thumbnail, as its other data
             continue
         try:
             if path.stat().st_mtime >= older_than:
                 continue
-            path.unlink()
+            if store.delete_derived(path):
+                derived.add(key)
         except FileNotFoundError:
             continue
-        derived.add(_key_of(path))
+        except OSError as exc:
+            log.warning("Purge could not delete %s: %s", path, exc)
     return removed + len(derived)
-
-
-def _key_of(derived_file: Path) -> str:
-    return derived_file.name.split(".", 1)[0]
 
 
 class PurgeTask:
@@ -165,10 +175,13 @@ class PurgeTask:
         sessionmaker: async_sessionmaker[AsyncSession],
         store: AttachmentStore,
         interval_s: float,
+        *,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,  # tests wait without waiting
     ) -> None:
         self._sessionmaker = sessionmaker
         self._store = store
         self.interval_s = interval_s
+        self._sleep = sleep
         self._task: asyncio.Task[None] | None = None
 
     @property
@@ -189,7 +202,7 @@ class PurgeTask:
         soon = min(self.interval_s, FIRST_RUN_DELAY_S)
         delay = soon
         while True:
-            await asyncio.sleep(delay)
+            await self._sleep(delay)
             try:
                 await self._purge_once()
                 delay = self.interval_s

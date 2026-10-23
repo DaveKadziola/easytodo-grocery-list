@@ -145,11 +145,25 @@ async def test_store_lists_the_derived_files_whose_file_is_missing(tmp_path):
     (tmp_path / "stray.thumb.webp").write_bytes(b"x")  # not in a directory of keys
 
     assert set(store.derived_orphans()) == {
-        store.thumb_path(orphan),
-        store.preview_path(orphan),
-        store.preview_path(other),
+        (orphan, store.thumb_path(orphan)),
+        (orphan, store.preview_path(orphan)),
+        (other, store.preview_path(other)),
     }
     assert list(AttachmentStore(tmp_path / "missing").derived_orphans()) == []
+
+
+async def test_store_says_whether_it_was_the_one_that_deleted(tmp_path):
+    store = AttachmentStore(tmp_path)
+    key, orphan = "e" * 32, "f" * 32
+    await store.save(key, io.BytesIO(b"main"))
+    store.thumb_path(orphan).parent.mkdir()
+    store.thumb_path(orphan).write_bytes(b"thumb")
+
+    assert store.delete(key) is True
+    assert store.delete(key) is False  # nothing was there: no error, and not this call's doing
+    assert store.delete_derived(store.thumb_path(orphan)) is True
+    assert store.delete_derived(store.thumb_path(orphan)) is False
+    assert list(store.derived_orphans()) == []
 
 
 # ---- accepted files

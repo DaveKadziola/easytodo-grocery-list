@@ -264,9 +264,11 @@ docker compose start app
 ```
 
 A file the restored database does not know (it was attached after the dump) is removed by the
-app's daily purge of files without a row; `tar` keeps the files' old modification times, so a
-restore does not make them look new. A row whose file is missing from the backup shows "This
-attachment no longer exists." instead of the file.
+app's periodic purge of files without a row (every 24 hours by default; with
+`EASYTODO_PURGE_INTERVAL_HOURS=0` it is off, and it runs only when you start it with
+`docker compose exec app python -m easytodo.cli purge`); `tar` keeps the files' old modification
+times, so a restore does not make them look new. A row whose file is missing from the backup shows
+"This attachment no longer exists." instead of the file.
 
 Keep a copy of `EASYTODO_SECRET_KEY` too, in a safe place but not next to the dumps (a password
 manager, say): without it, the 2FA secrets in a restored database cannot be read, and with it
