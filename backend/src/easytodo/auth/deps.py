@@ -24,6 +24,9 @@ PASSWORD_CHANGE_PATH = "/account/password"
 SECOND_FACTOR_PATH = "/login/2fa"
 # The only paths a user who must change their password can still use.
 _ALLOWED_BEFORE_PASSWORD_CHANGE = {PASSWORD_CHANGE_PATH, "/logout"}
+# The methods that are sent to the step still owed (the code form, the password form); any other
+# method is refused. HEAD is a GET without a body, so it is treated alike.
+_PAGE_METHODS = frozenset({"GET", "HEAD"})
 
 
 async def current_session(request: Request, db: DbSession) -> UserSession | None:
@@ -49,23 +52,23 @@ async def require_user(request: Request, db: DbSession) -> User:
     """The signed-in, active user; also sets ``request.state.user`` and ``request.state.session``
     for the templates.
 
-    A session still waiting for its second factor gets the code form for a GET and
+    A session still waiting for its second factor gets the code form for a GET (or HEAD) and
     ``NotAuthenticated`` for anything else, on every path. A user who must change their password
-    gets the password form for a GET and ``Forbidden`` for anything else, except on the paths in
-    ``_ALLOWED_BEFORE_PASSWORD_CHANGE``.
+    gets the password form for a GET (or HEAD) and ``Forbidden`` for anything else, except on the
+    paths in ``_ALLOWED_BEFORE_PASSWORD_CHANGE``.
     """
     signed_in = await active_session(db, request.cookies.get(SESSION_COOKIE))
     if signed_in is None:
         raise NotAuthenticated()
     user, session = signed_in
     if session.mfa_pending:  # first: the password alone does not reach the password form either
-        if request.method in ("GET", "HEAD"):
+        if request.method in _PAGE_METHODS:
             raise SecondFactorRequired(SECOND_FACTOR_PATH)
         raise NotAuthenticated()
     request.state.user = user
     request.state.session = session
     if user.must_change_password and request.url.path not in _ALLOWED_BEFORE_PASSWORD_CHANGE:
-        if request.method == "GET":
+        if request.method in _PAGE_METHODS:
             raise PasswordChangeRequired(PASSWORD_CHANGE_PATH)
         raise Forbidden("You must change your password first.")
     return user

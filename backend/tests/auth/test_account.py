@@ -224,6 +224,39 @@ async def test_no_connection_is_held_while_the_password_is_checked_and_hashed(
     assert held == [0] * (3 if forced else 2)
 
 
+async def test_password_change_gives_this_device_a_new_token(client_factory, db):
+    await create_user(db, EMAIL)
+    a = await sign_in(await client_factory())
+    old_token, old_id = a.cookies[SESSION_COOKIE], await session_id(db, a)
+    expiry = select(UserSession.expires_at).where(UserSession.id == old_id)
+    old_expiry = await db.scalar(expiry)
+
+    r = await a.post("/account/password", data=change_form())
+
+    assert r.status_code == 303 and r.cookies.get(SESSION_COOKIE) not in (None, old_token)
+    cookie = next(c for c in r.headers.get_list("set-cookie") if c.startswith(SESSION_COOKIE))
+    assert "HttpOnly" in cookie and "SameSite=lax" in cookie and "Path=/" in cookie
+    assert await session_id(db, a) == old_id  # the same row
+    assert await db.scalar(expiry) == old_expiry  # the rotation does not move the expiry
+    assert (await a.get("/account")).status_code == 200
+    leaked = await client_factory()
+    leaked.cookies.set(SESSION_COOKIE, old_token)
+    r = await leaked.get("/account")
+    assert r.status_code == 303 and r.headers["location"] == "/login?next=%2Faccount"
+
+
+async def test_a_refused_password_change_keeps_this_devices_token(client, db):
+    await create_user(db, EMAIL)
+    await sign_in(client)
+    token = client.cookies[SESSION_COOKIE]
+
+    r = await client.post("/account/password", data=change_form(current="not-the-right-password"))
+
+    assert r.status_code == 400 and SESSION_COOKIE not in r.headers.get("set-cookie", "")
+    assert client.cookies[SESSION_COOKIE] == token
+    assert await session_id(db, client) is not None  # the stored token is still the one it has
+
+
 async def test_password_form_requires_sign_in(client):
     r = await client.get("/account/password")
     assert r.status_code == 303
@@ -297,6 +330,7 @@ async def test_must_change_password_htmx_get_gets_hx_redirect(client, db):
         ("POST", "/logout", "allowed"),  # no route calls require_user there yet
         ("GET", "/account/password/extra", "redirect"),
         ("GET", "/", "redirect"),
+        ("HEAD", "/", "redirect"),
         ("POST", "/boards", "forbidden"),
         ("DELETE", "/account/sessions/1", "forbidden"),
     ],

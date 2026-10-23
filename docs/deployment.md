@@ -97,7 +97,7 @@ A tunnel connector on your side opens an outgoing connection to the provider. Th
   - `/password/reset/{token}` links work once within 60 minutes, and until then they are a full account takeover.
   - Both appear in the app's access log (`docker compose logs app`), in a proxy's access log if you turn one on (Caddy logs no requests by default), and, with the console mail backend, in the mails the app writes to that same log.
   - On Linux, anyone in the `docker` group can read the container logs.
-  - Revoke a leaked invite link on the board's "Invite and members" page (⋮ on the board list → Invite). A password change invalidates all of the account's reset links.
+  - Revoke a leaked invite link on the board's "Invite and members" page (⋮ on the board list → Invite). A password change, or disabling the account in the admin panel, invalidates all of the account's reset links.
 - [ ] **Backups** with `pg_dump` and a `tar` of the attachments volume, run from the repository root, into `backups/` (git-ignored). A dump holds every account's password hash, so it is created readable by your user only (`umask 077`). Copy both off the server, e.g. from a daily cron job (the one that runs at 03:15 must include the volume `easytodo_attachments`, i.e. the second line, next to the dump: a database restored without its files shows "This attachment no longer exists." for every file):
 
   ```sh

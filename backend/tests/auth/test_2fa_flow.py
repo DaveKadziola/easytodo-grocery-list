@@ -6,7 +6,7 @@ import html
 import json
 import re
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import unquote
 
 import httpx
@@ -297,6 +297,93 @@ async def test_five_bad_codes_kill_pending_session(client, db, user_with_2fa):
     assert await sessions(db) == []
 
 
+async def test_pending_sign_in_expires_after_15_minutes(client, db, user_with_2fa):
+    await password_step(client)
+    [pending] = await sessions(db)
+    assert timedelta(minutes=14) < pending.expires_at - datetime.now(UTC) <= timedelta(minutes=15)
+    await code_step(client, current_code(user_with_2fa.secret))
+    [full] = await sessions(db)
+    assert full.expires_at - datetime.now(UTC) > timedelta(days=29)
+
+
+async def test_a_new_password_step_ends_the_abandoned_one(client, db, user_with_2fa):
+    await password_step(client)
+    [abandoned] = await sessions(db)
+    await password_step(client)  # the same browser
+    [pending] = await sessions(db)  # not 2 rows of "Awaiting 2FA"
+    assert pending.id != abandoned.id and pending.mfa_pending
+
+
+async def test_a_wrong_password_leaves_the_pending_sign_in_alone(client, db, user_with_2fa):
+    await password_step(client)
+    [pending] = await sessions(db)
+    token = client.cookies[SESSION_COOKIE]
+
+    r = await client.post("/login", data={"email": EMAIL, "password": WRONG_PASSWORD})
+
+    assert r.status_code == 400 and "Invalid email or password." in r.text
+    assert [s.id for s in await sessions(db)] == [pending.id]
+    assert client.cookies[SESSION_COOKIE] == token
+    r = await code_step(client, current_code(user_with_2fa.secret))  # the code step still works
+    assert r.status_code == 303 and r.headers["location"] == "/boards"
+
+
+async def test_a_sign_in_as_another_user_ends_the_pending_one(client, db, user_with_2fa):
+    await create_user(db, "eve@example.com")
+    await password_step(client)
+    [pending] = await sessions(db)
+
+    await login(client, "eve@example.com")
+
+    [eves] = await sessions(db)
+    assert eves.id != pending.id and eves.mfa_pending is False
+    assert eves.user_id != user_with_2fa.user.id
+
+
+async def test_a_new_sign_in_leaves_a_full_session_alone(client, db, user_with_2fa):
+    await sign_in_with_2fa(client, user_with_2fa.secret)
+    [full] = await sessions(db)
+
+    await password_step(client)  # another sign-in from the same browser
+
+    first, second = await sessions(db)
+    assert first.id == full.id and (first.mfa_pending, second.mfa_pending) == (False, True)
+
+
+async def test_a_code_over_the_limit_is_not_checked(client, db, user_with_2fa):
+    await password_step(client)
+    await db.execute(update(UserSession).values(mfa_failures=5))
+    await db.commit()
+
+    r = await code_step(client, current_code(user_with_2fa.secret))  # even the right code
+
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+    flash = json.loads(unquote(r.cookies[FLASH_COOKIE]))
+    assert flash["message"] == "Too many invalid codes. Sign in again."
+    assert (await dave(db)).totp_last_step is None
+    assert await sessions(db) == []
+
+
+async def test_parallel_codes_are_checked_at_most_five_times(
+    client, db, user_with_2fa, monkeypatch
+):
+    await password_step(client)
+    checked, real = [], routes.verify_second_factor
+
+    async def slow(*args):
+        checked.append(1)
+        await asyncio.sleep(0.05)
+        return await real(*args)
+
+    monkeypatch.setattr(routes, "verify_second_factor", slow)
+    wrong = wrong_code(user_with_2fa.secret)
+
+    responses = await asyncio.gather(*(code_step(client, wrong) for _ in range(10)))  # 10: IP limit
+
+    assert len(checked) == 5  # not 10
+    assert sorted(r.status_code for r in responses) == [303] * 6 + [400] * 4
+
+
 async def test_second_step_is_rate_limited_per_ip(client, user_with_2fa):
     await password_step(client)
     wrong = wrong_code(user_with_2fa.secret)
@@ -342,17 +429,19 @@ async def test_pending_session_signed_out_meanwhile_ends_the_second_step(
     client, db, user_with_2fa, monkeypatch
 ):
     await password_step(client)
+    real = routes.reserve_code_attempt
 
-    async def signed_out_from_the_account_page_meanwhile(*args) -> bool:
+    async def signed_out_from_the_account_page_meanwhile(*args) -> int | None:
         await db.execute(delete(UserSession))
         await db.commit()
-        return False
+        return await real(*args)  # None: the session is gone
 
-    monkeypatch.setattr(routes, "verify_second_factor", signed_out_from_the_account_page_meanwhile)
+    monkeypatch.setattr(routes, "reserve_code_attempt", signed_out_from_the_account_page_meanwhile)
     r = await code_step(client, wrong_code(user_with_2fa.secret))
 
     assert r.status_code == 303 and r.headers["location"] == "/login"
     assert SESSION_COOKIE not in client.cookies
+    assert FLASH_COOKIE not in r.cookies
 
 
 async def test_recovery_codes_still_sign_in_after_the_secret_key_changes(

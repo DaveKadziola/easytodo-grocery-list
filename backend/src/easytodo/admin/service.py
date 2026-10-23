@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.attachments.service import total_bytes
+from easytodo.auth.reset import invalidate_reset_tokens
 from easytodo.auth.service import DEFAULT_BOARD_NAME, normalize_email
 from easytodo.auth.sessions import revoke_all_sessions, sessions_revoked
 from easytodo.boards.permissions import is_possible_id
@@ -238,12 +239,15 @@ async def delete_user(db: AsyncSession, admin: User, user_id: int) -> None:
 
 
 async def set_status(db: AsyncSession, admin: User, user_id: int, status: UserStatus) -> None:
-    """Disable the account (it is signed out everywhere and cannot sign in) or enable it."""
+    """Disable the account (it is signed out everywhere, its reset links end, and it cannot sign
+    in) or enable it. Enabling it again does not bring the links back: a link mailed before is
+    gone for good, and a new one has to be asked for."""
     user = await get_user(db, user_id)
     revoked: list[int] = []
     if status == UserStatus.DISABLED:
         await _keep_an_active_admin(db, user)
         revoked = await revoke_all_sessions(db, user.id)
+        await invalidate_reset_tokens(db, user.id)
     user.status = status
     await commit_and_publish(db, *sessions_revoked(user.id, revoked))
 

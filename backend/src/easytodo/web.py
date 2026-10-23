@@ -89,6 +89,13 @@ def render(
     return templates.TemplateResponse(request, name, defaults | context, status_code=status_code)
 
 
+def no_store(response: HTMLResponse) -> HTMLResponse:
+    """For a page that holds a secret (a TOTP key, recovery codes, a temporary password) or the
+    form of a link that works once: no cache, the browser's included, keeps a copy."""
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def flash(response: Response, message: str, settings: Settings, level: str = "info") -> None:
     """Show ``message`` as a toast on the next page the browser loads.
 

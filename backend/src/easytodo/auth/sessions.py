@@ -1,8 +1,9 @@
 """Server-side sessions: the cookie carries a random token, the database only its hash.
 
 Every function here that writes commits its change (and anything pending on ``db``), except the
-revoke functions: their caller commits the deletion with ``commit_and_publish(db,
-*sessions_revoked(...))``, so the WebSockets of those sessions are closed (``realtime.hub``).
+revoke functions and ``rotate_session_token``: their caller commits the change with
+``commit_and_publish(db, *sessions_revoked(...))`` (for a revocation, so that the WebSockets of
+those sessions are closed, ``realtime.hub``) or with the change that made the rotation necessary.
 """
 
 from collections.abc import Sequence
@@ -20,6 +21,9 @@ from easytodo.security.tokens import hash_token, new_token
 
 SESSION_COOKIE = "easytodo_session"
 LAST_SEEN_INTERVAL = timedelta(minutes=5)
+# How long a sign-in may wait for its code: a session with ``mfa_pending`` expires this long after
+# the password was entered. A full session lives ``Settings.session_ttl_days``.
+PENDING_SESSION_TTL = timedelta(minutes=15)
 _USER_AGENT_MAX_LENGTH = 255  # user_sessions.user_agent is String(255)
 _IP_MAX_LENGTH = 45  # user_sessions.ip is String(45)
 
@@ -33,14 +37,18 @@ async def create_session(
     ip: str | None,
     settings: Settings,
 ) -> tuple[str, UserSession]:
-    """Store a new session for ``user``; returns the raw token (for the cookie) and the row."""
+    """Store a new session for ``user``; returns the raw token (for the cookie) and the row.
+
+    A session waiting for its second factor expires after ``PENDING_SESSION_TTL``; the cookie
+    that carries either kind lasts as long as a full session (the server decides)."""
     raw_token = new_token()
     now = datetime.now(UTC)
+    lifetime = PENDING_SESSION_TTL if mfa_pending else timedelta(days=settings.session_ttl_days)
     session = UserSession(
         user_id=user.id,
         token_hash=hash_token(raw_token),
         mfa_pending=mfa_pending,
-        expires_at=now + timedelta(days=settings.session_ttl_days),
+        expires_at=now + lifetime,
         last_seen_at=now,
         user_agent=user_agent[:_USER_AGENT_MAX_LENGTH] if user_agent else None,
         ip=ip[:_IP_MAX_LENGTH] if ip else None,
@@ -117,6 +125,19 @@ async def load_session_and_user(
     if not await _touch(db, session, now):
         return None
     return session, user
+
+
+def rotate_session_token(session: UserSession) -> str:
+    """Give ``session`` a new token, so that the old one, which may have leaked, opens nothing
+    any more; returns the raw token for the cookie. Not committed: the caller commits it with
+    the change that made the old token worthless (a new password), in one transaction.
+
+    Only ``token_hash`` changes. The row stays the same, with its ``expires_at`` (the WebSockets
+    of the session keep theirs and are counted per ``session_id``, ``realtime``), and nothing
+    else about the session moves."""
+    raw_token = new_token()
+    session.token_hash = hash_token(raw_token)
+    return raw_token
 
 
 async def revoke_session(db: AsyncSession, session_id: int) -> None:

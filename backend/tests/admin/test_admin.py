@@ -472,6 +472,18 @@ async def test_send_reset_emails_user(admin_client, client, db, mail_outbox):
     assert (await client.get(f"/password/reset/{token}")).status_code == 200
 
 
+async def test_disabling_an_account_ends_its_reset_links(admin_client, client, db, mail_outbox):
+    dave = await create_user(db, "dave@example.com")
+    await admin_client.post(f"/admin/users/{dave.id}/send-reset", headers=HX)
+    token = RESET_LINK.search(mail_outbox[-1].body)[1]
+
+    for status in ("disabled", "active"):  # and back, well within the 60 minutes
+        await admin_client.post(f"/admin/users/{dave.id}/status", data={"status": status})
+
+    r = await client.get(f"/password/reset/{token}")
+    assert r.status_code == 404 and "This reset link is invalid or has expired." in r.text
+
+
 async def test_send_reset_refuses_a_disabled_account(admin_client, db, mail_outbox):
     dave = await create_user(db, "dave@example.com", status=UserStatus.DISABLED)
 

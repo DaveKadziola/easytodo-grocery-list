@@ -12,7 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.auth.deps import CurrentUser, DbSession, FormField, require_user
 from easytodo.auth.reset import invalidate_reset_tokens
-from easytodo.auth.sessions import revoke_all_sessions, revoke_session, sessions_revoked
+from easytodo.auth.sessions import (
+    revoke_all_sessions,
+    revoke_session,
+    rotate_session_token,
+    sessions_revoked,
+    set_session_cookie,
+)
 from easytodo.auth.twofa import (
     ALREADY_ON,
     begin_setup,
@@ -33,7 +39,7 @@ from easytodo.security.passwords import (
 )
 from easytodo.security.ratelimit import limit_user
 from easytodo.security.totp import provisioning_uri, qr_svg
-from easytodo.web import flash, render
+from easytodo.web import flash, no_store, render
 
 router = APIRouter(prefix="/account")
 
@@ -82,12 +88,6 @@ async def _account_page(
     return render(request, "account/index.html", context, status_code=status_code)
 
 
-def _no_store(response: HTMLResponse) -> HTMLResponse:
-    """For a page with a TOTP secret or recovery codes: no copy is kept in any cache."""
-    response.headers["Cache-Control"] = "no-store"
-    return response
-
-
 @router.get("")
 async def account_page(request: Request, db: DbSession, user: CurrentUser) -> Response:
     return await _account_page(request, db, user, {})
@@ -108,7 +108,8 @@ async def change_password(
     new_password: FormField = "",
     new_password_confirm: FormField = "",
 ) -> Response:
-    """Set the new password and sign every other device out.
+    """Set the new password and sign every other device out. This device stays signed in, with a
+    new session token: the old one may be what a thief holds, and now opens nothing.
 
     Accepted: when a sign-in rehashes the old password at the same time, the update below finds
     the hash changed and this answers "Current password is incorrect." once; a retry succeeds."""
@@ -143,9 +144,14 @@ async def change_password(
     except AppError as exc:
         return render(request, "account/password.html", {"error": exc.message}, status_code=400)
     await invalidate_reset_tokens(db, user.id)  # a reset link in the mailbox would override it
-    revoked = await revoke_all_sessions(db, user.id, except_session_id=request.state.session.id)
+    session = request.state.session
+    revoked = await revoke_all_sessions(db, user.id, except_session_id=session.id)
+    # This session is not revoked, so it gets no SESSIONS_REVOKED event (it would close the sockets
+    # of this device's other tabs, which would then go to /login); a reconnect has the new cookie.
+    raw_token = rotate_session_token(session)
     await commit_and_publish(db, *sessions_revoked(user.id, revoked))  # with the new hash
     response = RedirectResponse("/account", status_code=303)
+    set_session_cookie(response, raw_token, request.app.state.settings)
     flash(response, "Password changed.", request.app.state.settings)
     return response
 
@@ -156,7 +162,7 @@ def _setup_page(
     # segno's SVG holds only the QR code's paths (the URI is encoded in them), so it goes in as is.
     qr_code = Markup(qr_svg(provisioning_uri(secret, user.email)))
     context = {"secret": secret, "qr_code": qr_code, "error": error}
-    return _no_store(render(request, "account/2fa_setup.html", context, status_code=status_code))
+    return no_store(render(request, "account/2fa_setup.html", context, status_code=status_code))
 
 
 @router.get("/2fa/setup")
@@ -188,7 +194,7 @@ async def confirm_two_factor_setup(
         # when there is none, or it cannot be decrypted since EASYTODO_SECRET_KEY changed).
         secret = await begin_setup(db, user, settings)
         return _setup_page(request, user, secret, error=exc.message, status_code=400)
-    return _no_store(
+    return no_store(
         render(
             request,
             "account/2fa_recovery.html",
@@ -228,7 +234,7 @@ async def new_recovery_codes(
         codes = await regenerate_recovery_codes(db, user, password)
     except ValidationFailed as exc:
         return await _account_page(request, db, user, {"twofa_error": exc.message}, 400)
-    return _no_store(
+    return no_store(
         render(
             request,
             "account/2fa_recovery.html",

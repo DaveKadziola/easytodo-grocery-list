@@ -91,6 +91,15 @@ async def dave(db) -> User:
     return await db.scalar(query)
 
 
+async def test_reset_form_is_never_cached(client, db, mail_outbox):
+    await create_user(db, EMAIL)
+    token = await request_link(client, mail_outbox)
+
+    assert (await client.get(f"/password/reset/{token}")).headers.get("cache-control") == "no-store"
+    r = await set_new_password(client, token, "short")
+    assert r.status_code == 400 and r.headers.get("cache-control") == "no-store"
+
+
 async def test_unknown_email_gets_same_response_and_no_mail(client, mail_outbox):
     page = await client.get("/password/forgot")
     assert page.status_code == 200

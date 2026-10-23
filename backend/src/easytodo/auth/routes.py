@@ -31,7 +31,8 @@ from easytodo.auth.twofa import (
     ACCOUNT_CODE_WINDOW_S,
     INVALID_CODE,
     MAX_CODE_FAILURES,
-    count_failed_code,
+    TOO_MANY_CODES,
+    reserve_code_attempt,
     verify_second_factor,
 )
 from easytodo.boards.invites import INVITE_OTHER_EMAIL, get_valid_invite
@@ -41,7 +42,7 @@ from easytodo.errors import AppError, NotFound, TooManyRequests, ValidationFaile
 from easytodo.models import BoardInvite, User, UserSession
 from easytodo.realtime.events import commit_and_publish
 from easytodo.security.ratelimit import limit_user, rate_limit
-from easytodo.web import flash, render
+from easytodo.web import flash, no_store, render
 
 router = APIRouter()
 
@@ -157,15 +158,22 @@ async def login_page(request: Request, next_: NextParam = None) -> Response:
 async def login(
     request: Request,
     db: DbSession,
+    previous: Annotated[UserSession | None, Depends(current_session)],
     email: FormField = "",
     password: FormField = "",
     next_: NextParam = None,
 ) -> Response:
+    """Sign in with the password. The browser starts over, so a sign-in it left half-way (the
+    session of its cookie still waits for a code, whoever it is for) ends once this one succeeds;
+    a wrong password leaves it be, and a full session is never touched."""
     try:
         user = await authenticate(db, email, password)
     except AppError as exc:
         context = {"email": email, "error": exc.message, "next_path": _kept_next(next_)}
         return render(request, "auth/login.html", context, status_code=400)
+    if previous is not None and previous.mfa_pending:
+        await revoke_session(db, previous.id)
+        await commit_and_publish(db, *sessions_revoked(previous.user_id, [previous.id]))
     if user.totp_enabled:  # a session that only reaches the second step, which keeps next
         kept = _kept_next(next_)
         target = SECOND_FACTOR_PATH + (f"?next={quote(kept, safe='')}" if kept else "")
@@ -191,8 +199,11 @@ async def second_factor(
     """A right code swaps the pending session for a full one (a new token); the fifth wrong one
     ends the pending session, so the password has to be entered again.
 
-    Besides the limit per IP, the account has a budget of codes over all its pending sessions,
-    which signing in again does not renew; an attempt over it is not checked at all."""
+    Every attempt is counted before its code is looked at (``reserve_code_attempt``), so codes
+    sent at once are no more guesses than codes sent one by one: only the first five are
+    checked, and a later one is refused unchecked, the right code included. Besides the limit per
+    IP, the account has a budget of codes over all its pending sessions, which signing in again
+    does not renew; an attempt over it is not counted or checked at all."""
     if pending is None:
         return RedirectResponse("/login", status_code=303)
     user, session = pending
@@ -201,19 +212,22 @@ async def second_factor(
     except TooManyRequests as exc:  # the code form again, with the reason, for a later try
         return render(request, "auth/login_2fa.html", {"error": exc.message}, status_code=429)
     settings = request.app.state.settings
-    if await verify_second_factor(db, user, code, settings):
+    attempt = await reserve_code_attempt(db, session.id)
+    if attempt is None:  # signed out from elsewhere meanwhile: nothing left to say about codes
+        response = RedirectResponse("/login", status_code=303)
+        clear_session_cookie(response)
+        return response
+    if attempt <= MAX_CODE_FAILURES and await verify_second_factor(db, user, code, settings):
         await revoke_session(db, session.id)
         await commit_and_publish(db, *sessions_revoked(user.id, [session.id]))
         return await _signed_in_redirect(request, db, user, _kept_next(next_) or "/boards")
-    failures = await count_failed_code(db, session.id)  # None: signed out from elsewhere meanwhile
-    if failures is not None and failures < MAX_CODE_FAILURES:
-        await db.commit()
+    if attempt < MAX_CODE_FAILURES:
         return render(request, "auth/login_2fa.html", {"error": INVALID_CODE}, status_code=400)
-    await revoke_session(db, session.id)
+    await revoke_session(db, session.id)  # the fifth wrong code, or an attempt over the limit
     await commit_and_publish(db, *sessions_revoked(user.id, [session.id]))
     response = RedirectResponse("/login", status_code=303)
     clear_session_cookie(response)
-    flash(response, "Too many invalid codes. Sign in again.", settings, level="error")
+    flash(response, TOO_MANY_CODES, settings, level="error")
     return response
 
 
@@ -245,7 +259,7 @@ async def forgot_password(
 @router.get("/password/reset/{token}")
 async def reset_password_page(request: Request, db: DbSession, token: str) -> Response:
     await get_valid_reset_token(db, token)
-    return render(request, "auth/reset.html", {})
+    return no_store(render(request, "auth/reset.html", {}))
 
 
 @router.post("/password/reset/{token}")
@@ -262,7 +276,7 @@ async def reset_password_form(
             raise ValidationFailed("Passwords do not match.")
         await reset_password(db, token, new_password)
     except ValidationFailed as exc:
-        return render(request, "auth/reset.html", {"error": exc.message}, status_code=400)
+        return no_store(render(request, "auth/reset.html", {"error": exc.message}, status_code=400))
     response = RedirectResponse("/login", status_code=303)
     flash(response, "Password updated. Sign in with your new password.", request.app.state.settings)
     return response

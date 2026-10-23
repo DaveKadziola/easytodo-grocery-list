@@ -1,8 +1,9 @@
 """Password reset by e-mail: a link that works once and expires after ``RESET_TTL``; only the
 token's hash is stored.
 
-A new request, a reset and a password change each end every earlier link of the account.
-Resetting does not turn two-factor authentication off.
+A new request, a reset, a password change and an admin disabling the account (``set_status``)
+each end every earlier link of the account; enabling it again brings none back. Resetting does
+not turn two-factor authentication off.
 """
 
 import logging
