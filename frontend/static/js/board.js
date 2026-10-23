@@ -1,28 +1,34 @@
 // Board page: drag and drop (SortableJS) and Move up / Move down for categories, the item modal
-// (Alpine component "itemModal"), ticks that show at once, fields that are ready for the next
-// entry and keep what the user typed when their category is swapped, folding categories away (per
-// device), the bottom bar's "New category", and a board reload when a change did not go through.
-// Loaded before Alpine (see base.html), so the component is registered on alpine:init. The modal
-// reads items only from data-* attributes, which the templates escape; no page data is ever
-// written into a script.
-// For realtime.js: window.easytodoBoard (the board reload and its swap style, and whether a drag
-// or the modal is in progress), a "board:idle" event on the document when that ends, and a
-// "board:stale" event when the page no longer shows what the server has (it then queues a reload).
+// of those who may edit and the read-only dialog of those who may not (Alpine components
+// "itemModal" and "itemViewer", both with the open item's details fetched into their slot), ticks
+// that show at once, fields that are ready for the next entry and keep what the user typed when
+// their category is swapped, folding categories away (per device), the bottom bar's "New
+// category", and a board reload when a change did not go through.
+// Loaded before Alpine (see base.html), so the components are registered on alpine:init. They read
+// items only from data-* attributes, which the templates escape; no page data is ever written into
+// a script.
+// For realtime.js: window.easytodoBoard (the board reload and its swap style, whether a drag or
+// the modal is in progress, the open item and a fetch of its details), a "board:idle" event on
+// the document when that ends, and a "board:stale" event when the page no longer shows what the
+// server has (it then queues a reload).
 (() => {
   "use strict";
 
   const BOARD_CONTENT = "#board-content";
   const TICK = 'input[type="checkbox"][hx-post$="/toggle"]';
-  const FOCUSABLE = "input, textarea, select, button";
+  const FOCUSABLE = "a[href], input, textarea, select, button";
   const TEXT_FIELDS = "input[id]:not([type=checkbox]):not([type=hidden]), textarea[id]";
   // Requests whose failure leaves the page out of step: Sortable has already moved the element.
   const DRAG_REQUEST = /\/items\/\d+\/move$|\/categories\/order$/;
+  // The answer to a fetch of an item's details (the path of its request).
+  const DETAILS_PATH = /^\/items\/(\d+)\/details$/;
   const COLLAPSED_KEY = "easytodo.collapsedCategories";
   // A reload that the user did not ask for just now: htmx sets the new content up at once (no
   // settle delay), so a form in it never submits as a plain page request before htmx has it.
   const RELOAD_SWAP = "outerHTML settle:0ms";
   let dragging = false; // a Sortable drag is running
-  let editing = false; // the item modal is open
+  let editing = false; // the item modal or dialog is open
+  let openId = null; // the id (a number) of the item that is open in it
   let newCategoryShown = false; // on a phone the bottom bar's button showed the "New category" form
 
   function boardContent() {
@@ -208,6 +214,13 @@
   document.addEventListener("htmx:beforeSwap", (event) => {
     kept = null;
     const { target, requestConfig, xhr } = event.detail;
+    // The details of an item that is not the open one any more (closed meanwhile, or another one
+    // opened) have nowhere to go.
+    const details = requestConfig && DETAILS_PATH.exec(requestConfig.path);
+    if (details && (Number(details[1]) !== openId || !target.isConnected)) {
+      event.detail.shouldSwap = false;
+      return;
+    }
     if (!(target instanceof Element)) return;
     const form = requestConfig && requestConfig.elt;
     const sent = (xhr.status < 400 && form instanceof HTMLFormElement && sentValues.get(form)) || {};
@@ -366,10 +379,22 @@
     if (sortable) sortable.destroy();
   });
 
+  // The open item's details, fetched into #item-details, which they replace (the slot around it
+  // stays: htmx-config swaps outerHTML). When the modal opens, and again when realtime.js sees an
+  // event that names the item. Returns htmx's promise of the request, or nothing when no item is
+  // open.
+  function refreshDetails() {
+    const slot = document.getElementById("item-details-slot");
+    if (openId === null || !slot) return undefined;
+    return htmx.ajax("GET", `/items/${openId}/details`, { source: slot, target: "#item-details" });
+  }
+
   window.easytodoBoard = {
     refresh: refreshBoard,
     reloadSwap: RELOAD_SWAP,
     isBusy: () => dragging || editing,
+    openItemId: () => openId,
+    refreshDetails,
   };
 
   // While the modal is open the page behind it can be neither reached nor scrolled.
@@ -380,6 +405,53 @@
       if (element) element.inert = inert;
     }
     document.body.classList.toggle("overflow-hidden", inert);
+  }
+
+  // Tab and Shift+Tab go round the controls of the modal or dialog (the element the handler is on),
+  // never out to the page behind it. Only a control that can take the focus counts: not a disabled
+  // one, nor one without a box (hidden), which the browser's own Tab skips too.
+  function trapFocus(event) {
+    const controls = Array.from(event.currentTarget.querySelectorAll(FOCUSABLE)).filter(
+      (control) => !control.matches(":disabled") && control.getClientRects().length > 0,
+    );
+    if (controls.length === 0) return;
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  // What opening an item does in the modal and in the dialog alike: the details are fetched into
+  // the slot (an empty #item-details holds the place for the answer), the board is held (live
+  // updates wait, as a new #board-content would not be inert), and the page behind is inert.
+  function enterItem(component, itemId) {
+    component.itemId = itemId;
+    openId = Number(itemId);
+    const placeholder = document.createElement("div");
+    placeholder.id = "item-details";
+    component.$refs.details.replaceChildren(placeholder);
+    Promise.resolve(refreshDetails()).catch(() => {}); // a failed request shows its own error
+    component.open = true;
+    editing = true;
+    setPageInert(true);
+  }
+
+  // The reverse of enterItem; the focus goes back to the name that opened it.
+  function leaveItem(component) {
+    if (!component.open) return;
+    component.open = false;
+    editing = false;
+    openId = null;
+    component.$refs.details.replaceChildren();
+    setPageInert(false);
+    const opener = document.getElementById(`item-${component.itemId}-name`);
+    if (opener) opener.focus();
+    becameIdle();
   }
 
   document.addEventListener("alpine:init", () => {
@@ -401,7 +473,6 @@
         const button = event.currentTarget;
         const item = button.closest("[data-item-id]");
         const { name, description, category } = this.$refs;
-        this.itemId = item.dataset.itemId;
         this.original = {
           name: button.dataset.name,
           description: button.dataset.description || "",
@@ -416,9 +487,7 @@
           ),
         );
         category.value = this.original.categoryId;
-        this.open = true;
-        editing = true;
-        setPageInert(true);
+        enterItem(this, item.dataset.itemId);
         this.$nextTick(() => name.focus());
       },
 
@@ -432,19 +501,7 @@
         );
       },
 
-      // Tab and Shift+Tab go round the modal's controls, never out to the page behind it.
-      trapFocus(event) {
-        const controls = Array.from(event.currentTarget.querySelectorAll(FOCUSABLE));
-        const first = controls[0];
-        const last = controls[controls.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      },
+      trapFocus,
 
       // A tap on the dimmed page around the modal (on a phone, often meant to hide the keyboard):
       // closes it, but asks first when that would throw edits away.
@@ -454,13 +511,7 @@
       },
 
       close() {
-        if (!this.open) return;
-        this.open = false;
-        editing = false;
-        setPageInert(false);
-        const opener = document.getElementById(`item-${this.itemId}-name`);
-        if (opener) opener.focus();
-        becameIdle();
+        leaveItem(this);
       },
 
       // Saves the name and description (if changed), then moves the item (if another category
@@ -498,6 +549,34 @@
           });
         }
         this.close();
+      },
+    }));
+
+    // The dialog of a member who may not edit: the item's name and description (as text, from the
+    // data-* attributes of the name that was clicked) and its details; nothing to change.
+    Alpine.data("itemViewer", () => ({
+      open: false,
+      itemId: "",
+
+      get closed() {
+        return !this.open;
+      },
+
+      openItem(event) {
+        const button = event.currentTarget;
+        const { title, description, close } = this.$refs;
+        const text = button.dataset.description || "";
+        title.textContent = button.dataset.name;
+        description.textContent = text;
+        description.hidden = text === "";
+        enterItem(this, button.closest("[data-item-id]").dataset.itemId);
+        this.$nextTick(() => close.focus());
+      },
+
+      trapFocus,
+
+      close() {
+        leaveItem(this);
       },
     }));
   });

@@ -14,7 +14,7 @@ but its row, author, checklist and attachments stay for ``UNDO_WINDOW``, in whic
 back as it was. Every read of items leaves the marked ones out.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -36,6 +36,7 @@ from easytodo.boards.permissions import (
     require_board,
 )
 from easytodo.boards.service import (
+    Author,
     CategoryView,
     select_item_views,
     select_member_category,
@@ -47,8 +48,18 @@ from easytodo.content.validation import (
     clean_description,
     clean_name,
 )
+from easytodo.display import display_name
 from easytodo.errors import Conflict, NotFound, ValidationFailed
-from easytodo.models import Board, BoardMember, BoardRole, Category, Item, User
+from easytodo.models import (
+    Attachment,
+    Board,
+    BoardMember,
+    BoardRole,
+    Category,
+    ChecklistEntry,
+    Item,
+    User,
+)
 from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
 
 CATEGORY_GONE = "This category no longer exists."
@@ -176,11 +187,17 @@ async def load_item(
     )
 
 
-def _category_changed(board_id: int, *category_ids: int) -> BoardEvent:
+def _category_changed(
+    board_id: int, *category_ids: int, item_ids: Iterable[int] = ()
+) -> BoardEvent:
+    """The event for a change inside these categories. ``item_ids`` are the items whose details
+    changed (checklist, files), so that a page with one of them open fetches its details again;
+    no duplicates in either list."""
     return BoardEvent(
         EventType.CATEGORY_CHANGED,
         board_id=board_id,
         category_ids=tuple(dict.fromkeys(category_ids)),
+        item_ids=tuple(dict.fromkeys(item_ids)),
     )
 
 
@@ -378,6 +395,68 @@ async def get_category_view(
     check_permission(role, Action.VIEW)
     items = await select_item_views(db, user, category_id=category.id)
     return CategoryView(category, items, sort_choice(user, pref)), role
+
+
+@dataclass(frozen=True)
+class ItemDetails:
+    """What an item's details show to a member: the item, their role, who added it (``None``
+    when that account is gone) and whether to name them (only on a board with more than one
+    member), the checklist entries in their order and the attached files in theirs."""
+
+    item: Item
+    role: BoardRole
+    author: Author | None
+    show_author: bool
+    entries: list[ChecklistEntry]
+    attachments: list[Attachment]
+
+
+_ITEM_ID = bindparam("item_id", type_=BigInteger)
+# Built once, like the item views: the author's columns, whether the item's board is shared (not
+# tied to a row: the members are counted once, not for every entry) and the entries, one row each.
+_DETAILS_OF_ITEM = (
+    select(
+        User.id,
+        User.email,
+        User.display_name,
+        ChecklistEntry,
+        select(func.count())
+        .where(BoardMember.board_id == bindparam("board_id", type_=BigInteger))
+        .scalar_subquery()
+        > 1,
+    )
+    .select_from(Item)
+    .outerjoin(User, User.id == Item.created_by)
+    .outerjoin(ChecklistEntry, ChecklistEntry.item_id == Item.id)
+    .where(Item.id == _ITEM_ID, Item.deleted_at.is_(None))
+    .order_by(ChecklistEntry.position, ChecklistEntry.id)
+)
+_FILES_OF_ITEM = (
+    select(Attachment)
+    .where(Attachment.item_id == _ITEM_ID)
+    .order_by(Attachment.created_at, Attachment.id)
+)
+
+
+async def get_item_details(db: AsyncSession, item_id: int, user: User) -> ItemDetails:
+    """The item's details for any member (viewers too), in three statements: the item with
+    ``user``'s role (``load_item``), then the author, whether the board is shared and the
+    checklist in one, then the files. Reading, so no lock. An item that is gone, deleted or in an
+    archived category or board is ``NotFound`` (the second statement leaves out an item that was
+    deleted since the first, too)."""
+    item, role = await load_item(db, item_id, user, Action.VIEW)
+    rows = (
+        await db.execute(_DETAILS_OF_ITEM, {"item_id": item.id, "board_id": item.board_id})
+    ).all()
+    if not rows:
+        raise NotFound(ITEM_GONE)
+    author_id, email, name, _, shared = rows[0]  # the same in every row
+    author = None if author_id is None else Author(author_id, display_name(email, name))
+    entries = [row[3] for row in rows if row[3] is not None]
+    attachments = (await db.scalars(_FILES_OF_ITEM, {"item_id": item.id})).all()
+    return ItemDetails(
+        item, role, author, author is not None and shared, entries, list(attachments)
+    )
 
 
 async def create_item(

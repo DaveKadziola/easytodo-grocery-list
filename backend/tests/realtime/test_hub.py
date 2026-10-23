@@ -46,6 +46,21 @@ async def test_dispatch_skips_origin_client_and_other_boards():
     assert (a.close_code, b.close_code, c.close_code) == (None, None, None)
 
 
+async def test_item_ids_reach_the_page_only_when_there_are_some():
+    page = sub()
+    hub = hub_with(page)
+
+    await hub.dispatch(
+        BoardEvent(EventType.CATEGORY_CHANGED, board_id=1, category_ids=(7,), item_ids=(3,))
+    )
+    await hub.dispatch(BoardEvent(EventType.CATEGORY_CHANGED, board_id=1, category_ids=(7,)))
+
+    assert messages(page) == [
+        {"type": "category.changed", "board_id": 1, "category_ids": [7], "item_ids": [3]},
+        {"type": "category.changed", "board_id": 1, "category_ids": [7]},  # no key at all
+    ]
+
+
 async def test_event_without_origin_reaches_sockets_without_client_id():
     # No origin (a plain form post) must not match a socket that gave no client id.
     anonymous_tab = sub(client_id=None)

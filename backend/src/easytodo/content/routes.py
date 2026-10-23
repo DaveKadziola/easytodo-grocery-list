@@ -1,7 +1,7 @@
 """Categories and items over HTMX, and the board's "Archived categories" page. Each route
-answers with the HTML fragment to swap in: the whole board content, one category, or nothing (an
-archived category, a new order); a category restored or deleted for good from the archive page
-reloads that page instead."""
+answers with the HTML fragment to swap in: the whole board content, one category, an item's
+details, or nothing (an archived category, a new order); a category restored or deleted for good
+from the archive page reloads that page instead."""
 
 import json
 from typing import Annotated
@@ -20,6 +20,7 @@ from easytodo.content.service import (
     delete_category,
     delete_item,
     get_category_view,
+    get_item_details,
     list_archived_categories,
     move_item,
     rename_category,
@@ -50,6 +51,14 @@ async def _current_category(
     view, role = await get_category_view(db, category_id, user)
     context = {"category_view": view, "role": role}
     return render(request, "boards/_category.html", context, status_code)
+
+
+async def _current_details(
+    request: Request, db: AsyncSession, user: User, item_id: int, status_code: int = 200
+) -> Response:
+    """The item's details fragment (``#item-details``), without write controls for a viewer."""
+    details = await get_item_details(db, item_id, user)
+    return render(request, "boards/_item_details.html", {"details": details}, status_code)
 
 
 @router.get("/boards/{board_id}/content")
@@ -150,6 +159,15 @@ async def clear_done_items(
 ) -> Response:
     await clear_done(db, category_id, user)
     return await _current_category(request, db, user, category_id)
+
+
+@router.get("/items/{item_id}/details")
+async def item_details(
+    request: Request, db: DbSession, user: CurrentUser, item_id: int
+) -> Response:
+    """The details of an item for any member of its board: who added it, and when it was added
+    and last modified. A page with the item open fetches them again when an event names it."""
+    return await _current_details(request, db, user, item_id)
 
 
 @router.patch("/items/{item_id}")

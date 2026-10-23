@@ -6,12 +6,14 @@ signing out other devices publishes the sessions it revoked."""
 import asyncio
 import json
 
+import asyncpg
 import pytest
 from factories import create_board, create_category, create_user
 from helpers import login, signed_in
 from sqlalchemy import select, text
 
 from easytodo.models import UserSession
+from easytodo.realtime import events
 from easytodo.realtime import listener as listener_module
 from easytodo.realtime.events import (
     MAX_PAYLOAD_BYTES,
@@ -57,6 +59,7 @@ async def test_notify_is_sent_only_after_commit(db, listener_probe, monkeypatch)
         "type": "board.updated",
         "board_id": 1,
         "category_ids": [],
+        "item_ids": [],
         "user_id": None,
         "session_ids": [],
         "origin": None,
@@ -80,6 +83,7 @@ async def test_published_event_carries_the_requests_client_id(client, db, listen
         "type": "category.changed",
         "board_id": board.id,
         "category_ids": [dairy.id],
+        "item_ids": [],
         "user_id": None,
         "session_ids": [],
         "origin": "tab-A",
@@ -102,6 +106,42 @@ async def test_large_event_is_split_into_payloads_under_8000_bytes(db, listener_
         received += payload["session_ids"]
     assert received == list(session_ids)
     await assert_nothing_published(listener_probe, within=0.3)
+
+
+async def test_large_item_id_list_is_split_too(db, listener_probe):
+    item_ids = tuple(range(10**12, 10**12 + 1000))  # about 14 kB of ids
+
+    await commit_and_publish(
+        db, BoardEvent(EventType.CATEGORY_CHANGED, board_id=3, category_ids=(7,), item_ids=item_ids)
+    )
+
+    received: list[int] = []
+    while len(received) < len(item_ids):
+        raw = await asyncio.wait_for(listener_probe.get(), 2)
+        assert len(raw.encode()) < MAX_PAYLOAD_BYTES
+        payload = json.loads(raw)
+        assert (payload["type"], payload["board_id"]) == ("category.changed", 3)
+        assert payload["category_ids"] == [7]  # goes with every part
+        received += payload["item_ids"]
+    assert received == list(item_ids)
+    await assert_nothing_published(listener_probe, within=0.3)
+
+
+async def test_events_go_out_on_the_notify_channel(db, settings, monkeypatch):
+    monkeypatch.setattr(events, "NOTIFY_CHANNEL", "board_events_probe")
+    connection = await asyncpg.connect(listener_dsn(settings.database_url))
+    payloads: asyncio.Queue[str] = asyncio.Queue()
+    try:
+        await connection.add_listener(
+            "board_events_probe",
+            lambda _connection, _pid, _channel, payload: payloads.put_nowait(payload),
+        )
+
+        await commit_and_publish(db, BoardEvent(EventType.BOARD_UPDATED, board_id=1))
+
+        assert (await next_payload(payloads))["type"] == "board.updated"
+    finally:
+        await connection.close()
 
 
 async def test_listener_reconnect_triggers_resync(db, settings):
@@ -242,6 +282,7 @@ async def test_signing_out_other_devices_publishes_their_sessions(
         "type": "sessions.revoked",
         "board_id": None,
         "category_ids": [],
+        "item_ids": [],
         "user_id": user.id,
         "session_ids": [phone_session],
         "origin": None,

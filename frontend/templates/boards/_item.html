@@ -1,6 +1,6 @@
 {# One item row, as item_row(iv, can_edit), iv being an ItemView. Done items are struck through.
-   The name opens the item modal, which reads the item from the data-* attributes only
-   (autoescaped like any other value).
+   The name opens the item modal (the read-only dialog for a member who may not edit), which reads
+   the item from the data-* attributes only (autoescaped like any other value).
    A macro, not an include: an include looks the template up and copies the whole context for every
    item (hundreds on a big board). So the row sees nothing of the page: what it needs besides
    iv and can_edit, pass as one more argument. -#}
@@ -14,11 +14,7 @@
   </label>
   {% endif %}
   <div class="min-w-0 flex-1">
-    {% if can_edit %}
     <button type="button" id="item-{{ item.id }}-name" class="item-name" data-name="{{ item.name }}" data-description="{{ item.description or '' }}" @click="openItem">{{ item.name }}</button>
-    {% else %}
-    <p class="break-words py-2.5">{{ item.name }}</p>
-    {% endif %}
     {% if item.description %}<p class="-mt-1.5 whitespace-pre-line break-words pb-2 text-sm text-slate-600 dark:text-slate-400">{{ item.description }}</p>{% endif %}
   </div>
   {#- A block around the inline-flex avatar, not a flex box: the <li>'s line-through reaches the text of a flex item, but not that of an inline-flex one. *:align-top keeps the row 44 px high. #}

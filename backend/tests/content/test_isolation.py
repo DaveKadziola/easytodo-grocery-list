@@ -29,6 +29,7 @@ ROUTES = [
     ("POST", "/items/{item}/move", {"category_id": "{other_category}"}),
     ("DELETE", "/items/{item}", None),
     ("POST", "/items/{item}/restore", None),
+    ("GET", "/items/{item}/details", None),
     ("POST", "/categories/{category}/clear-done", None),
 ]
 WRITES = [route for route in ROUTES if route[0] != "GET"]

@@ -19,7 +19,10 @@
   {% include "boards/_item_modal.html" %}
 </div>
 {% else %}
-{% include "boards/_board_content.html" %}
+<div x-data="itemViewer">
+  {% include "boards/_board_content.html" %}
+  {% include "boards/_item_viewer.html" %}
+</div>
 {% endif %}
 <nav id="bottom-bar" aria-label="Board" class="bottom-bar">
   <details class="relative">

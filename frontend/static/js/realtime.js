@@ -1,6 +1,7 @@
 // Live board updates (easytodo.realtime): a WebSocket per board page, its state shown in the
-// header. The server sends thin events ({"type", "board_id", "category_ids"}) and the page fetches
-// what they name through the normal routes, as HTML: one category, or the whole board. Every
+// header. The server sends thin events ({"type", "board_id", "category_ids"}, and "item_ids" when
+// the details of items changed) and the page fetches what they name through the normal routes, as
+// HTML: one category, or the whole board, or the details of the item that is open. Every
 // (re)connect reloads the whole board, since events may have been missed while the socket was down.
 // An update waits while the user is in the middle of something it would replace: a finger or
 // mouse button down, typing in one of its fields (a field with text in it, an IME composition, or
@@ -8,6 +9,9 @@
 // the cursor left in "Add item" after an add holds nothing), an open menu, a drag or the item
 // modal (board.js), or one of this tab's own requests (whose answer brings the change anyway). It
 // runs once they are done. board.js keeps the cursor and any typed text across the swap.
+// The open item's details are another matter: they are in the modal, outside the board, and only
+// #item-details is replaced, so they refresh while the modal is open (and the board waits for it
+// to close); only a finger down, an own request or typing in the details themselves holds them.
 // Loaded on the board page after board.js; connects once app.js has run (DOMContentLoaded).
 (() => {
   "use strict";
@@ -21,8 +25,9 @@
   const NO_ACCESS = [4403, 4404]; // removed from the board, or the board is gone
   const WRONG_ADDRESS = 4400; // the page is at an address the server does not accept
 
-  // Updates not run yet: the whole board, or single categories to fetch again or to remove.
-  const pending = { board: false, changed: new Set(), deleted: new Set() };
+  // Updates not run yet: the whole board, or single categories to fetch again or to remove, or the
+  // details of the open item.
+  const pending = { board: false, changed: new Set(), deleted: new Set(), details: false };
   // A board reload due because one of this tab's own changes lost a race (a 404 "resync"): the
   // user is waiting for it, so a focused field does not hold it.
   let boardUrgent = false;
@@ -35,6 +40,10 @@
   let refreshActivity = 0; // ownActivity when it was sent
   let answering = null; // the XHR whose answer htmx is handling right now
   let sendingRefresh = false; // set while htmx.ajax sends it (htmx:beforeSend comes synchronously)
+  let detailsRefreshing = false; // the same for the open item's details (their own, one at a time)
+  let detailsXhr = null;
+  let detailsActivity = 0;
+  let sendingDetails = false;
   let flushQueued = false;
   let composing = false; // an IME composition is running
   let lastKey = { field: null, at: 0 }; // where and when the user last typed
@@ -82,15 +91,50 @@
     );
   }
 
+  // Whether replacing the open item's details now would get in the user's way: not the modal (it
+  // is open), nor a menu, but a finger down, one of this tab's own requests or typing in the details.
+  function detailsBusy() {
+    const details = document.getElementById("item-details");
+    return pointersDown.size > 0 || ownRequests.size > 0 || (details !== null && typingIn(details));
+  }
+
   function scheduleFlush() {
     if (flushQueued) return;
     flushQueued = true;
     setTimeout(flush);
   }
 
+  // Fetches the open item's details again when an event named it, and nothing is in the way.
+  function flushDetails() {
+    if (!pending.details) return;
+    if (board().openItemId() === null) {
+      pending.details = false; // closed meanwhile: the next opening fetches them anyway
+      return;
+    }
+    if (detailsRefreshing || detailsBusy()) return;
+    pending.details = false;
+    sendingDetails = true;
+    let sent;
+    try {
+      sent = board().refreshDetails();
+    } finally {
+      sendingDetails = false;
+    }
+    detailsRefreshing = true;
+    detailsActivity = ownActivity;
+    Promise.resolve(sent)
+      .catch(() => {}) // a failed request shows its own error
+      .then(() => {
+        detailsRefreshing = false;
+        detailsXhr = null;
+        scheduleFlush();
+      });
+  }
+
   // Runs the pending updates that are not in the user's way.
   function flush() {
     flushQueued = false;
+    flushDetails();
     const content = document.querySelector(BOARD_CONTENT);
     if (refreshing || !content) return;
     if (reloadDue) {
@@ -156,8 +200,9 @@
 
   document.addEventListener("htmx:beforeSend", (event) => {
     const { xhr } = event.detail;
-    if (sendingRefresh) {
-      refreshXhr = xhr;
+    if (sendingRefresh || sendingDetails) {
+      if (sendingRefresh) refreshXhr = xhr;
+      else detailsXhr = xhr;
       xhr.easytodoBackground = true; // app.js: no "Could not reach the server" for it
       return;
     }
@@ -183,9 +228,17 @@
 
   // An update's answer is not swapped in when the user got busy meanwhile, or when one of this
   // tab's own requests started or ended while it was on its way (its snapshot may be older than
-  // that change, whose own answer is already on the page): it is fetched again later.
+  // that change, whose own answer is already on the page): it is fetched again later. The same for
+  // the open item's details.
   document.addEventListener("htmx:beforeSwap", (event) => {
     const { xhr, target, shouldSwap } = event.detail;
+    if (xhr === detailsXhr && shouldSwap) {
+      if (ownActivity !== detailsActivity || detailsBusy()) {
+        event.detail.shouldSwap = false;
+        pending.details = true;
+      }
+      return;
+    }
     if (xhr !== refreshXhr || !shouldSwap) return;
     if (ownActivity === refreshActivity && !busy(target)) return;
     event.detail.shouldSwap = false;
@@ -205,7 +258,7 @@
   document.addEventListener("resync", (event) => {
     const content = document.querySelector(BOARD_CONTENT);
     if (!content || event.target === content) return;
-    queueBoard(answering === null || answering !== refreshXhr);
+    queueBoard(answering === null || (answering !== refreshXhr && answering !== detailsXhr));
   });
   document.addEventListener("board:stale", () => queueBoard(true));
 
@@ -255,6 +308,7 @@
     switch (message.type) {
       case "category.changed":
         message.category_ids.forEach((id) => pending.changed.add(id));
+        if ((message.item_ids || []).includes(board().openItemId())) pending.details = true;
         break;
       case "category.deleted":
         message.category_ids.forEach((id) => pending.deleted.add(id));
@@ -295,6 +349,7 @@
         clearHolds();
         setStatus("live", "Live");
         pending.board = true; // whatever happened while not connected
+        pending.details = true;
         scheduleFlush();
       });
       ws.addEventListener("message", (event) => {
@@ -339,6 +394,7 @@
         connect();
       } else {
         pending.board = true;
+        pending.details = true;
         scheduleFlush();
       }
     }

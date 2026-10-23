@@ -36,11 +36,6 @@ def section(html: str, category_id: int) -> str:
     return match[0]
 
 
-def board_content(html: str) -> str:
-    """Everything from ``#board-content`` on (the header and the categories)."""
-    return html[html.index('<div id="board-content"') :]
-
-
 def test_templates_have_no_inline_handlers():  # Review Focus 1 + CSP
     paths = sorted((FRONTEND_DIR / "templates").rglob("*.html"))
     assert paths
@@ -57,9 +52,8 @@ async def test_viewer_sees_no_edit_controls(viewer_client, board, item):
     html = (await viewer_client.get(f"/boards/{board.id}")).text
     assert 'hx-post="/items/' not in html and "Add item" not in html
     assert "Milk" in html
-    content = board_content(html)
-    for control in EDIT_CONTROLS:
-        assert control not in content, control
+    for control in EDIT_CONTROLS:  # the whole page: the viewer's dialog is outside #board-content
+        assert control not in html, control
 
 
 async def test_viewer_category_fragment_has_no_edit_controls(viewer_client, board, item):

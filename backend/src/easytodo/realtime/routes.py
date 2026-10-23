@@ -1,7 +1,8 @@
 """``WS /ws/boards/{board_id}?client_id=…``: the board page's live updates.
 
-The server only sends: ``{"type", "board_id", "category_ids"}`` messages from the hub (the page
-fetches the HTML it needs itself), then possibly a close code. The page sends nothing.
+The server only sends: ``{"type", "board_id", "category_ids"}`` messages from the hub, plus
+``"item_ids"`` when there are some (the page fetches the HTML it needs itself), then possibly a
+close code. The page sends nothing.
 
 verify_csrf skips WebSockets, so this route is their only guard: before anything is subscribed
 or sent it checks the ``Origin`` (4400), the session (4401) and the membership (4404), and once

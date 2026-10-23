@@ -47,6 +47,8 @@ def _message(event: BoardEvent, type_: EventType | None = None, *, reload: bool 
         "board_id": event.board_id,
         "category_ids": list(event.category_ids),
     }
+    if event.item_ids:
+        message["item_ids"] = list(event.item_ids)
     if reload:
         message["reload"] = True
     return json.dumps(message)

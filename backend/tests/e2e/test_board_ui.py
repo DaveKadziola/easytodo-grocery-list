@@ -296,6 +296,44 @@ def test_item_modal_shows_names_with_quotes_and_html_literally(
     expect(page.get_by_role("heading", name=NASTY, exact=True)).to_be_visible()
 
 
+def test_viewer_reads_an_item_in_a_read_only_dialog(signed_in_as, seed, user, open_board):
+    async def make(db) -> int:
+        vic = await create_user(db, "vic@example.com")
+        board = await create_board(db, user, "Groceries", {vic: BoardRole.VIEWER})
+        dairy = await create_category(db, board, "Dairy")
+        await create_item(db, dairy, "Milk", created_by=user, description="2 litres")
+        return board.id
+
+    board_id = seed(make)
+    page = signed_in_as("vic@example.com")
+    problems = watch_console(page)
+    open_board(page, board_id)
+    opener = page.get_by_role("button", name="Milk", exact=True)
+
+    opener.click()
+
+    dialog = page.get_by_role("dialog", name="Milk")
+    expect(dialog).to_contain_text("2 litres")
+    expect(dialog.locator("#item-details")).to_contain_text("Modified")  # loaded
+    expect(dialog.locator("#item-details")).to_contain_text("Added by dave")
+    expect(dialog.locator("input, textarea, select, form")).to_have_count(0)
+    expect(dialog.get_by_role("checkbox")).to_have_count(0)
+    expect(page.locator("#board-content")).to_have_attribute("inert", "")
+    close = dialog.get_by_role("button", name="Close")
+    expect(close).to_be_focused()
+    page.keyboard.press("Tab")
+    expect(close).to_be_focused()  # the only control: Tab stays on it
+    page.keyboard.press("Shift+Tab")
+    expect(close).to_be_focused()
+
+    page.keyboard.press("Escape")
+
+    expect(dialog).to_be_hidden()
+    expect(opener).to_be_focused()
+    expect(page.locator("#board-content")).not_to_have_attribute("inert", "")
+    assert problems == []
+
+
 def test_item_modal_moves_and_deletes_items(logged_in_page, seed, user, open_board):
     page = logged_in_page
     board_id = seed_board(seed, user, {"Dairy": ["Butter", "Milk"], "Bakery": ["Bread"]})

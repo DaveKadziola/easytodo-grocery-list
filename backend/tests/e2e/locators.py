@@ -23,8 +23,8 @@ def items_of(page: Page, category_name: str) -> Locator:
 
 def item(page: Page, name: str) -> Locator:
     """The row of the item ``name``, found by the button with its name: the avatar and the
-    other text in the row (initials, counts) don't get in the way. (A viewer has no such button:
-    the name is plain text on the pages of those who may not edit.)"""
+    other text in the row (initials, counts) don't get in the way. (Every role has it: the name
+    opens the item's details, for a viewer in a read-only dialog.)"""
     return page.locator("li[data-item-id]").filter(
         has=page.get_by_role("button", name=name, exact=True)
     )

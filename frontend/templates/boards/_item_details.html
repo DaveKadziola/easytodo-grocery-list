@@ -1,0 +1,13 @@
+{# An item's details, the fragment GET /items/{id}/details answers with: it replaces the (empty)
+   #item-details in the slot of the editor's item modal or of the viewer's dialog, and again
+   whenever an event names the item (static/js/realtime.js). Read-only markup for every role.
+   Context: details (ItemDetails). Who added the item is named only on a shared board. -#}
+{% set item = details.item %}
+<div id="item-details" data-details-item-id="{{ item.id }}" class="mt-6 space-y-4 border-t border-slate-200 pt-4 dark:border-slate-700">
+  <p class="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600 dark:text-slate-400">
+    <span>{% if details.show_author %}Added by {{ details.author.name }} · {% else %}Added {% endif %}<time datetime="{{ item.created_at.isoformat() }}" class="whitespace-nowrap">{{ item.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</time></span>
+    <span>Modified <time datetime="{{ item.updated_at.isoformat() }}" class="whitespace-nowrap">{{ item.updated_at.strftime("%Y-%m-%d %H:%M") }} UTC</time></span>
+  </p>
+  {#- The checklist goes here: <section id="item-checklist"> (details.entries). #}
+  {#- The attached files go here: <section id="item-attachments"> (details.attachments). #}
+</div>

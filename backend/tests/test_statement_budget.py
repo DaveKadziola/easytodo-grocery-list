@@ -181,10 +181,13 @@ async def test_item_row_macro_renders_like_before(client_factory, db, shared):
     assert NASTY not in html
     assert 'class="avatar' not in nasty_row
 
-    # A viewer gets the same rows without the controls.
+    # A viewer gets the same rows without the checkbox: the name opens the read-only dialog.
     viewer_html = (await viewer_client.get(f"/categories/{dairy.id}")).text
     viewer_milk = row_of(viewer_html, milk)
-    assert '<p class="break-words py-2.5">Milk</p>' in viewer_milk
+    assert (
+        f'<button type="button" id="item-{milk.id}-name" class="item-name" data-name="Milk" '
+        'data-description="" @click="openItem">Milk</button>'
+    ) in viewer_milk
     assert 'aria-hidden="true" title="owner">O</span>' in viewer_milk
     assert 'type="checkbox"' not in viewer_html
-    assert 'class="item-name"' not in viewer_html
+    assert row_of(viewer_html, nasty).count('data-name="' + NASTY_ESCAPED + '"') == 1

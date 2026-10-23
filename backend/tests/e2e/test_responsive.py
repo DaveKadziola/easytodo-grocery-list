@@ -266,6 +266,7 @@ def test_theme_follows_the_system_and_stays_readable(
     sort_menu.click()
     page.get_by_role("button", name="Bread", exact=True).click()  # the item modal
     expect(page.get_by_role("dialog")).to_be_visible()
+    expect(page.locator("#item-details")).to_contain_text("Modified")  # with its details
     assert page.evaluate(LOW_CONTRAST_TEXT, AA) == []
     for path in ("/boards", "/boards/archived", f"/boards/{seeded_board}/archive", "/account"):
         page.goto(path)
@@ -351,6 +352,31 @@ def test_item_modal_keeps_the_keyboard_inside_and_closes_on_escape(logged_in_pag
 
     expect(dialog).to_be_hidden()
     expect(opener).to_be_focused()
+
+
+def test_item_modal_focus_trap_skips_what_cannot_take_focus(logged_in_page_with_seed):
+    page = logged_in_page_with_seed
+    page.get_by_role("button", name="Bread", exact=True).click()
+    dialog = page.get_by_role("dialog")
+    expect(dialog.locator("#item-details")).to_contain_text("Modified")  # loaded
+    page.evaluate(
+        """() => {
+            const details = document.getElementById("item-details");
+            const link = Object.assign(document.createElement("a"), { href: "#", textContent: "Link" });
+            const disabled = Object.assign(document.createElement("button"), { disabled: true, textContent: "Off" });
+            const hidden = Object.assign(document.createElement("button"), { hidden: true, textContent: "Gone" });
+            details.append(link, disabled, hidden);
+        }"""
+    )
+    link = dialog.get_by_role("link", name="Link")
+    dialog.get_by_role("button", name="Save").focus()
+
+    page.keyboard.press("Tab")
+    expect(link).to_be_focused()
+    page.keyboard.press("Tab")
+    expect(dialog.get_by_label("Name")).to_be_focused()  # round again, not into the disabled one
+    page.keyboard.press("Shift+Tab")
+    expect(link).to_be_focused()
 
 
 def test_every_icon_control_has_a_label(logged_in_page_with_seed):

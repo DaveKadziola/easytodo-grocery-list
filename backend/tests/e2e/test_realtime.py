@@ -6,16 +6,18 @@ device out or the member is removed; after a dropped connection it reconnects an
 import json
 import re
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 import pytest
 from factories import create_board, create_category, create_item, create_user
 from playwright.sync_api import Locator, Page, Route, WebSocketRoute, expect
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 
 from e2e.conftest import open_board_menu
 from e2e.locators import add_item, category, item, items_of
 from easytodo.content import service
-from easytodo.models import BoardMember, BoardRole, Category
+from easytodo.models import BoardMember, BoardRole, Category, Item
+from easytodo.realtime.events import commit_and_publish
 
 pytestmark = pytest.mark.e2e
 
@@ -23,6 +25,7 @@ LIVE_UPDATE_MS = 2000  # how soon a change must show on the other device
 SETTLE_MS = 1000  # long enough for an update that is (wrongly) not held back to show
 MOVED = re.compile(r"/items/\d+/move$")
 TOGGLED = re.compile(r"/items/\d+/toggle$")
+DETAILS = re.compile(r"/items/\d+/details$")
 
 
 def received_messages(page: Page) -> list[dict]:
@@ -175,6 +178,67 @@ def test_remote_change_waits_for_the_item_modal_to_close(two_logged_in_pages):
     expect(items_of(b, "Dairy")).to_have_text([re.compile("Bread"), re.compile("Milk")])
 
 
+def publish_item_event(seed, board_id: int, category_id: int, *item_ids: int) -> None:
+    """Announce a change to these items, as the checklist and attachment routes do, to every
+    device on the board."""
+
+    async def publish(db):
+        event = service._category_changed(board_id, category_id, item_ids=item_ids)
+        await commit_and_publish(db, event)
+
+    seed(publish)
+
+
+def test_open_item_details_refresh_live_while_the_board_waits(
+    logged_in_page, seed, user, open_board
+):
+    page = logged_in_page
+
+    async def make(db):
+        board = await create_board(db, user, "Groceries")
+        dairy = await create_category(db, board, "Dairy")
+        milk = await create_item(db, dairy, "Milk")
+        bread = await create_item(db, dairy, "Bread")
+        return board.id, dairy.id, milk.id, bread.id
+
+    board_id, dairy_id, milk_id, bread_id = seed(make)
+    open_board(page, board_id)
+    fetched: list[str] = []
+    page.on("request", lambda r: fetched.append(r.url) if DETAILS.search(r.url) else None)
+    page.get_by_role("button", name="Milk", exact=True).click()
+    dialog = page.get_by_role("dialog")
+    details = dialog.locator("#item-details")
+    expect(details).to_contain_text("Modified")  # loaded
+    name = dialog.get_by_label("Name")
+    name.fill("Oat milk")
+    fetched.clear()
+
+    publish_item_event(seed, board_id, dairy_id, bread_id)  # not the open item
+    page.wait_for_timeout(SETTLE_MS)
+
+    assert fetched == []
+
+    async def edit(db):
+        await db.execute(
+            update(Item)
+            .where(Item.id == milk_id)
+            .values(name="Whole milk", updated_at=datetime(2031, 5, 6, 7, 8, tzinfo=UTC))
+        )
+        await db.commit()
+
+    seed(edit)
+    publish_item_event(seed, board_id, dairy_id, milk_id)  # the open one
+
+    expect(details).to_contain_text("Modified 2031-05-06 07:08 UTC", timeout=LIVE_UPDATE_MS)
+    expect(name).to_have_value("Oat milk")  # what is being typed stays
+    expect(name).to_be_focused()
+    expect(page.locator(f"#item-{milk_id}-name")).to_have_text("Milk")  # the board waits
+    dialog.get_by_role("button", name="Cancel").click()
+    expect(page.get_by_role("button", name="Whole milk", exact=True)).to_be_visible(
+        timeout=LIVE_UPDATE_MS
+    )
+
+
 def test_refresh_during_a_held_touch_drag_does_not_end_it(
     logged_in_page_mobile, seed, user, open_board
 ):
@@ -286,14 +350,20 @@ def test_promoted_viewer_can_open_the_item_modal_without_reloading(
     board_id, viewer_id = seed(make)
     viewer_page = signed_in_as("vic@example.com")
     open_board(viewer_page, board_id)
-    expect(viewer_page.get_by_role("button", name="Milk", exact=True)).to_have_count(0)
+    viewer_page.get_by_role("button", name="Milk", exact=True).click()  # the read-only dialog
+    expect(viewer_page.get_by_role("dialog").get_by_label("Name")).to_have_count(0)
+    expect(viewer_page.get_by_role("button", name="Close")).to_be_focused()  # Esc is heard there
+    viewer_page.keyboard.press("Escape")
+    expect(viewer_page.get_by_role("dialog")).to_have_count(0)
 
     owner_page = logged_in_page
     owner_page.goto(f"/boards/{board_id}/members")
     with owner_page.expect_response(re.compile(rf"/members/{viewer_id}$")):
         owner_page.get_by_label("Role of vic@example.com").select_option("editor")
 
-    viewer_page.get_by_role("button", name="Milk", exact=True).click(timeout=LIVE_UPDATE_MS)
+    # A viewer has a button for the name too: the page is the editor's once "Add item" is there.
+    expect(viewer_page.get_by_placeholder("Add item")).to_be_visible(timeout=LIVE_UPDATE_MS)
+    viewer_page.get_by_role("button", name="Milk", exact=True).click()
     expect(viewer_page.get_by_role("dialog").get_by_label("Name")).to_have_value("Milk")
 
 
@@ -563,9 +633,8 @@ def test_role_change_reload_waits_for_the_item_modal(
     assert page.evaluate("window.notReloaded") is True  # not while the modal is open
     expect(dialog.get_by_label("Name")).to_have_value("Oat milk")
     dialog.get_by_role("button", name="Cancel").click()
-    expect(page.get_by_role("button", name="Milk", exact=True)).to_have_count(
-        0, timeout=LIVE_UPDATE_MS
-    )  # reloaded as a viewer
+    # Reloaded as a viewer: no "Add item" any more (the name's button is there for a viewer too).
+    expect(page.get_by_placeholder("Add item")).to_have_count(0, timeout=LIVE_UPDATE_MS)
     assert page.evaluate("window.notReloaded") is None
 
 
