@@ -197,10 +197,13 @@ def test_phone_bottom_bar_adds_categories_and_switches_boards(
     page = logged_in_page_mobile
     open_board(page, seeded_board)
     bar = page.locator("#bottom-bar")
-    field = page.get_by_placeholder("New category")
+    opener = page.get_by_role("button", name="New category")
+    dialog = page.get_by_role("dialog", name="New category")
+    name = dialog.get_by_label("Category name")
 
     expect(bar).to_be_visible()
-    expect(field).to_be_hidden()  # on a phone the form shows only from the bottom bar
+    expect(opener).to_have_count(1)  # the bar's: the one in the board header shows from 640 px
+    expect(dialog).to_be_hidden()
     box = bar.bounding_box()
     assert box["y"] + box["height"] == page.viewport_size["height"]  # stuck to the bottom
     page.evaluate("window.scrollTo(0, document.scrollingElement.scrollHeight)")
@@ -208,11 +211,19 @@ def test_phone_bottom_bar_adds_categories_and_switches_boards(
     assert last["y"] + last["height"] <= box["y"]  # the bar never hides the last category
 
     bar.get_by_role("button", name="New category").tap()
-    expect(field).to_be_focused()
-    field.fill("Frozen")
-    field.press("Enter")
-    expect(category(page, "Frozen")).to_be_visible()
-    expect(field).to_be_focused()
+    expect(dialog).to_be_visible()
+    expect(name).to_be_focused()
+    at_least_44px(dialog.locator("label:has(> input[type=radio])"))  # where a tap on a radio lands
+    at_least_44px(dialog.get_by_role("button"))
+    assert too_small_targets(page) == []
+    assert page.evaluate(LOW_CONTRAST_TEXT, AA) == []
+    name.fill("Frozen")
+    dialog.get_by_text("On top").tap()
+    expect(dialog.get_by_label("On top")).to_be_checked()
+    page.keyboard.press("Enter")
+    expect(dialog).to_be_hidden()
+    expect(page.locator("section[data-category-id] h2").first).to_have_text("Frozen")
+    expect(category(page, "Frozen").get_by_placeholder("Add item")).to_be_focused()
 
     bar.get_by_text("Boards", exact=True).tap()
     expect(bar.get_by_role("link", name="Groceries")).to_have_attribute("aria-current", "page")
@@ -222,6 +233,7 @@ def test_phone_bottom_bar_adds_categories_and_switches_boards(
 
     page.set_viewport_size({"width": 1280, "height": 800})
     expect(page.locator("#bottom-bar")).to_be_hidden()  # a phone thing
+    expect(opener).to_have_count(1)  # now the header's
 
 
 def test_phone_shows_the_list_right_below_the_board_name(
@@ -419,6 +431,66 @@ def test_item_modal_focus_trap_skips_what_cannot_take_focus(logged_in_page_with_
     expect(dialog.get_by_label("Name")).to_be_focused()  # round again, not into the disabled one
     page.keyboard.press("Shift+Tab")
     expect(link).to_be_focused()
+
+
+def test_new_category_dialog_keeps_the_keyboard_inside_and_the_radios_one_stop(
+    logged_in_page_with_seed,
+):
+    page = logged_in_page_with_seed
+    opener = page.get_by_role("button", name="New category")
+    opener.click()
+    dialog = page.get_by_role("dialog", name="New category")
+    name = dialog.get_by_label("Category name")
+    bottom, top = dialog.get_by_label("At the bottom"), dialog.get_by_label("On top")
+    cancel = dialog.get_by_role("button", name="Cancel")
+    add = dialog.get_by_role("button", name="Add category")
+    expect(name).to_be_focused()
+
+    page.keyboard.press("Tab")
+    expect(bottom).to_be_focused()  # the group is entered once, at the checked one
+    focus_ring = bottom.evaluate(
+        "(el) => { const s = getComputedStyle(el); return [s.outlineStyle, s.outlineWidth]; }"
+    )
+    assert focus_ring[0] != "none" and focus_ring[1] != "0px", focus_ring  # the focus shows
+    page.keyboard.press("ArrowDown")  # within the group, as natively: moves and checks
+    expect(top).to_be_focused()
+    expect(top).to_be_checked()
+    expect(bottom).not_to_be_checked()
+    page.keyboard.press("Tab")
+    expect(cancel).to_be_focused()  # out of the group at once, not through "At the bottom"
+    page.keyboard.press("Shift+Tab")
+    expect(top).to_be_focused()  # and back in at the checked one
+    page.keyboard.press("Shift+Tab")
+    expect(name).to_be_focused()
+    page.keyboard.press("Shift+Tab")
+    expect(add).to_be_focused()  # round the other way, never out to the page behind
+    page.keyboard.press("Tab")
+    expect(name).to_be_focused()
+
+    # Text cannot take the focus, so a click on it leaves it on the dialog's panel: Escape is still
+    # heard.
+    dialog.get_by_role("heading", name="New category").click()
+    page.keyboard.press("Escape")
+
+    expect(dialog).to_be_hidden()
+    expect(opener).to_be_focused()
+
+
+def test_new_category_dialog_keeps_the_keyboard_after_a_refusal(logged_in_page_with_seed):
+    page = logged_in_page_with_seed
+    page.get_by_role("button", name="New category").click()
+    dialog = page.get_by_role("dialog", name="New category")
+    name = dialog.get_by_label("Category name")
+    name.fill("Dairy")  # taken
+
+    dialog.get_by_role("button", name="Add category").click()  # a click disables the button
+
+    expect(page.locator("#toasts")).to_contain_text("A category with this name already exists.")
+    expect(dialog.get_by_role("button", name="Add category")).to_be_enabled()
+    expect(name).to_be_focused()  # not lost with the button: Escape is still heard
+    expect(name).to_have_value("Dairy")
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
 
 
 def test_every_icon_control_has_a_label(logged_in_page_with_seed):

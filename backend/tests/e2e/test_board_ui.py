@@ -427,25 +427,82 @@ def test_undo_is_reachable_from_the_keyboard(logged_in_page, seed, user, open_bo
     assert problems == []
 
 
-def test_new_category_goes_last_and_the_field_is_ready_for_the_next(
-    logged_in_page, seed, user, open_board
-):
+def test_new_category_dialog_adds_at_the_bottom_or_on_top(logged_in_page, seed, user, open_board):
     page = logged_in_page
     board_id = seed_board(seed, user, {})
     open_board(page, board_id)
+    problems = watch_console(page)
     expect(page.get_by_text("Add your first category")).to_be_visible()
-    field = page.get_by_placeholder("New category")
+    opener = page.get_by_role("button", name="New category")
+    dialog = page.get_by_role("dialog", name="New category")
+    # "Category name" is also the label of the sections' rename fields (and of the move dialog's).
+    name = dialog.get_by_label("Category name")
+    bottom, top = dialog.get_by_label("At the bottom"), dialog.get_by_label("On top")
 
-    for name in ("Dairy", "Bakery"):
-        field.fill(name)
-        field.press("Enter")
-        expect(category(page, name)).to_be_visible()
-        expect(field).to_have_value("")
-        expect(field).to_be_focused()
+    for category_name, placement in (
+        ("Dairy", bottom),
+        ("Bakery", bottom),
+        ("Fruit", top),
+    ):
+        opener.click()
+        expect(dialog).to_be_visible()
+        expect(page.locator("#board-content")).to_have_attribute("inert", "")
+        expect(name).to_be_focused()
+        expect(name).to_have_value("")  # what the last time left is gone
+        expect(bottom).to_be_checked()
+        name.fill(category_name)
+        placement.check()
+        name.press("Enter")
+
+        expect(dialog).to_be_hidden()
+        expect(page.locator("#board-content")).not_to_have_attribute("inert", "")
+        expect(category(page, category_name).get_by_placeholder("Add item")).to_be_focused()
 
     expect(page.get_by_text("Add your first category")).to_be_hidden()
+    sections = page.locator("section[data-category-id] h2")
+    expect(sections).to_have_text(["Fruit", "Dairy", "Bakery"])
     page.reload()
-    expect(page.locator("section[data-category-id] h2")).to_have_text(["Dairy", "Bakery"])
+    expect(sections).to_have_text(["Fruit", "Dairy", "Bakery"])
+
+    # Tab goes round the dialog, and the two radio buttons are one stop (the checked one).
+    opener.click()
+    expect(name).to_be_focused()
+    for control in (
+        bottom,
+        dialog.get_by_role("button", name="Cancel"),
+        dialog.get_by_role("button", name="Add category"),
+        name,
+    ):
+        page.keyboard.press("Tab")
+        expect(control).to_be_focused()
+    page.keyboard.press("Shift+Tab")
+    expect(dialog.get_by_role("button", name="Add category")).to_be_focused()
+
+    # Escape, a tap beside the dialog and "Cancel" give the focus back to the button.
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
+    expect(opener).to_be_focused()
+    expect(page.locator("#board-content")).not_to_have_attribute("inert", "")
+    opener.click()
+    expect(name).to_be_focused()
+    page.mouse.click(x=5, y=5)
+    expect(dialog).to_be_hidden()
+    expect(opener).to_be_focused()
+    opener.click()
+    dialog.get_by_role("button", name="Cancel").click()
+    expect(dialog).to_be_hidden()
+    expect(opener).to_be_focused()
+    expect(page.locator("#board-content")).not_to_have_attribute("inert", "")
+    assert problems == []
+
+    # A name that is taken: the toast says so, and the dialog stays with the name.
+    opener.click()
+    name.fill("dairy")
+    name.press("Enter")
+    expect(page.locator("#toasts")).to_contain_text("A category with this name already exists.")
+    expect(dialog).to_be_visible()
+    expect(name).to_have_value("dairy")
+    expect(sections).to_have_text(["Fruit", "Dairy", "Bakery"])
 
 
 def test_category_menu_renames_clears_done_and_archives(logged_in_page, seed, user, open_board):

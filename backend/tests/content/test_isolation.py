@@ -23,7 +23,7 @@ NO_PERMISSION = "You don't have permission to do that."
 ROUTES = [
     ("GET", "/boards/{board}/content", None),
     ("GET", "/boards/{board}/archive", None),
-    ("POST", "/boards/{board}/categories", {"name": "Hijacked"}),
+    ("POST", "/boards/{board}/categories", {"name": "Hijacked", "placement": "top"}),
     ("PUT", "/boards/{board}/categories/order", {"ids": ["{category}", "{other_category}"]}),
     ("GET", "/categories/{category}", None),
     ("PATCH", "/categories/{category}", {"name": "Hijacked"}),

@@ -47,6 +47,9 @@ from easytodo.web import flash, prompt_answer, render
 router = APIRouter()
 
 ITEM_DELETED = "Item deleted."
+PLACEMENT_INVALID = "Choose where to add the category."
+# The "placement" a new category can be added with, as create_category's ``on_top``.
+PLACEMENTS = {"bottom": False, "top": True}
 OptionalFormField = Annotated[str | None, Form()]
 
 
@@ -99,8 +102,20 @@ async def archive_page(
 async def new_category(
     request: Request, db: DbSession, user: CurrentUser, board_id: int, name: FormField = ""
 ) -> Response:
-    category = await create_category(db, board_id, user, name)
-    return await _current_category(request, db, user, category.id, status_code=201)
+    """Add a category at the bottom of the board (the default) or, for ``placement=top``, on top of
+    it; the answer then carries ``HX-Reswap: afterbegin``, so that the "New category" dialog's
+    ``beforeend`` swap puts the section first instead of last."""
+    # Read from the form itself, not as a parameter: FastAPI takes an empty field for a missing
+    # one and gives it the default, and an empty placement is not "bottom" but a refused input.
+    placement = (await request.form()).get("placement", "bottom")
+    if placement not in PLACEMENTS:
+        raise ValidationFailed(PLACEMENT_INVALID)
+    on_top = PLACEMENTS[placement]
+    category = await create_category(db, board_id, user, name, on_top=on_top)
+    response = await _current_category(request, db, user, category.id, status_code=201)
+    if on_top:
+        response.headers["HX-Reswap"] = "afterbegin"
+    return response
 
 
 @router.put("/boards/{board_id}/categories/order")

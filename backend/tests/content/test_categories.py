@@ -1,8 +1,11 @@
 import json
 import re
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from factories import create_board, create_category, create_item, create_user
+from helpers import NASTY, NASTY_ESCAPED, count_queries
 from sqlalchemy import delete, select
 
 from easytodo.models import Category, Item
@@ -11,6 +14,7 @@ from easytodo.realtime.events import BoardEvent, EventType
 HX = {"HX-Request": "true"}
 DUPLICATE = "A category with this name already exists."
 OUT_OF_DATE = "Category order is out of date. Refresh the board."
+PLACEMENT_INVALID = "Choose where to add the category."
 
 
 def toast(response) -> str:
@@ -53,6 +57,105 @@ async def test_create_category_returns_its_fragment_and_goes_last(
     assert r.status_code == 201
     assert await db.scalar(select(Category.position).where(Category.name == "Frozen")) == 8
     assert await categories_in_order(db, board) == ["Fresh fruit", "Bakery", "Frozen"]
+
+
+async def position_of(db, name: str) -> int:
+    return await db.scalar(select(Category.position).where(Category.name == name))
+
+
+async def test_new_category_on_top_goes_first(editor_client, board, db, published):
+    # An archived category does not count: its position (-5) is not what "on top" goes above.
+    await create_category(db, board, "Old", position=-5, archived_at=datetime.now(UTC))
+
+    r = await editor_client.post(
+        f"/boards/{board.id}/categories",
+        data={"name": "Fruit", "placement": "top"},
+        headers=HX | {"X-Client-Id": "tab-1"},
+    )
+
+    assert r.status_code == 201 and r.headers["hx-reswap"] == "afterbegin"
+    assert 'data-category-name="Fruit"' in r.text
+    fruit_id = await db.scalar(select(Category.id).where(Category.name == "Fruit"))
+    assert await position_of(db, "Fruit") == 0  # an empty board (to the active ones): 0, not -6
+    assert published == [
+        (
+            (BoardEvent(EventType.CATEGORY_CHANGED, board_id=board.id, category_ids=(fruit_id,)),),
+            "tab-1",
+        )
+    ]
+
+    await create_category(db, board, "Dairy", position=3)
+    r = await editor_client.post(
+        f"/boards/{board.id}/categories", data={"name": "Nuts", "placement": "top"}, headers=HX
+    )
+
+    assert r.status_code == 201 and r.headers["hx-reswap"] == "afterbegin"
+    assert await position_of(db, "Nuts") == -1
+    content = (await editor_client.get(f"/boards/{board.id}/content")).text
+    ids = {
+        name: await db.scalar(select(Category.id).where(Category.name == name))
+        for name in ("Nuts", "Fruit", "Dairy")
+    }
+    assert re.findall(r'<section id="category-(\d+)"', content) == [
+        str(ids["Nuts"]),
+        str(ids["Fruit"]),
+        str(ids["Dairy"]),
+    ]
+    assert await categories_in_order(db, board) == ["Old", "Nuts", "Fruit", "Dairy"]
+
+
+async def test_bottom_stays_the_default(editor_client, board, db):
+    await create_category(db, board, "Dairy", position=4)
+
+    r = await editor_client.post(f"/boards/{board.id}/categories", data={"name": "Bread"})
+    assert r.status_code == 201 and "hx-reswap" not in r.headers
+    assert await position_of(db, "Bread") == 5
+
+    r = await editor_client.post(
+        f"/boards/{board.id}/categories", data={"name": "Eggs", "placement": "bottom"}
+    )
+    assert r.status_code == 201 and "hx-reswap" not in r.headers
+    assert await position_of(db, "Eggs") == 6
+
+
+@pytest.mark.parametrize("placement", ["", "middle", "TOP", "top "])
+async def test_invalid_placement_is_422(editor_client, board, db, published, placement):
+    r = await editor_client.post(
+        f"/boards/{board.id}/categories", data={"name": "Fruit", "placement": placement}, headers=HX
+    )
+
+    assert r.status_code == 422 and toast(r) == PLACEMENT_INVALID
+    assert await categories_in_order(db, board) == [] and published == []
+
+
+async def test_on_top_finds_its_position_in_one_unlocked_statement(app, editor_client, board, db):
+    await create_category(db, board, "Dairy", position=1)
+    statements = {}
+    for placement in ("bottom", "top"):
+        with count_queries(SimpleNamespace(bind=app.state.engine)) as ran:
+            r = await editor_client.post(
+                f"/boards/{board.id}/categories",
+                data={"name": placement, "placement": placement},
+                headers=HX,
+            )
+        assert r.status_code == 201
+        statements[placement] = ran
+
+    assert len(statements["top"]) == len(statements["bottom"])  # the min() instead of the max()
+    [position] = [q for q in statements["top"] if "min(categories.position)" in q]
+    assert "FOR " not in position  # no lock, as for the max()
+    assert not any("max(categories.position)" in q for q in statements["top"])
+
+
+async def test_new_category_name_is_escaped_on_top_too(editor_client, board):
+    # The same fragment as at the bottom (test_names_are_rendered_escaped covers that one).
+    r = await editor_client.post(
+        f"/boards/{board.id}/categories", data={"name": NASTY, "placement": "top"}, headers=HX
+    )
+
+    assert r.status_code == 201
+    assert NASTY not in r.text and r.text.count(NASTY_ESCAPED) >= 3
+    assert "<script>alert(1)</script>" not in r.text
 
 
 async def test_duplicate_category_name_is_409_case_insensitive(editor_client, board, db):
@@ -237,8 +340,9 @@ async def test_names_are_rendered_escaped(editor_client, board):  # Review Focus
         assert r.text.count(escaped) >= 3  # category name, item name and item description
 
 
+@pytest.mark.parametrize("placement", ["bottom", "top"])
 async def test_board_deleted_while_a_category_is_created_is_a_404_not_a_500(
-    editor_client, board, db, monkeypatch, _db_engine
+    editor_client, board, db, monkeypatch, _db_engine, placement
 ):
     """The board goes (another device deleted it) between the membership check and the insert:
     the foreign key refuses the row, which is a 404 like any other vanished board."""
@@ -259,7 +363,9 @@ async def test_board_deleted_while_a_category_is_created_is_a_404_not_a_500(
     monkeypatch.setattr(service, "require_board", check_then_delete)
 
     r = await editor_client.post(
-        f"/boards/{board.id}/categories", data={"name": "Bakery"}, headers=HX
+        f"/boards/{board.id}/categories",
+        data={"name": "Bakery", "placement": placement},
+        headers=HX,
     )
 
     assert r.status_code == 404

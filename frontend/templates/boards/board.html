@@ -3,7 +3,9 @@
    then realtime.js keeps it current over the board's WebSocket, and shows the connection in the
    header (#conn-status). On a phone a bar along the bottom holds the board switcher and "New
    category". A member who may edit gets the dialog that moves a category to another board, when
-   there is one to move it to; it is outside the board content, so that a reload leaves it alone. -#}
+   there is one to move it to, and the dialog that adds a category (which the "New category"
+   buttons in the header and the bottom bar open); they are outside the board content, so that a
+   reload leaves them alone. -#}
 {% extends "base.html" %}
 {% block title %}{{ view.board.name }} · EasyToDo{% endblock %}
 {% block scripts %}
@@ -35,6 +37,9 @@
 {% if can_edit and move_targets %}
 {% include "boards/_move_category.html" %}
 {% endif %}
+{% if can_edit %}
+{% include "boards/_new_category.html" %}
+{% endif %}
 <nav id="bottom-bar" aria-label="Board" class="bottom-bar">
   <details class="relative">
     <summary class="btn-secondary cursor-pointer list-none [&::-webkit-details-marker]:hidden">Boards</summary>
@@ -46,7 +51,7 @@
     </div>
   </details>
   {% if can_edit %}
-  <button type="button" class="btn-primary" data-focus="new-category-name">New category</button>
+  <button type="button" class="btn-primary" data-new-category aria-haspopup="dialog">New category</button>
   {% endif %}
 </nav>
 {% endblock %}

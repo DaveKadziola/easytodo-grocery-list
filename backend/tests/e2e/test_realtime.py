@@ -178,6 +178,44 @@ def test_remote_change_waits_for_the_item_modal_to_close(two_logged_in_pages):
     expect(items_of(b, "Dairy")).to_have_text([re.compile("Bread"), re.compile("Milk")])
 
 
+def test_remote_change_waits_for_the_new_category_dialog_to_close(two_logged_in_pages):
+    a, b = two_logged_in_pages
+    b.get_by_role("button", name="New category").click()
+    dialog = b.get_by_role("dialog", name="New category")
+    expect(dialog).to_be_visible()
+
+    add_item(a, "Dairy", "Bread")
+    b.wait_for_timeout(SETTLE_MS)
+
+    expect(items_of(b, "Dairy")).to_have_text([re.compile("Milk")])  # held back, as with the modal
+    expect(b.locator("#board-content")).to_have_attribute("inert", "")  # and still inert
+    dialog.get_by_role("button", name="Cancel").click()
+    expect(items_of(b, "Dairy")).to_have_text([re.compile("Bread"), re.compile("Milk")])
+    expect(b.locator("#board-content")).not_to_have_attribute("inert", "")
+
+
+def test_new_category_answered_after_its_dialog_was_closed_just_appears(two_logged_in_pages):
+    page, _ = two_logged_in_pages
+    held: list[Route] = []
+    page.route(re.compile(r"/boards/\d+/categories$"), lambda route: held.append(route))
+    opener = page.get_by_role("button", name="New category")
+    dialog = page.get_by_role("dialog", name="New category")
+    opener.click()
+    dialog.get_by_label("Category name").fill("Bakery")
+    dialog.get_by_label("Category name").press("Enter")
+    wait_until(page, lambda: held, "the new category's request")
+
+    dialog.get_by_role("button", name="Cancel").click()  # the answer is slow: given up on
+    expect(dialog).to_be_hidden()
+    expect(opener).to_be_focused()
+    held[0].continue_()
+
+    expect(category(page, "Bakery")).to_be_visible()
+    expect(opener).to_be_focused()  # the focus stays where the user left it
+    expect(dialog).to_be_hidden()
+    expect(page.locator("#board-content")).not_to_have_attribute("inert", "")
+
+
 def publish_item_event(seed, board_id: int, category_id: int, *item_ids: int) -> None:
     """Announce a change to these items, as the checklist and attachment routes do, to every
     device on the board."""

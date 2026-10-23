@@ -2,10 +2,11 @@
 // of those who may edit and the read-only dialog of those who may not (Alpine components
 // "itemModal" and "itemViewer", both with the open item's details fetched into their slot, and in
 // them the checklist: ticks, and drag and drop or ArrowUp / ArrowDown for its entries), the dialog
-// that moves a category to another board (the component "moveCategory"), ticks that
+// that moves a category to another board (the component "moveCategory") and the one that adds a
+// category, on top of the board or at the bottom (the component "newCategory"), ticks that
 // show at once, fields that are ready for the next entry and keep what the user typed when their
-// category or the details are swapped, folding categories away (per device), the bottom bar's "New
-// category", and a board reload when a change did not go through.
+// category or the details are swapped, folding categories away (per device), and a board reload
+// when a change did not go through.
 // Loaded before Alpine (see base.html), so the components are registered on alpine:init. They read
 // items only from data-* attributes, which the templates escape; no page data is ever written into
 // a script.
@@ -14,7 +15,9 @@
 // the document when that ends, a "board:stale" event when the page no longer shows what the
 // server has (it then queues a reload), and a "board:changed" event ({categoryId}) when the modal
 // closes after a change to the checklist (the category's tile shows its count). The category menu's
-// "Move to board…" opens the dialog with a "move-category" event on the window ({id, label}).
+// "Move to board…" opens the dialog with a "move-category" event on the window ({id, label}), and a
+// "New category" button ([data-new-category]) opens the one that adds a category with an
+// "open-new-category" event ({opener}: the button, to get the focus back).
 (() => {
   "use strict";
 
@@ -39,7 +42,7 @@
   let editing = false; // the item modal or dialog, or the dialog that moves a category, is open
   let openId = null; // the id (a number) of the item that is open in it
   let detailsChanged = false; // the open item's checklist was changed from this tab
-  let newCategoryShown = false; // on a phone the bottom bar's button showed the "New category" form
+  let addingCategory = false; // the dialog that adds a category is open
   let moveOpener = null; // the menu's button ("summary") that opened the move dialog, to get the focus back
 
   function boardContent() {
@@ -249,22 +252,9 @@
     });
   }
 
-  function newCategoryForm() {
-    const field = document.getElementById("new-category-name");
-    return field && field.form;
-  }
-
-  // Below 640 px the "New category" form is hidden (the bottom bar has the button); once the
-  // button showed it, it stays shown, also after the board is reloaded.
-  function showNewCategoryForm() {
-    const form = newCategoryForm();
-    if (form && form.classList.contains("hidden")) form.classList.replace("hidden", "flex");
-  }
-
   function setUp(root) {
     initSortable(root);
     applyCollapsed(root);
-    if (newCategoryShown) showNewCategoryForm();
   }
 
   document.addEventListener("DOMContentLoaded", () => setUp(document));
@@ -457,16 +447,10 @@
   });
 
   document.addEventListener("click", (event) => {
-    // <button data-focus="field-id"> (the bottom bar's "New category"): to that field, ready to type.
-    const focusButton = event.target.closest("[data-focus]");
-    const field = focusButton && document.getElementById(focusButton.dataset.focus);
-    if (field) {
-      if (field.id === "new-category-name") {
-        newCategoryShown = true;
-        showNewCategoryForm();
-      }
-      field.scrollIntoView({ block: "center" });
-      field.focus();
+    // A "New category" button (the board header's, the phone's bottom bar's): opens the dialog.
+    const newCategory = event.target.closest("[data-new-category]");
+    if (newCategory) {
+      window.dispatchEvent(new CustomEvent("open-new-category", { detail: { opener: newCategory } }));
       return;
     }
     // A category menu's "Move up" / "Move down": the keyboard's (and a fallback's) way to reorder.
@@ -532,7 +516,7 @@
   window.easytodoBoard = {
     refresh: refreshBoard,
     reloadSwap: RELOAD_SWAP,
-    isBusy: () => dragging || editing,
+    isBusy: () => dragging || editing || addingCategory,
     isDragging: () => dragging,
     openItemId: () => openId,
     refreshDetails,
@@ -569,6 +553,32 @@
       first.focus();
     }
   }
+
+  // The reverse of showing the dialog that adds a category (the component "newCategory"): the page
+  // behind is reachable again, and then the focus goes back to the button that opened the dialog,
+  // unless a category was added (its "Add item" field gets the focus instead).
+  function leaveNewCategory(component, restoreFocus) {
+    if (!component.open) return;
+    component.open = false;
+    addingCategory = false;
+    setPageInert(false);
+    const opener = component.opener;
+    component.opener = null;
+    if (restoreFocus && opener && opener.isConnected) opener.focus();
+    becameIdle();
+  }
+
+  // The submit button of the dialog that adds a category is disabled while its request is on its way,
+  // and a browser takes the focus from a button that gets disabled. After a refusal (409, 422, no
+  // answer) the dialog is still open, so the focus goes back into it, to the name, ready to be put
+  // right: Esc is heard only from inside the dialog. (A category that was added closed it already.)
+  document.addEventListener("htmx:afterRequest", (event) => {
+    const form = event.detail.elt;
+    if (!addingCategory || form.id !== "new-category-form") return;
+    if (!form.closest("[role=dialog]").contains(document.activeElement)) {
+      document.getElementById("new-category-name").focus();
+    }
+  });
 
   // What opening an item does in the modal and in the dialog alike: the details are fetched into
   // the slot (an empty #item-details holds the place for the answer), the board is held (live
@@ -789,6 +799,54 @@
         name.value = event.detail.suggestion;
         name.focus();
         name.select();
+      },
+    }));
+
+    // The dialog that adds a category (_new_category.html): a "New category" button opens it
+    // ("open-new-category" on the window, with the button as `opener`). Like the dialogs above it
+    // holds live updates back (addingCategory) and makes the page behind inert while it is open.
+    // The form's request swaps the new section into #categories (first for "On top", the answer's
+    // HX-Reswap header says so, otherwise last); a refused one (409, 422) swaps nothing and the
+    // dialog stays, with the name.
+    Alpine.data("newCategory", () => ({
+      open: false,
+      opener: null, // the button that opened it, to get the focus back
+
+      get closed() {
+        return !this.open;
+      },
+
+      // @open-new-category.window: an empty form (the name, "At the bottom") every time.
+      show(event) {
+        this.opener = event.detail.opener;
+        this.$refs.form.reset();
+        this.open = true;
+        addingCategory = true;
+        setPageInert(true);
+        this.$nextTick(() => this.$refs.name.focus());
+      },
+
+      trapFocus,
+
+      close() {
+        leaveNewCategory(this, true);
+      },
+
+      // @htmx:after-swap.window: the form's own request has put the new section in. (Alpine hands a
+      // method the event, so this does not call close(): that would take it for an argument.) The
+      // dialog closes, and the focus goes to the section's "Add item" field, ready for its items;
+      // when the dialog was closed meanwhile (the answer was slow) the section just appears.
+      added(event) {
+        const { requestConfig, xhr } = event.detail;
+        if (!this.open || !requestConfig || requestConfig.elt !== this.$refs.form) return;
+        const list = event.target;
+        const section = xhr.getResponseHeader("HX-Reswap") === "afterbegin" ? list.firstElementChild : list.lastElementChild;
+        leaveNewCategory(this, false);
+        const field = section && document.getElementById(`new-item-${section.dataset.categoryId}`);
+        if (field) {
+          field.scrollIntoView({ block: "center" });
+          field.focus();
+        }
       },
     }));
 

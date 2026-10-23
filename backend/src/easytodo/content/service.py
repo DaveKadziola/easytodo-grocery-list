@@ -264,6 +264,18 @@ async def _next_position(db: AsyncSession, board_id: int) -> int:
     return 0 if last is None else last + 1
 
 
+async def _top_position(db: AsyncSession, board_id: int) -> int:
+    """The position before the board's first active category; 0 on a board without any. Not
+    locked, like ``_next_position``: two new categories "on top" at once may share a position,
+    and then the older one (by id) stays first."""
+    first = await db.scalar(
+        select(func.min(Category.position)).where(
+            Category.board_id == board_id, Category.archived_at.is_(None)
+        )
+    )
+    return 0 if first is None else first - 1
+
+
 async def suggest_category_name(db: AsyncSession, board_id: int, name: str) -> str:
     """``name`` if no active category of the board has it (ignoring case), else the first free
     one of "name (2)" to "name (100)", ``name`` cut short to keep within 120 characters;
@@ -287,11 +299,14 @@ async def suggest_category_name(db: AsyncSession, board_id: int, name: str) -> s
     raise Conflict(CATEGORY_NAME_TAKEN)
 
 
-async def create_category(db: AsyncSession, board_id: int, user: User, name: str) -> Category:
-    """A new category at the end of the board."""
+async def create_category(
+    db: AsyncSession, board_id: int, user: User, name: str, *, on_top: bool = False
+) -> Category:
+    """A new category at the end of the board, or ``on_top`` of it (before the first active one)."""
     board, _ = await require_board(db, board_id, user, Action.EDIT_CONTENT)
     name = _clean_category_name(name)
-    category = Category(board_id=board.id, name=name, position=await _next_position(db, board.id))
+    position = await (_top_position if on_top else _next_position)(db, board.id)
+    category = Category(board_id=board.id, name=name, position=position)
     async with _unique_category_name(db):
         db.add(category)
     await commit_and_publish(db, _category_changed(board.id, category.id))

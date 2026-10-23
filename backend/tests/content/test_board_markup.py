@@ -28,6 +28,8 @@ EDIT_CONTROLS = (
     'name="description"',
     "data-move-category-id",
     'x-data="moveCategory"',
+    "data-new-category",
+    'x-data="newCategory"',
 )
 
 
@@ -137,7 +139,9 @@ async def test_board_content_carries_the_board_header(signed_in_client, editor_c
     assert re.search(r"<h1[^>]*>Groceries</h1>", editor_html)
     assert f'hx-patch="/boards/{board.id}"' not in editor_html
     assert f'hx-post="/boards/{board.id}/archive"' not in editor_html
-    assert f'hx-post="/boards/{board.id}/categories"' in editor_html  # New category
+    # "New category" is a button that opens the dialog, which is on the page, not in the content.
+    assert f'hx-post="/boards/{board.id}/categories"' not in editor_html
+    assert 'data-new-category aria-haspopup="dialog">New category</button>' in editor_html
     assert re.search(r'<div id="categories"[^>]* data-sortable-categories>', editor_html)
 
 
@@ -252,7 +256,7 @@ async def test_bottom_bar_switches_between_the_users_own_boards(
     ]
     assert 'aria-current="page"' in links[1][1]
     assert f"/boards/{secret.id}" not in html and "Secret" not in html
-    assert re.search(r'<button type="button"[^>]*data-focus="new-category-name"[^>]*>', bar)
+    assert re.search(r'<button type="button"[^>]*data-new-category[^>]*>', bar)
 
     viewer_bar = re.search(
         r'<nav id="bottom-bar".*?</nav>',
@@ -260,3 +264,67 @@ async def test_bottom_bar_switches_between_the_users_own_boards(
         re.DOTALL,
     )[0]
     assert "New category" not in viewer_bar and f"/boards/{board.id}" in viewer_bar
+
+
+async def test_new_category_dialog_is_on_the_board_page_outside_the_content(
+    editor_client, viewer_client, board, target_board
+):
+    page = (await editor_client.get(f"/boards/{board.id}")).text
+    content = (await editor_client.get(f"/boards/{board.id}/content", headers=HX)).text
+
+    assert page.count('<form id="new-category-form"') == 1
+    dialog = re.search(r'<div x-data="newCategory".*?</form>', page, re.DOTALL)[0]
+    assert (
+        '<div x-data="newCategory" @open-new-category.window="show"'
+        ' @htmx:after-swap.window="added">'
+    ) in dialog
+    assert re.search(
+        r'<div hidden :hidden="closed" class="[^"]*" @click.self="close" @keydown.escape="close">',
+        dialog,
+    )
+    assert re.search(
+        r'<div role="dialog" aria-modal="true" aria-labelledby="new-category-title"'
+        r' tabindex="-1" class="[^"]*" @keydown.tab="trapFocus">',
+        dialog,
+    )
+    assert re.search(r'<h2 id="new-category-title" class="[^"]*">New category</h2>', dialog)
+    assert re.search(
+        rf'<form id="new-category-form" x-ref="form" hx-post="/boards/{board.id}/categories"'
+        r' hx-target="#categories" hx-swap="beforeend"'
+        r' hx-disabled-elt="find button\[type=submit\]" class="[^"]*">',
+        dialog,
+    )
+    assert re.search(
+        r'<label for="new-category-name" class="label">Category name</label>\s*'
+        r'<input id="new-category-name" name="name" x-ref="name" required maxlength="120"'
+        r' autocomplete="off" class="input">',
+        dialog,
+    )
+    assert re.search(
+        r'<fieldset>\s*<legend class="label">Add it</legend>\s*'
+        r'<label class="flex min-h-11 items-center gap-3">'
+        r'<input type="radio" name="placement" value="bottom" checked> At the bottom</label>\s*'
+        r'<label class="flex min-h-11 items-center gap-3">'
+        r'<input type="radio" name="placement" value="top"> On top</label>\s*</fieldset>',
+        dialog,
+    )
+    assert re.search(
+        r'<button type="button" class="btn-secondary" @click="close">Cancel</button>\s*'
+        r'<button type="submit" class="btn-primary">Add category</button>',
+        dialog,
+    )
+    # board.js reads [data-category-name] for the item modal's list; the dialog is no category.
+    # x-show / x-cloak: it is shown by its hidden attribute (see _item_modal.html).
+    for leftover in ("data-category-", "x-show", "x-cloak"):
+        assert leftover not in dialog
+
+    # The buttons: one in the board header (in the content), one in the phone's bottom bar.
+    assert page.count("data-new-category") == 2 and content.count("data-new-category") == 1
+    assert "new-category-form" not in content and "newCategory" not in content
+    # After the dialog that moves a category (there is a board to move to here), before the bar.
+    assert page.index('x-data="moveCategory"') < page.index('x-data="newCategory"')
+    assert page.index('x-data="newCategory"') < page.index('<nav id="bottom-bar"')
+
+    viewer_page = (await viewer_client.get(f"/boards/{board.id}")).text
+    for control in ("data-new-category", "newCategory", "new-category-form"):
+        assert control not in viewer_page
