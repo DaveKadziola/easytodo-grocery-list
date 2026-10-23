@@ -15,7 +15,7 @@ from easytodo.auth.sessions import SESSION_COOKIE, create_session
 from easytodo.errors import Forbidden, PasswordChangeRequired
 from easytodo.models import User, UserSession
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
-from easytodo.security.passwords import verify_password
+from easytodo.security.passwords import hash_password, verify_password
 from easytodo.security.tokens import hash_token
 from easytodo.web import FLASH_COOKIE
 
@@ -161,6 +161,59 @@ async def test_overlong_current_password_is_refused_before_hashing(client, db, m
     assert r.status_code == 400
     assert "Current password is incorrect." in r.text
     assert calls == []
+
+
+async def test_a_reset_during_the_password_check_is_not_undone(client_factory, db, monkeypatch):
+    # A reset that commits while the current password is being checked has signed every device
+    # out and set a password of its own: the change must neither overwrite that nor revoke more.
+    await create_user(db, EMAIL)
+    a, b = await sign_in(await client_factory()), await sign_in(await client_factory())
+    reset_hash = hash_password("a-passphrase-from-a-reset")
+
+    async def reset_meanwhile(hash: str, pw: str) -> bool:
+        await db.execute(update(User).values(password_hash=reset_hash))
+        await db.commit()
+        return True
+
+    monkeypatch.setattr(account_routes, "verify_password_async", reset_meanwhile)
+    r = await a.post("/account/password", data=change_form())
+
+    assert r.status_code == 400
+    assert "Current password is incorrect." in r.text
+    assert "dave@example.com" in r.text  # the page is the usual one, with the signed-in header
+    assert FLASH_COOKIE not in r.headers.get("set-cookie", "")
+    assert await password_hash(db) == reset_hash
+    assert len(await session_ids(db)) == 2
+    assert (await b.get("/account")).status_code == 200
+
+
+@pytest.mark.parametrize("forced", [False, True], ids=["plain", "forced"])
+async def test_no_connection_is_held_while_the_password_is_checked_and_hashed(
+    app, client, db, monkeypatch, forced
+):
+    await create_user(db, EMAIL, must_change_password=forced)
+    await sign_in(client)
+    held: list[int] = []  # connections of the app checked out at each hash and check
+    real_verify, real_hash = (
+        account_routes.verify_password_async,
+        account_routes.hash_password_async,
+    )
+
+    async def verify(hash: str, pw: str) -> bool:
+        held.append(app.state.engine.pool.checkedout())
+        return await real_verify(hash, pw)
+
+    async def hash_(pw: str) -> str:
+        held.append(app.state.engine.pool.checkedout())
+        return await real_hash(pw)
+
+    monkeypatch.setattr(account_routes, "verify_password_async", verify)
+    monkeypatch.setattr(account_routes, "hash_password_async", hash_)
+    r = await client.post("/account/password", data=change_form())
+
+    assert r.status_code == 303
+    # The current password; for a forced change also the new one against it; then the hash.
+    assert held == [0] * (3 if forced else 2)
 
 
 async def test_password_form_requires_sign_in(client):

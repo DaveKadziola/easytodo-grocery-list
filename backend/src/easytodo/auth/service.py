@@ -70,19 +70,23 @@ async def register_user(db: AsyncSession, email: str, password: str) -> User:
 async def authenticate(db: AsyncSession, email: str, password: str) -> User:
     """The active user with these credentials. 10 failures in a row lock it for 15 minutes.
 
-    The password is checked on a thread, so other requests run meanwhile: a lock set in that time
-    (the tenth wrong password of a parallel attempt) must still win over this right password.
-    That is what the guarded update at the end is for."""
+    The password is checked on a thread, which may queue, while other requests run: an account
+    can be locked, or its password reset or changed (which signs it out everywhere), before this
+    check is through. So the connection goes back to the pool for the checks, and the update that
+    signs in at the end writes only if the account is still unlocked and still has the password
+    hash that was checked (``user`` stays loaded after the commit, ``expire_on_commit=False``)."""
     if len(password) > MAX_PASSWORD_LENGTH:  # refuse before hashing an arbitrarily long input
         raise InvalidCredentials()
     user = await _find_user(db, email)
+    await db.commit()  # no transaction, so no connection, while the password is checked
     if user is None:
         await verify_password_async(DUMMY_HASH, password)
         raise InvalidCredentials()
+    user_id, verified_hash = user.id, user.password_hash
     now = datetime.now(UTC)
     if user.locked_until is not None and user.locked_until > now:
         raise AccountLocked()
-    if not await verify_password_async(user.password_hash, password):
+    if not await verify_password_async(verified_hash, password):
         raise await _failed_attempt(db, user, now)
     if user.status == UserStatus.DISABLED:
         raise AccountDisabled()
@@ -91,19 +95,26 @@ async def authenticate(db: AsyncSession, email: str, password: str) -> User:
         "locked_until": None,
         "last_login_at": now,
     }
-    if needs_rehash(user.password_hash):  # before the update, which then holds its lock briefly
+    if needs_rehash(verified_hash):  # before the update, which then holds its lock briefly
         changes["password_hash"] = await hash_password_async(password)
     signed_in = await db.scalar(
         update(User)
-        .where(User.id == user.id, or_(User.locked_until.is_(None), User.locked_until <= now))
+        .where(
+            User.id == user_id,
+            User.password_hash == verified_hash,  # the one checked, not the rehash
+            or_(User.locked_until.is_(None), User.locked_until <= now),
+        )
         .values(changes)
         .returning(User.id)
     )
-    if signed_in is None:  # locked meanwhile
+    if signed_in is None:  # locked, or the password changed, meanwhile
         # Obligatory: with no row matched the update has still written its values to ``user``
         # (it judged the where clause on the stale object), and the rollback drops them.
         await db.rollback()
-        raise AccountLocked()
+        locked_until = await db.scalar(select(User.locked_until).where(User.id == user_id))
+        if locked_until is not None and locked_until > datetime.now(UTC):
+            raise AccountLocked()
+        raise InvalidCredentials()  # a password that is no longer the account's: no wrong attempt
     await db.commit()
     return user
 

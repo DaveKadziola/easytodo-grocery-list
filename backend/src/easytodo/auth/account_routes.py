@@ -7,7 +7,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from markupsafe import Markup
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.auth.deps import CurrentUser, DbSession, FormField, require_user
@@ -108,23 +108,36 @@ async def change_password(
     new_password: FormField = "",
     new_password_confirm: FormField = "",
 ) -> Response:
+    # The hash the password is checked against. The checks and the hash take their time on threads,
+    # so the connection goes back to the pool meanwhile, and a reset or change that commits in that
+    # time must not be undone: the update below writes only while this is still the user's hash.
+    verified_hash = user.password_hash
+    await db.commit()
     try:
         if len(current_password) > MAX_PASSWORD_LENGTH or not await verify_password_async(
-            user.password_hash, current_password
+            verified_hash, current_password
         ):
             raise ValidationFailed("Current password is incorrect.")
         if new_password != new_password_confirm:
             raise ValidationFailed("Passwords do not match.")
         validate_password(new_password)
         # A forced change replaces a password someone else knows (an admin's temporary one).
-        if user.must_change_password and await verify_password_async(
-            user.password_hash, new_password
-        ):
+        if user.must_change_password and await verify_password_async(verified_hash, new_password):
             raise ValidationFailed("Choose a new password, not the temporary one.")
+        new_hash = await hash_password_async(new_password)
+        changed = await db.scalar(
+            update(User)
+            .where(User.id == user.id, User.password_hash == verified_hash)
+            .values(password_hash=new_hash, must_change_password=False)
+            .returning(User.id)
+            # Updates ``user`` only if a row matched: the default would give it the new values
+            # either way, and the page that answers a refusal is rendered from it.
+            .execution_options(synchronize_session="fetch")
+        )
+        if changed is None:  # a reset or change got in first: the password given is not current
+            raise ValidationFailed("Current password is incorrect.")
     except AppError as exc:
         return render(request, "account/password.html", {"error": exc.message}, status_code=400)
-    user.password_hash = await hash_password_async(new_password)
-    user.must_change_password = False
     await invalidate_reset_tokens(db, user.id)  # a reset link in the mailbox would override it
     revoked = await revoke_all_sessions(db, user.id, except_session_id=request.state.session.id)
     await commit_and_publish(db, *sessions_revoked(user.id, revoked))  # with the new hash
