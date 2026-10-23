@@ -5,13 +5,14 @@
   scripts/release-notes.py --target origin/main                           # preview to stdout
   scripts/release-notes.py --self-test
 
-Reads the first-parent commits of main between the newest vX.Y.Z tag and the target, one bullet
-each: "Merge pull request #N" carries the PR title as its body, a squash merge ends its subject
-with "(#N)", and any other commit (a direct push, a rebase merge) is listed by subject and short
-hash. A title follows `type(scope): subject`. The bump: `!` after the type or BREAKING CHANGE ->
-major, any feat -> minor, else patch; with no tag yet the first release is FIRST. Prints nothing
-when the range is empty, so a re-run, or a late run for a commit a newer release already holds,
-makes no release.
+Work reaches develop through PRs; a release PR merges develop into main. Reads the commits
+between the newest vX.Y.Z tag and the target and keeps one bullet per PR: "Merge pull request #N"
+carries the PR title as its body, a squash merge ends its subject with "(#N)". A merge from
+.../develop is the release PR and is named in the header, not listed. Commits inside a PR, rebase
+merges and direct pushes are not listed. A title follows `type(scope): subject`. The bump: `!`
+after the type or BREAKING CHANGE -> major, any feat -> minor, else patch; with no tag yet the
+first release is FIRST. Prints nothing when the range is empty, so a re-run, or a late run for a
+commit a newer release already holds, makes no release.
 Exit code: 0 done, 1 self-test failed, 2 git error.
 """
 
@@ -23,12 +24,13 @@ import subprocess
 import sys
 
 TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
-MERGE = re.compile(r"^Merge pull request #(\d+) from \S+")
+MERGE = re.compile(r"^Merge pull request #(\d+) from (\S+)")
 SQUASH = re.compile(r"^(.+) \(#(\d+)\)$")
 TITLE = re.compile(r"^(\w+)(?:\(([^)]*)\))?(!)?:\s*(.+)$")
 GROUPS = [("feat", "Features"), ("fix", "Fixes"), ("docs", "Docs"), (None, "Other")]
 FIRST = (1, 0, 0)
-HEADER = "Released by CI ({run_url}) on {today}, after green tests on main."
+RELEASE_BRANCH = "/develop"
+HEADER = "Released by CI ({run_url}) on {today}, after green tests on main"
 
 
 def git(*args):
@@ -41,23 +43,26 @@ def parse_tag(name):
 
 
 def classify(commits):
-    """[(sha, subject, body)] -> [(type, bullet, breaking)]."""
-    items = []
-    for sha, subject, body in commits:
+    """[(sha, subject, body)] -> (release PR numbers, [(type, bullet, breaking)])."""
+    releases, items = [], []
+    for _, subject, body in commits:
         if m := MERGE.match(subject):
+            if m.group(2).endswith(RELEASE_BRANCH):
+                releases.append(m.group(1))
+                continue
             title = next((line.strip() for line in body.splitlines() if line.strip()), subject)
-            ref = f"#{m.group(1)}"
+            number = m.group(1)
         elif m := SQUASH.match(subject):
-            title, ref = m.group(1), f"#{m.group(2)}"
+            title, number = m.groups()
         else:
-            title, ref = subject, sha[:7]
+            continue
         if m := TITLE.match(title):
             kind, scope, bang, text = m.groups()
             text = f"{scope}: {text}" if scope else text
         else:
             kind, bang, text = None, None, title
-        items.append((kind, f"{text} ({ref})", bool(bang) or "BREAKING CHANGE" in body))
-    return items
+        items.append((kind, f"{text} (#{number})", bool(bang) or "BREAKING CHANGE" in body))
+    return releases, items
 
 
 def bump(prev, items):
@@ -69,9 +74,10 @@ def bump(prev, items):
     return (major, minor, patch + 1)
 
 
-def render(prev_tag, new_tag, items, run_url, today, repo):
+def render(prev_tag, new_tag, releases, items, run_url, today, repo):
     if run_url:
         head = HEADER.format(run_url=run_url, today=today)
+        head += f", from release PR #{releases[-1]}." if releases else "."
     else:
         head = f"Preview on {today}, not released."
     lines = [head, ""]
@@ -88,7 +94,8 @@ def render(prev_tag, new_tag, items, run_url, today, repo):
 
 def commits_between(prev_tag, target):
     span = f"{prev_tag}..{target}" if prev_tag else target
-    return parse_log(git("log", "--first-parent", "--format=%H%x1f%s%x1f%b%x1e", span))
+    # Not --first-parent: the PRs merged into develop sit behind the release PR's merge.
+    return parse_log(git("log", "--format=%H%x1f%s%x1f%b%x1e", span))
 
 
 def parse_log(log):
@@ -116,11 +123,11 @@ def main():
         return 2
     if not commits:
         return 0
-    items = classify(commits)
+    releases, items = classify(commits)
     new_tag = "v{}.{}.{}".format(*(bump(prev, items) if prev else FIRST))
     today = datetime.datetime.now(datetime.UTC).date().isoformat()
     repo = os.environ.get("GITHUB_REPOSITORY", "")
-    notes = render(prev_tag, new_tag, items, args.run_url, today, repo)
+    notes = render(prev_tag, new_tag, releases, items, args.run_url, today, repo)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(notes)
@@ -133,21 +140,24 @@ def main():
 
 def self_test():
     commits = [
+        ("1" * 40, "Merge pull request #9 from o/develop", "release: develop to main"),
         ("a" * 40, "Merge pull request #7 from o/fix/m", "fix(frontend): keep the modal in step\n"),
         ("b" * 40, "feat(auth): sign up from an invite link (#6)", "* feat(auth): ...\n* fix: ..."),
-        ("c" * 40, "docs: Proton Mail SMTP example", ""),
+        ("c" * 40, "docs: Proton Mail SMTP example (#5)", ""),
+        ("9" * 40, "fix: a commit inside PR #7, or a direct push", ""),
         ("d" * 40, "Merge pull request #2 from o/claude/thread", "EasyToDo v2.0"),
         ("e" * 40, "Merge pull request #1 from o/x", ""),
     ]
-    items = classify(commits)
+    releases, items = classify(commits)
+    assert releases == ["9"], releases
     assert items[0] == ("fix", "frontend: keep the modal in step (#7)", False), items[0]
     assert items[1] == ("feat", "auth: sign up from an invite link (#6)", False), items[1]
-    assert items[2] == ("docs", "Proton Mail SMTP example (ccccccc)", False), items[2]
+    assert items[2] == ("docs", "Proton Mail SMTP example (#5)", False), items[2]
     assert items[3] == (None, "EasyToDo v2.0 (#2)", False), items[3]
-    assert items[4][1] == "Merge pull request #1 from o/x (#1)", items[4]
+    assert items[4][1] == "Merge pull request #1 from o/x (#1)" and len(items) == 5, items
     assert bump((2, 0, 0), items) == (2, 1, 0)
     assert bump((2, 1, 3), [i for i in items if i[0] != "feat"]) == (2, 1, 4)
-    breaking = classify(
+    _, breaking = classify(
         [
             ("f" * 40, "feat(x)!: drop y (#9)", ""),
             ("0" * 40, "Merge pull request #8 from o/b", "fix: z\n\nBREAKING CHANGE: w"),
@@ -155,14 +165,15 @@ def self_test():
     )
     assert [b for _, _, b in breaking] == [True, True] and bump((2, 1, 0), breaking) == (3, 0, 0)
 
-    text = render("v2.0.0", "v2.1.0", items, "https://run/1", "2026-10-24", "o/r")
-    assert text.startswith("Released by CI (https://run/1) on 2026-10-24, after green tests"), text
+    text = render("v2.0.0", "v2.1.0", releases, items, "https://run/1", "2026-10-24", "o/r")
+    head = "Released by CI (https://run/1) on 2026-10-24, after green tests on main, from release PR #9.\n"
+    assert text.startswith(head), text
     assert "### Features\n- auth: sign up from an invite link (#6)\n" in text, text
     assert "### Other\n- EasyToDo v2.0 (#2)\n" in text, text
     order = [text.index(f"### {h}") for _, h in GROUPS]
     assert order == sorted(order), order
     assert text.rstrip().endswith("compare/v2.0.0...v2.1.0"), text
-    first = render("", "v1.0.0", [], "", "d", "o/r")
+    first = render("", "v1.0.0", [], [], "", "d", "o/r")
     assert first.startswith("Preview on d") and "###" not in first, first
     assert first.rstrip().endswith("commits/v1.0.0"), first
     assert parse_tag("v2.10.0") == (2, 10, 0) and parse_tag("legacy-v1") is None

@@ -306,13 +306,19 @@ included.
 
 ## Releases
 
-Every push to `main` whose CI passes gets the next `vX.Y.Z` tag and a GitHub release, and the
-releases are the changelog. The `release` job in `.github/workflows/ci.yml` runs
-`scripts/release-notes.py`, which reads the PR titles merged since the newest tag. A title is
+Work reaches `develop` through PRs with green CI. When `develop` is ready, a release PR merges it
+into `main` with a merge commit, and the operator merges that PR. The CI run on `main` then gives
+the next `vX.Y.Z` tag and a GitHub release; the releases are the changelog. Rulesets: `develop`
+takes only PRs with green `test`, `e2e` and `docker`, `main` only PRs, and neither allows a force
+push or deletion.
+
+The `release` job in `.github/workflows/ci.yml` runs `scripts/release-notes.py`, which lists the
+PRs merged since the newest tag and names the release PR in the header. A title is
 `type(scope): subject`: `!` after the type or `BREAKING CHANGE` in the body bumps the major
 version, any `feat` the minor, anything else the patch. A title in another form lands under Other
 and counts as a patch. A wrong version or text is fixed by editing the release on GitHub; the job
-never moves a tag. Preview: `python3 scripts/release-notes.py --target origin/main`.
+never moves a tag. Preview of the next release:
+`python3 scripts/release-notes.py --target origin/develop`.
 
 ## License
 
