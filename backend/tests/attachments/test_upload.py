@@ -129,6 +129,29 @@ async def test_store_lists_only_main_files(tmp_path):
     assert set(store.keys()) == keys
 
 
+async def test_store_lists_the_derived_files_whose_file_is_missing(tmp_path):
+    """What a cancelled upload leaves: the thumbnail and the preview of a file that is gone, which
+    ``keys`` never names."""
+    store = AttachmentStore(tmp_path)
+    with_file, orphan, other = "1" * 32, "2" * 32, "2a" + "3" * 30
+    await store.save(with_file, io.BytesIO(b"x"))
+    store.thumb_path(with_file).write_bytes(b"x")
+    for key in (orphan, other):
+        store.thumb_path(key).parent.mkdir(exist_ok=True)
+    store.thumb_path(orphan).write_bytes(b"x")
+    store.preview_path(orphan).write_bytes(b"x")
+    store.preview_path(other).write_bytes(b"x")
+    (store.root / orphan[:2] / "stray.thumb.webp").write_bytes(b"x")  # not a key
+    (tmp_path / "stray.thumb.webp").write_bytes(b"x")  # not in a directory of keys
+
+    assert set(store.derived_orphans()) == {
+        store.thumb_path(orphan),
+        store.preview_path(orphan),
+        store.preview_path(other),
+    }
+    assert list(AttachmentStore(tmp_path / "missing").derived_orphans()) == []
+
+
 # ---- accepted files
 
 

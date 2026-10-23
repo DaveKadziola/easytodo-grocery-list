@@ -112,3 +112,17 @@ def test_allowed_origins_are_the_public_and_the_extra_origins(monkeypatch):
         {"http://localhost:8000", "http://192.168.122.50:8000", "http://192.168.1.100:8000"}
     )
     assert s.public_origin == "http://localhost:8000"  # links and the error messages use it
+
+
+def test_purge_runs_daily_unless_turned_off(monkeypatch):
+    def interval() -> int:
+        return Settings(
+            _env_file=None, database_url=DATABASE_URL, secret_key="x" * 40
+        ).purge_interval_hours
+
+    assert interval() == 24
+    monkeypatch.setenv("EASYTODO_PURGE_INTERVAL_HOURS", "0")
+    assert interval() == 0
+    monkeypatch.setenv("EASYTODO_PURGE_INTERVAL_HOURS", "-1")
+    with pytest.raises(ValidationError):
+        interval()

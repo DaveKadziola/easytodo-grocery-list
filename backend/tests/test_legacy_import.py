@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo import legacy_import
 from easytodo.boards.service import get_board_view
-from easytodo.cli import main
+from easytodo.cli import _describe, main
 from easytodo.content.validation import clean_description, clean_name
 from easytodo.errors import ValidationFailed
 from easytodo.legacy_import import ImportReport, import_legacy
@@ -560,3 +560,24 @@ async def test_cli_reports_a_legacy_database_error(
     assert code == 1
     assert "legacy database" in capsys.readouterr().err
     assert await board_count(db) == 0
+
+
+async def test_cli_reports_a_malformed_legacy_dsn(db, owner, cli_env, capsys):
+    args = ["import-legacy", "--legacy-dsn", "postgresql://u:p@localhost:notaport/db"]
+
+    code = await asyncio.to_thread(
+        main, [*args, "--schema", SCHEMA, "--owner-email", "dave@example.com"]
+    )
+
+    assert code == 1
+    assert capsys.readouterr().err.startswith("error: Could not connect to the legacy database: ")
+    assert await board_count(db) == 0
+
+
+def test_import_report_names_the_category_name_limit(monkeypatch):
+    """The report says how far names are cut by the limit the app has, not by a number of its own."""
+    monkeypatch.setattr("easytodo.cli.CATEGORY_NAME_MAX_LENGTH", 80)
+
+    report = _describe(ImportReport(1, 0, ["X"], 0), "Old list", "dave@example.com")
+
+    assert "cut to 80 characters" in report

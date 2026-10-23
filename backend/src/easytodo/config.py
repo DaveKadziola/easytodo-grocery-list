@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     env: Literal["dev", "test", "prod"] = "dev"
     registration_open: bool = True
     session_ttl_days: int = 30
+    # How often, in hours, the app deletes what is past its retention (see easytodo.maintenance);
+    # 0 turns it off (the CLI's ``purge`` still works).
+    purge_interval_hours: int = Field(default=24, ge=0)
     mail_backend: Literal["console", "smtp"] = "console"
     smtp_host: str | None = None
     smtp_port: int = 587

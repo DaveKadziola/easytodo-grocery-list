@@ -115,9 +115,10 @@ A tunnel connector on your side opens an outgoing connection to the provider. Th
   docker compose start app
   ```
 
-  The app's nightly purge removes the files that have no row in the database (attached after the dump); `tar` keeps the files' old modification times, so a restore does not make files look new to it.
+  The app's daily purge removes the files that have no row in the database (attached after the dump); `tar` keeps the files' old modification times, so a restore does not make files look new to it.
 
   Never run `docker compose down -v`: `-v` deletes the database and attachments volumes, and Caddy's certificates with it.
+- [ ] **Clean-up runs inside the app.** There is nothing to schedule: 5 minutes after it starts, and then every `EASYTODO_PURGE_INTERVAL_HOURS` hours (24 by default), the app deletes the archived boards and categories past their owner's retention, tasks deleted more than 10 minutes ago, notifications older than 30 days and attached files that no task has any more, and logs one line (`Purged: ...`) when it deleted anything. With `EASYTODO_PURGE_INTERVAL_HOURS=0` it is off, and a cron job has to run `docker compose exec -T app python -m easytodo.cli purge` instead (a second run while one is going does nothing and exits with an error). The files are cleaned only if the database holds at least one attachment (see the restore note above).
 - [ ] **Updates:** take a backup first, then run:
 
   ```sh

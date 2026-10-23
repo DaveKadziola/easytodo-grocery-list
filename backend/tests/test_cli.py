@@ -100,6 +100,26 @@ async def test_cli_create_admin_creates_an_account(db, monkeypatch, cli_env, cap
     assert "Created the admin account boss@example.com." in capsys.readouterr().out
 
 
+async def test_cli_create_admin_reports_an_address_registered_meanwhile(
+    db, monkeypatch, cli_env, capsys
+):
+    """While the operator types the password, someone registers the address: the unique email
+    then refuses the new account, and the command says so instead of printing a traceback."""
+    loop = asyncio.get_running_loop()
+
+    def password_typed_while_someone_registers(*, from_stdin: bool) -> str:
+        asyncio.run_coroutine_threadsafe(create_user(db, "boss@example.com"), loop).result()
+        return PASSWORD
+
+    monkeypatch.setattr("easytodo.cli._read_password", password_typed_while_someone_registers)
+
+    assert await create_admin("--email", "boss@example.com") == 1
+
+    assert capsys.readouterr().err == "error: An account with this email already exists.\n"
+    user = await db.scalar(select(User))
+    assert await user_count(db) == 1 and user.is_admin is False  # theirs, and not made an admin
+
+
 async def test_cli_create_admin_asks_for_the_password(db, monkeypatch, cli_env):
     answers = iter([PASSWORD, PASSWORD])
     prompts: list[str] = []

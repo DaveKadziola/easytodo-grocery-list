@@ -26,6 +26,7 @@ from easytodo.content.routes import router as content_router
 from easytodo.db import create_engine
 from easytodo.errors import install_error_handlers
 from easytodo.mail.mailer import get_mailer
+from easytodo.maintenance import PurgeTask
 from easytodo.middleware import (
     ClientIdMiddleware,
     CsrfCookieMiddleware,
@@ -85,11 +86,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             on_reconnect=hub.reconnect_all,
         )
         await listener.start()
+        # The clean-up of what is past its retention; 0 hours turns it off (the tests do).
+        purge_task = None
+        if settings.purge_interval_hours > 0:
+            purge_task = PurgeTask(
+                app.state.sessionmaker,
+                app.state.attachment_store,
+                settings.purge_interval_hours * 3600,
+            )
+            await purge_task.start()
+        app.state.purge_task = purge_task
         _freeze_startup_heap()
         try:
             yield
         finally:
             gc.unfreeze()  # frozen objects are never collected, not even once they are garbage
+            if purge_task is not None:
+                await purge_task.stop()
             await listener.stop()
             await engine.dispose()
 

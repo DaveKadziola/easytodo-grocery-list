@@ -19,6 +19,9 @@ from typing import BinaryIO
 THUMB_SUFFIX = ".thumb.webp"
 PREVIEW_SUFFIX = ".preview.jpg"
 _KEY = re.compile(r"[0-9a-f]{32}")
+_DERIVED = re.compile(
+    rf"(?P<key>[0-9a-f]{{32}})(?:{re.escape(THUMB_SUFFIX)}|{re.escape(PREVIEW_SUFFIX)})"
+)
 _CHUNK = 1024 * 1024
 
 
@@ -51,9 +54,9 @@ class AttachmentStore:
         for path in (self.path(key), self.thumb_path(key), self.preview_path(key)):
             path.unlink(missing_ok=True)
 
-    def keys(self) -> Iterator[str]:
-        """The key of every file (not of the thumbnails and previews beside them), in no
-        particular order; none while the directory does not exist yet."""
+    def _listing(self) -> Iterator[tuple[Path, list[str]]]:
+        """Each directory of the store with the names of the files in it; none while the
+        directory does not exist yet."""
         try:
             directories = [entry.path for entry in os.scandir(self.root) if entry.is_dir()]
         except FileNotFoundError:
@@ -63,4 +66,21 @@ class AttachmentStore:
                 names = [entry.name for entry in os.scandir(directory) if entry.is_file()]
             except FileNotFoundError:  # taken away since the listing above
                 continue
+            yield Path(directory), names
+
+    def keys(self) -> Iterator[str]:
+        """The key of every file (not of the thumbnails and previews beside them), in no
+        particular order; none while the directory does not exist yet."""
+        for _, names in self._listing():
             yield from (name for name in names if _KEY.fullmatch(name))
+
+    def derived_orphans(self) -> Iterator[Path]:
+        """The thumbnails and previews whose file is not there (an upload that was cancelled
+        after they were written leaves them; ``keys`` never names them), in no particular
+        order."""
+        for directory, names in self._listing():
+            present = set(names)
+            for name in names:
+                derived = _DERIVED.fullmatch(name)
+                if derived is not None and derived["key"] not in present:
+                    yield directory / name

@@ -20,6 +20,7 @@ from starlette.types import ASGIApp
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 import easytodo.models  # noqa: F401  (registers every table on Base.metadata)
+from easytodo.attachments.storage import AttachmentStore
 from easytodo.config import Settings, get_settings
 from easytodo.db import Base
 from easytodo.mail.mailer import SentMail
@@ -95,6 +96,8 @@ def _test_settings(**overrides: object) -> Settings:
         "public_url": BASE_URL,
         "env": "test",
         "attachments_dir": SESSION_ATTACHMENTS_DIR,
+        # No clean-up task in the app under test (or a live server): a test calls ``purge``.
+        "purge_interval_hours": 0,
     }
     return Settings(_env_file=None, **(values | overrides))
 
@@ -105,10 +108,19 @@ def settings() -> Settings:
 
 
 @pytest.fixture
-def cli_env(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> Iterator[None]:
-    """The environment the CLI reads its settings from, pointing at the test database."""
+def store(tmp_path: Path) -> AttachmentStore:
+    """A store of files in the test's own directory, which ``cli_env`` points the CLI at too.
+    ``tests/attachments`` has the running app's store under this name."""
+    return AttachmentStore(tmp_path)
+
+
+@pytest.fixture
+def cli_env(monkeypatch: pytest.MonkeyPatch, settings: Settings, tmp_path: Path) -> Iterator[None]:
+    """The environment the CLI reads its settings from, pointing at the test database and at the
+    test's own directory for files (never ``backend/data/attachments``)."""
     monkeypatch.setenv("EASYTODO_DATABASE_URL", settings.database_url)
     monkeypatch.setenv("EASYTODO_SECRET_KEY", settings.secret_key.get_secret_value())
+    monkeypatch.setenv("EASYTODO_ATTACHMENTS_DIR", str(tmp_path))
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

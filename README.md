@@ -138,6 +138,7 @@ each line. After a change, `docker compose up -d` applies it.
 | `EASYTODO_EXTRA_ORIGINS` | none | More addresses the app is opened at, comma-separated, e.g. `http://localhost:8000, http://192.168.1.20:8000`: form submissions and live updates work there too. Mail and invite links still use `EASYTODO_PUBLIC_URL`. An `https://` `EASYTODO_PUBLIC_URL` cannot be combined with `http://` extras (the app refuses to start): its session cookie is `Secure`, so the browser never sends it to an http address and signing in there would loop. |
 | `EASYTODO_REGISTRATION_OPEN` | `true` | `false` closes `/register`, except from a valid invite link. An e-mail invite works only for its own address; a link invite lets anyone who has the link create an account until it expires (7 days) or is revoked, so revoke links you no longer need. Admins can still create accounts. |
 | `EASYTODO_SESSION_TTL_DAYS` | `30` | How long a sign-in stays valid, in days. |
+| `EASYTODO_PURGE_INTERVAL_HOURS` | `24` | How often, in hours, the app deletes what is past its retention (see [Archive and retention](#archive-and-retention)). `0` turns it off. |
 | `EASYTODO_ATTACHMENTS_DIR` | `data/attachments` | Where the files attached to items are kept (images, PDF, `.txt`, `.md`). In the image it is `/app/backend/data/attachments`, on the `attachments` volume: leave it as it is with docker compose. |
 | `EASYTODO_ATTACHMENT_MAX_BYTES` | `10485760` | The largest file that can be attached, in bytes (10 MiB). |
 | `EASYTODO_ATTACHMENTS_PER_ITEM` | `20` | How many files one task can have. |
@@ -211,6 +212,33 @@ EASYTODO_SMTP_FROM=EasyToDo <todo@your-domain.example>
 The From address must be the token's address (the one in `EASYTODO_SMTP_USER`). If the token
 contains a `$`, wrap it in single quotes, as explained above.
 
+## Archive and retention
+
+An archived board (only its owner archives or restores it) or category is hidden from everyone
+until it is restored from the archive, or deleted for good. How long it is kept is the setting of
+the **owner of the board**, under Account → "Delete archived items after" (7, 30, 90 or 365 days,
+or never), for a category too, whoever archived it. The archive page shows the date.
+
+The app deletes by itself: 5 minutes after it starts, and then every
+`EASYTODO_PURGE_INTERVAL_HOURS` hours (24 by default), so something is gone at most one interval
+after the date the archive shows. The same run also deletes:
+
+- tasks that were deleted more than 10 minutes ago (until then they are only hidden, for "Undo"),
+- notifications older than 30 days,
+- attached files that no task has any more. A file written less than an hour ago is left alone
+  (it may be an upload in progress). The files are cleaned only if the database holds at least
+  one attachment: with an empty `attachments` table the purge keeps the files and writes a
+  warning to the log, because that is an empty or a not yet restored database next to a volume of
+  files (see Backup and restore below).
+
+When it has deleted something, it writes one line to the log (`docker compose logs app`), such as
+`Purged: 1 boards, 0 categories, 2 items, 0 notifications, 3 files.` Set the interval to `0` to
+turn it off. To run it now, or from cron when it is off:
+
+```sh
+docker compose exec app python -m easytodo.cli purge
+```
+
 ## Backup and restore
 
 The data lives in two volumes: `pgdata` (the database, in the `db` service) and `attachments` (the
@@ -236,7 +264,7 @@ docker compose start app
 ```
 
 A file the restored database does not know (it was attached after the dump) is removed by the
-app's nightly purge of files without a row; `tar` keeps the files' old modification times, so a
+app's daily purge of files without a row; `tar` keeps the files' old modification times, so a
 restore does not make them look new. A row whose file is missing from the backup shows "This
 attachment no longer exists." instead of the file.
 
