@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 import easytodo.models  # noqa: F401  (registers every table on Base.metadata)
@@ -131,10 +131,26 @@ def app(settings: Settings, _clean_db: None) -> FastAPI:
     return create_app(settings)
 
 
+def _state_per_request(app: ASGIApp) -> ASGIApp:
+    """``app`` where each request has its own shallow copy of the lifespan state, as under uvicorn
+    (``"state": self.app_state.copy()``). ``LifespanManager`` hands every request of one app the
+    same dict, so a request that runs while another is in flight (a second client, a request made
+    from a patched function) would overwrite the other's ``request.state.user`` and ``.session``,
+    and a test would pass for the wrong reason. A lifespan scope keeps the shared dict: startup
+    writes into it."""
+
+    async def with_own_state(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            scope["state"] = dict(scope.get("state", {}))
+        await app(scope, receive, send)
+
+    return with_own_state
+
+
 @pytest.fixture
 async def _running_app(app: FastAPI) -> AsyncIterator[ASGIApp]:
     """The app with its lifespan entered once, shared by ``client`` and ``client_factory()``."""
-    async with LifespanManager(app) as manager:
+    async with LifespanManager(_state_per_request(app)) as manager:
         yield manager.app
 
 
@@ -171,7 +187,9 @@ async def client_factory(_running_app: ASGIApp, settings: Settings) -> AsyncIter
             if not settings_overrides:
                 return await stack.enter_async_context(_new_client(_running_app))
             other = _test_settings(**(settings.model_dump() | settings_overrides))
-            manager = await stack.enter_async_context(LifespanManager(create_app(other)))
+            manager = await stack.enter_async_context(
+                LifespanManager(_state_per_request(create_app(other)))
+            )
             return await stack.enter_async_context(_new_client(manager.app, other.public_origin))
 
         yield factory
@@ -184,7 +202,7 @@ async def https_client(_clean_db: None) -> AsyncIterator[httpx.AsyncClient]:
     proxy-headers middleware trusting every peer (``EASYTODO_FORWARDED_ALLOW_IPS=*``), so
     ``X-Forwarded-Proto`` / ``X-Forwarded-For`` set the request's scheme and client."""
     https = _test_settings(public_url="https://testserver")
-    async with LifespanManager(create_app(https)) as manager:
+    async with LifespanManager(_state_per_request(create_app(https))) as manager:
         proxied = ProxyHeadersMiddleware(manager.app, trusted_hosts="*")
         async with _new_client(proxied, https.public_origin) as c:
             yield c

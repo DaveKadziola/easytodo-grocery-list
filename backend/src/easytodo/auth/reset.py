@@ -133,7 +133,13 @@ async def reset_password(db: AsyncSession, raw_token: str, new_password: str) ->
     a forced password change, and signs the account out on every device (one commit)."""
     token = await get_valid_reset_token(db, raw_token)
     validate_password(new_password)  # before the token is used up, so it can be tried again
-    new_hash = await hash_password_async(new_password)  # before the token row is locked
+    new_hash = await hash_password_async(new_password)  # before any row is locked
+    # The account's row first, as in ``revoke_all_sessions`` (FOR NO KEY UPDATE): an admin
+    # disabling the account locks it first too, and would otherwise wait for the token row below
+    # while this waits for the account's.
+    user = await db.get(User, token.user_id, with_for_update={"key_share": True})
+    if user is None:  # deleted meanwhile
+        raise NotFound(INVALID_RESET_LINK)
     # Conditional, so two concurrent resets cannot both use it.
     used = await db.scalar(
         update(PasswordResetToken)
@@ -143,7 +149,6 @@ async def reset_password(db: AsyncSession, raw_token: str, new_password: str) ->
     )
     if used is None:
         raise NotFound(INVALID_RESET_LINK)
-    user = await db.get_one(User, token.user_id)
     user.password_hash = new_hash
     user.must_change_password = False
     user.failed_login_count = 0

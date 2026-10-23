@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from easytodo.auth.deps import CurrentUser, DbSession, FormField, require_user
 from easytodo.auth.reset import invalidate_reset_tokens
 from easytodo.auth.sessions import (
+    clear_session_cookie,
     revoke_all_sessions,
     revoke_session,
     rotate_session_token,
@@ -109,7 +110,9 @@ async def change_password(
     new_password_confirm: FormField = "",
 ) -> Response:
     """Set the new password and sign every other device out. This device stays signed in, with a
-    new session token: the old one may be what a thief holds, and now opens nothing.
+    new session token: the old one may be what a thief holds, and now opens nothing. If this
+    session was signed out meanwhile, the new password stands all the same and the answer sends
+    the device to the sign-in page.
 
     Accepted: when a sign-in rehashes the old password at the same time, the update below finds
     the hash changed and this answers "Current password is incorrect." once; a retry succeeds."""
@@ -144,15 +147,22 @@ async def change_password(
     except AppError as exc:
         return render(request, "account/password.html", {"error": exc.message}, status_code=400)
     await invalidate_reset_tokens(db, user.id)  # a reset link in the mailbox would override it
-    session = request.state.session
-    revoked = await revoke_all_sessions(db, user.id, except_session_id=session.id)
-    # This session is not revoked, so it gets no SESSIONS_REVOKED event (it would close the sockets
-    # of this device's other tabs, which would then go to /login); a reconnect has the new cookie.
-    raw_token = rotate_session_token(session)
+    session_id = request.state.session.id
+    raw_token = await rotate_session_token(db, session_id)  # None: signed out meanwhile
+    revoked = await revoke_all_sessions(db, user.id, except_session_id=session_id)
+    # The current session is not revoked, so it gets no SESSIONS_REVOKED event (it would close the
+    # sockets of this device's other tabs, which would then go to /login); a reconnect has the new
+    # cookie. Committed in every case: the new password stands, and the revoked sessions with it.
     await commit_and_publish(db, *sessions_revoked(user.id, revoked))  # with the new hash
+    settings = request.app.state.settings
+    if raw_token is None:
+        response = RedirectResponse("/login", status_code=303)
+        clear_session_cookie(response)
+        flash(response, "Password changed. Sign in with your new password.", settings)
+        return response
     response = RedirectResponse("/account", status_code=303)
-    set_session_cookie(response, raw_token, request.app.state.settings)
-    flash(response, "Password changed.", request.app.state.settings)
+    set_session_cookie(response, raw_token, settings)
+    flash(response, "Password changed.", settings)
     return response
 
 
@@ -245,6 +255,9 @@ async def new_recovery_codes(
 
 @router.post("/sessions/revoke-others")
 async def revoke_other_sessions(request: Request, db: DbSession, user: CurrentUser) -> Response:
+    # The account's users row first, as in ``revoke_all_sessions``: a password change deletes
+    # sessions too, and the two would otherwise wait for each other's rows.
+    await db.execute(select(User.id).where(User.id == user.id).with_for_update(key_share=True))
     revoked = await revoke_all_sessions(db, user.id, except_session_id=request.state.session.id)
     await commit_and_publish(db, *sessions_revoked(user.id, revoked))
     return RedirectResponse("/account", status_code=303)

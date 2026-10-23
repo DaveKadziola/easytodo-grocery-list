@@ -227,6 +227,10 @@ async def delete_user(db: AsyncSession, admin: User, user_id: int) -> None:
         raise Conflict(CANNOT_DELETE_SELF)
     user = await get_user(db, user_id)
     await _keep_an_active_admin(db, user)
+    # The account's row first, as in ``revoke_all_sessions`` (not in ``get_user``: that would lock
+    # before ``_keep_an_active_admin``'s locks, which are in id order, and let two admins deleting
+    # each other deadlock instead of getting ``LAST_ADMIN``).
+    await db.execute(select(User.id).where(User.id == user.id).with_for_update(key_share=True))
     owned = list(await db.scalars(select(Board.id).where(Board.owner_id == user.id)))
     # Deleted here rather than by the cascade, so their sockets are closed too.
     revoked = await revoke_all_sessions(db, user.id)
@@ -246,9 +250,11 @@ async def set_status(db: AsyncSession, admin: User, user_id: int, status: UserSt
     revoked: list[int] = []
     if status == UserStatus.DISABLED:
         await _keep_an_active_admin(db, user)
+    user.status = status
+    await db.flush()  # the account's row is locked first, as in ``revoke_all_sessions``
+    if status == UserStatus.DISABLED:
         revoked = await revoke_all_sessions(db, user.id)
         await invalidate_reset_tokens(db, user.id)
-    user.status = status
     await commit_and_publish(db, *sessions_revoked(user.id, revoked))
 
 

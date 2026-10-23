@@ -4,13 +4,17 @@ Every function here that writes commits its change (and anything pending on ``db
 revoke functions and ``rotate_session_token``: their caller commits the change with
 ``commit_and_publish(db, *sessions_revoked(...))`` (for a revocation, so that the WebSockets of
 those sessions are closed, ``realtime.hub``) or with the change that made the rotation necessary.
+
+A transaction that writes more than one of an account's rows across ``users``,
+``password_reset_tokens`` and ``user_sessions`` locks the ``users`` row first (see
+``revoke_all_sessions``).
 """
 
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Response
-from sqlalchemy import DateTime, String, bindparam, delete, select
+from sqlalchemy import DateTime, String, bindparam, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -127,17 +131,28 @@ async def load_session_and_user(
     return session, user
 
 
-def rotate_session_token(session: UserSession) -> str:
-    """Give ``session`` a new token, so that the old one, which may have leaked, opens nothing
-    any more; returns the raw token for the cookie. Not committed: the caller commits it with
-    the change that made the old token worthless (a new password), in one transaction.
+async def rotate_session_token(db: AsyncSession, session_id: int) -> str | None:
+    """Give the session a new token, so that the old one, which may have leaked, opens nothing
+    any more; returns the raw token for the cookie, or ``None`` if the session is gone (signed
+    out from elsewhere meanwhile). Not committed: the caller commits it with the change that made
+    the old token worthless (a new password), in one transaction.
+
+    One guarded statement, not a change to the loaded ``UserSession``: that would be flushed as an
+    UPDATE that must match its row, and a session deleted in the meantime would fail the whole
+    commit (``StaleDataError``) instead of answering ``None``.
 
     Only ``token_hash`` changes. The row stays the same, with its ``expires_at`` (the WebSockets
     of the session keep theirs and are counted per ``session_id``, ``realtime``), and nothing
     else about the session moves."""
     raw_token = new_token()
-    session.token_hash = hash_token(raw_token)
-    return raw_token
+    rotated = await db.scalar(
+        update(UserSession)
+        .where(UserSession.id == session_id)
+        .values(token_hash=hash_token(raw_token))
+        .returning(UserSession.id)
+        .execution_options(synchronize_session="fetch")  # the loaded row only if one matched
+    )
+    return None if rotated is None else raw_token
 
 
 async def revoke_session(db: AsyncSession, session_id: int) -> None:
@@ -149,7 +164,14 @@ async def revoke_all_sessions(
     db: AsyncSession, user_id: int, *, except_session_id: int | None = None
 ) -> list[int]:
     """Delete the user's sessions, except ``except_session_id`` (not committed yet); returns
-    the deleted ids."""
+    the deleted ids.
+
+    Lock order, for every transaction that writes more than one of an account's rows across
+    ``users``, ``password_reset_tokens`` and ``user_sessions`` (a password change or reset,
+    disabling or deleting the account, signing out the other devices): the ``users`` row first
+    (an UPDATE of it, or ``SELECT ... FOR NO KEY UPDATE``), so that they queue on it and none can
+    wait for a row the other holds. Writers of one row (logout, one session's revocation, the
+    ``last_seen_at`` bump) need no order."""
     statement = delete(UserSession).where(UserSession.user_id == user_id)
     if except_session_id is not None:
         statement = statement.where(UserSession.id != except_session_id)
