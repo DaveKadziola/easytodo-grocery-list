@@ -3,6 +3,7 @@ an hour; the link's form sets a new password and signs the account out everywher
 
 import asyncio
 import json
+import logging
 import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import unquote
@@ -17,6 +18,7 @@ from sqlalchemy import func, select, update
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
+from easytodo.auth import reset
 from easytodo.auth.reset import RESET_TTL
 from easytodo.auth.sessions import SESSION_COOKIE
 from easytodo.models import PasswordResetToken, RecoveryCode, User, UserSession, UserStatus
@@ -49,10 +51,22 @@ def token_in(mail) -> str:
     return RESET_LINK.search(mail.body)[1]
 
 
+MAIL_WAIT_S = 2.0
+
+
 async def request_link(client: httpx.AsyncClient, outbox, email: str = EMAIL) -> str:
-    """Ask for a reset link for ``email``; returns the token from the mail it sends."""
+    """Ask for a reset link for ``email``; returns the token from the mail it sends.
+
+    The mail goes out after the response. The test transport returns only when the app is done
+    with the request, background work included, but a server does not: wait (at most
+    ``MAIL_WAIT_S``) until the outbox has grown."""
+    sent = len(outbox)
     r = await forgot(client, email)
     assert r.status_code == 200, r.text
+    deadline = asyncio.get_running_loop().time() + MAIL_WAIT_S
+    while len(outbox) == sent and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
+    assert len(outbox) > sent, f"no reset mail within {MAIL_WAIT_S} s"
     return token_in(outbox[-1])
 
 
@@ -292,6 +306,80 @@ async def test_forgot_is_rate_limited(client):
     for _ in range(5):
         assert (await forgot(client, "nobody@example.com")).status_code == 200
     assert (await forgot(client, "nobody@example.com")).status_code == 429
+
+
+async def test_forgot_answers_before_any_account_work(_running_app, app, db, monkeypatch):
+    await create_user(db, EMAIL)
+    order: list[str] = []
+    held_connections: list[int] = []
+
+    async def recording_app(scope, receive, send):
+        async def record(message):
+            if (  # the last part of a POST's response: the browser has its answer
+                scope["method"] == "POST"
+                and message["type"] == "http.response.body"
+                and not message.get("more_body")
+            ):
+                order.append("response")
+            await send(message)
+
+        await _running_app(scope, receive, record)
+
+    def new_token() -> str:
+        order.append("token")
+        return "token"
+
+    async def send_mail(to, subject, body) -> bool:
+        order.append("mail")
+        held_connections.append(app.state.engine.pool.checkedout())
+        return True
+
+    monkeypatch.setattr(reset, "new_token", new_token)
+    monkeypatch.setattr(app.state.mailer, "send", send_mail)
+    transport = httpx.ASGITransport(app=recording_app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", headers={"Origin": "http://testserver"}
+    ) as client:
+        known = await forgot(client, EMAIL)
+        unknown = await forgot(client, "nobody@example.com")
+
+    # The token and the mail come after the answer, and only for the account that exists, so
+    # the time the answer takes does not tell the two apart.
+    assert order == ["response", "token", "mail", "response"]
+    assert known.text == unknown.text
+    assert held_connections == [0]  # the mail is sent with no database connection held
+
+
+async def test_reset_mails_are_capped_per_account(client, db, mail_outbox):
+    await create_user(db, EMAIL)
+    await create_user(db, "bob@example.com")
+
+    pages = [await forgot(client) for _ in range(4)]
+
+    assert [r.status_code for r in pages] == [200] * 4
+    assert len({r.text for r in pages}) == 1  # the capped request shows the same page
+    assert [mail.to for mail in mail_outbox] == [EMAIL] * 3
+    assert await db.scalar(select(func.count()).select_from(PasswordResetToken)) == 3
+    # The fourth request ended no link: the one in the third mail is the one that works.
+    assert (await client.get(f"/password/reset/{token_in(mail_outbox[2])}")).status_code == 200
+    assert (await client.get(f"/password/reset/{token_in(mail_outbox[1])}")).status_code == 404
+    await forgot(client, "bob@example.com")  # another account has a budget of its own
+    assert [mail.to for mail in mail_outbox][-1] == "bob@example.com"
+
+
+async def test_a_failing_reset_request_still_answers(client, db, monkeypatch, caplog):
+    await create_user(db, EMAIL)
+
+    def no_token() -> str:
+        raise RuntimeError("no randomness")
+
+    monkeypatch.setattr(reset, "new_token", no_token)
+    with caplog.at_level(logging.ERROR):
+        r = await forgot(client)
+
+    assert r.status_code == 200 and escape(SENT) in r.text
+    assert "Password reset request failed" in caplog.text
+    assert await db.scalar(select(func.count()).select_from(PasswordResetToken)) == 0
 
 
 async def test_login_page_links_to_forgot_password(client):

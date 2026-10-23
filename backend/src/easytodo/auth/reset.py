@@ -5,10 +5,11 @@ A new request, a reset and a password change each end every earlier link of the 
 Resetting does not turn two-factor authentication off.
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import ColumnElement, func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from easytodo.auth.service import normalize_email
 from easytodo.auth.sessions import revoke_all_sessions, sessions_revoked
@@ -18,9 +19,16 @@ from easytodo.mail.mailer import Mailer, render_mail
 from easytodo.models import PasswordResetToken, User, UserStatus
 from easytodo.realtime.events import commit_and_publish
 from easytodo.security.passwords import hash_password, validate_password
+from easytodo.security.ratelimit import RateLimiter
 from easytodo.security.tokens import hash_token, new_token
 
+logger = logging.getLogger(__name__)
+
 RESET_TTL = timedelta(minutes=60)
+# Mails one account gets from the forgotten-password form per window, whoever asks and from
+# wherever: the per-IP limit alone leaves anyone with many addresses free to fill a mailbox.
+RESET_MAILS_PER_ACCOUNT = 3
+RESET_MAILS_WINDOW_S = 3600
 INVALID_RESET_LINK = "This reset link is invalid or has expired."
 
 
@@ -39,17 +47,31 @@ async def invalidate_reset_tokens(db: AsyncSession, user_id: int) -> None:
 
 
 async def request_password_reset(
-    db: AsyncSession, email: str, mailer: Mailer, settings: Settings
+    db: AsyncSession,
+    email: str,
+    mailer: Mailer,
+    settings: Settings,
+    *,
+    limiter: RateLimiter | None = None,
 ) -> None:
     """Mail a reset link to the active account with this address (normalised), ending its
     earlier links. Does nothing for an unknown, invalid or disabled address, so the caller
-    answers the same either way."""
+    answers the same either way.
+
+    With a ``limiter``, an account gets at most ``RESET_MAILS_PER_ACCOUNT`` mails per
+    ``RESET_MAILS_WINDOW_S``; a request over that does nothing either, and ends no link, so that
+    a flood of requests cannot make the link already in the mailbox useless. (An admin sending
+    a link, who has no use for the cap, passes none.)"""
     try:
         email = normalize_email(email)
     except ValidationFailed:
         return  # no account has an invalid address
     user = await db.scalar(select(User).where(User.email == email))
     if user is None or user.status == UserStatus.DISABLED:
+        return
+    if limiter is not None and not limiter.hit(
+        f"password-reset-mail:user:{user.id}", RESET_MAILS_PER_ACCOUNT, RESET_MAILS_WINDOW_S
+    ):
         return
     await invalidate_reset_tokens(db, user.id)
     raw_token = new_token()
@@ -68,6 +90,24 @@ async def request_password_reset(
         valid_minutes=RESET_TTL // timedelta(minutes=1),
     )
     await mailer.send(user.email, subject, body)
+
+
+async def process_reset_request(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    email: str,
+    mailer: Mailer,
+    settings: Settings,
+    limiter: RateLimiter,
+) -> None:
+    """``request_password_reset`` for a background task, which runs once the response is sent:
+    in a session of its own (the request's is gone), and whatever goes wrong is logged, never
+    raised, as nobody is left to answer. The session holds no connection while the mail is sent
+    (it commits before)."""
+    try:
+        async with sessionmaker() as db:
+            await request_password_reset(db, email, mailer, settings, limiter=limiter)
+    except Exception:
+        logger.exception("Password reset request failed")
 
 
 async def get_valid_reset_token(db: AsyncSession, raw_token: str) -> PasswordResetToken:

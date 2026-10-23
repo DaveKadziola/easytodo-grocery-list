@@ -5,7 +5,7 @@ import re
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +17,7 @@ from easytodo.auth.deps import (
     current_session,
     require_user,
 )
-from easytodo.auth.reset import get_valid_reset_token, request_password_reset, reset_password
+from easytodo.auth.reset import get_valid_reset_token, process_reset_request, reset_password
 from easytodo.auth.service import authenticate, normalize_email, register_user
 from easytodo.auth.sessions import (
     clear_session_cookie,
@@ -223,10 +223,21 @@ async def forgot_password_page(request: Request) -> Response:
 
 
 @router.post("/password/forgot", dependencies=[Depends(rate_limit("password-forgot", 5, 3600))])
-async def forgot_password(request: Request, db: DbSession, email: FormField = "") -> Response:
-    """The same answer whether or not the address has an account."""
+async def forgot_password(
+    request: Request, background: BackgroundTasks, email: FormField = ""
+) -> Response:
+    """The same answer whether or not the address has an account. The account work and the mail
+    follow the response, so how long the answer takes tells nothing either, and no database
+    session of the request is held while the mail goes out."""
     state = request.app.state
-    await request_password_reset(db, email, state.mailer, state.settings)
+    background.add_task(
+        process_reset_request,
+        state.sessionmaker,
+        email,
+        state.mailer,
+        state.settings,
+        state.rate_limiter,
+    )
     notice = "If an account exists for that email, we've sent a reset link."
     return render(request, "auth/forgot.html", {"notice": notice})
 
