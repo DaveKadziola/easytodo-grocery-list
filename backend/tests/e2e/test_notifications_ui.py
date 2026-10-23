@@ -116,7 +116,9 @@ def test_join_shows_on_the_bell_without_reload_and_reading_clears_it(logged_in_p
         "href", f"/boards/{board_id}"
     )
     expect(badge(page)).to_be_hidden()  # read
+    assert seed(lambda db: unread_count(db, user)) == 0
     page.reload()
+    wait_until_live(page)  # the badge was asked for again and its answer is in
     expect(badge(page)).to_be_hidden()  # for good
     bell(page).click()
     expect(panel).to_contain_text("vic joined “Groceries”.")  # read, not gone
@@ -157,11 +159,14 @@ def test_a_notification_that_arrives_while_the_panel_is_open_is_shown_and_read(
         )
         await commit_and_publish(db, *events)
 
-    seed(tell)
+    with page.expect_response(re.compile(r"/notifications/read$"), timeout=LIVE_UPDATE_MS * 2):
+        seed(tell)
 
     expect(panel).to_contain_text("eve restored “Home”.", timeout=LIVE_UPDATE_MS)
     expect(badge(page)).to_be_hidden()  # shown to the user who is looking at it: read as well
+    assert seed(lambda db: unread_count(db, user)) == 0  # read for real, not only out of sight
     page.reload()
+    wait_until_live(page)  # the badge was asked for again and its answer is in
     expect(badge(page)).to_be_hidden()
 
 
@@ -331,11 +336,51 @@ def test_a_badge_that_loads_itself_does_not_take_the_bells_answer_away(logged_in
     expect(badge(page)).to_have_text("2 unread")
 
 
+def test_refreshes_that_come_while_one_is_out_are_served_by_one_more(logged_in_page, seed, user):
+    """A burst of reasons to look again (back on the tab, back online, pushes) while the badge is
+    being fetched costs one more request, not one for each."""
+    seed_notifications(seed, user, unread=2)
+    page = logged_in_page
+    page.reload()
+    wait_until_live(page)
+    expect(badge(page)).to_have_text("2 unread")
+    asked: list[str] = []
+    held: list[Route] = []
+
+    def hold_the_first(route: Route) -> None:
+        asked.append(route.request.url)
+        if held:
+            route.continue_()
+        else:
+            held.append(route)
+
+    page.route(re.compile(r"/notifications/badge$"), hold_the_first)
+
+    page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    wait_until(page, lambda: held, "the first refresh")
+    page.evaluate(
+        """() => {
+            for (let n = 0; n < 5; n++) document.dispatchEvent(new Event('visibilitychange'));
+            window.dispatchEvent(new Event('online'));
+        }"""
+    )
+    page.wait_for_timeout(300)
+    assert len(asked) == 1  # still the one that is out
+
+    held[0].continue_()
+
+    wait_until(page, lambda: len(asked) >= 2, "the refresh that the burst asked for")
+    page.wait_for_timeout(500)  # long enough for more of them, were there more
+    assert len(asked) == 2
+    expect(badge(page)).to_have_text("2 unread")
+
+
 def test_a_bell_that_was_refused_stays_down(signed_in_page):
     """Signed out elsewhere: the socket is closed with 4401, and coming back to the tab or being
     back online does not try it again (every try would be refused). On the board list: a board
     page would leave for the login page at once."""
     a, b = signed_in_page(), signed_in_page()
+    wait_until_live(b)  # the page that signing in opened has its own socket by now: leave it out
     sockets = []
     b.on("websocket", lambda ws: sockets.append(ws) if "/ws/user" in ws.url else None)
     b.reload()
