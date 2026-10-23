@@ -1,12 +1,18 @@
+import asyncio
+import threading
+
 import pytest
 from argon2 import PasswordHasher
 
 from easytodo.errors import ValidationFailed
 from easytodo.security.passwords import (
+    PASSWORD_HASH_THREADS,
     hash_password,
+    hash_password_async,
     needs_rehash,
     validate_password,
     verify_password,
+    verify_password_async,
 )
 
 
@@ -18,6 +24,32 @@ def test_hash_is_argon2id_and_salted():
 
 def test_verify_password_returns_false_for_a_malformed_hash():
     assert verify_password("not-an-argon2-hash", "long-enough-pw") is False
+
+
+async def test_async_wrappers_agree_with_the_plain_functions():
+    hashed = await hash_password_async("long-enough-pw")
+    assert hashed.startswith("$argon2id$") and verify_password(hashed, "long-enough-pw")
+    assert await verify_password_async(hashed, "long-enough-pw") is True
+    assert await verify_password_async(hashed, "wrong-password") is False
+    assert await verify_password_async("not-an-argon2-hash", "long-enough-pw") is False
+
+
+async def test_async_hashing_uses_at_most_the_hashing_threads(monkeypatch):
+    names: set[str] = set()
+    real_hash = PasswordHasher.hash
+
+    def recording_hash(self, *args, **kwargs):
+        names.add(threading.current_thread().name)
+        return real_hash(self, *args, **kwargs)
+
+    monkeypatch.setattr(PasswordHasher, "hash", recording_hash)
+
+    await asyncio.gather(
+        *(hash_password_async("long-enough-pw") for _ in range(2 * PASSWORD_HASH_THREADS + 2))
+    )
+
+    assert 1 <= len(names) <= PASSWORD_HASH_THREADS
+    assert all(name.startswith("argon2") for name in names)
 
 
 def test_needs_rehash_only_for_weaker_parameters():

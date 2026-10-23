@@ -30,7 +30,7 @@ from easytodo.models import (
     UserStatus,
 )
 from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
-from easytodo.security.passwords import hash_password
+from easytodo.security.passwords import hash_password_async
 
 ACTIVE_WINDOW = timedelta(days=30)  # "active" users signed in within it
 CANNOT_DELETE_SELF = "You can't delete your own account here."
@@ -182,7 +182,7 @@ async def create_user_with_temp_password(
     password = secrets.token_urlsafe(12)
     user = User(
         email=email,
-        password_hash=hash_password(password),
+        password_hash=await hash_password_async(password),
         is_admin=is_admin,
         must_change_password=True,
     )

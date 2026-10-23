@@ -1,17 +1,18 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from argon2 import PasswordHasher
 from factories import DEFAULT_PASSWORD, create_user
-from helpers import login
+from helpers import count_queries, login
 from sqlalchemy import func, select, update
 
 from easytodo.auth import service
 from easytodo.auth.sessions import SESSION_COOKIE
 from easytodo.models import User, UserSession, UserStatus
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
-from easytodo.security.passwords import needs_rehash, verify_password
+from easytodo.security.passwords import needs_rehash, verify_password, verify_password_async
 from easytodo.security.tokens import hash_token
 
 WRONG_PASSWORD = "not-the-right-password"
@@ -105,11 +106,11 @@ async def test_wrong_password_and_unknown_email_same_message(client, db):
 async def test_unknown_email_still_verifies_a_password(client, monkeypatch, email):
     verified: list[str] = []
 
-    def spy(hash: str, pw: str) -> bool:
+    async def spy(hash: str, pw: str) -> bool:
         verified.append(hash)
-        return verify_password(hash, pw)
+        return await verify_password_async(hash, pw)
 
-    monkeypatch.setattr(service, "verify_password", spy)
+    monkeypatch.setattr(service, "verify_password_async", spy)
     r = await post_form(client, "/login", email=email, password=DEFAULT_PASSWORD)
     assert r.status_code == 400
     assert "Invalid email or password." in r.text
@@ -119,7 +120,12 @@ async def test_unknown_email_still_verifies_a_password(client, monkeypatch, emai
 async def test_overlong_password_is_refused_before_hashing(client, db, monkeypatch):
     await create_user(db, "dave@example.com")
     verified: list[str] = []
-    monkeypatch.setattr(service, "verify_password", lambda hash, pw: verified.append(hash))
+
+    async def spy(hash: str, pw: str) -> bool:
+        verified.append(hash)
+        return False
+
+    monkeypatch.setattr(service, "verify_password_async", spy)
     r = await post_form(client, "/login", email="dave@example.com", password="x" * 1000)
     assert r.status_code == 400
     assert "Invalid email or password." in r.text
@@ -150,6 +156,47 @@ async def test_lockout_after_10_failures(client, db):
     await db.execute(update(User).values(locked_until=datetime.now(UTC) - timedelta(seconds=1)))
     await db.commit()
     await login(client, "dave@example.com")
+
+
+async def test_a_lock_set_during_a_right_password_check_wins(client, db, monkeypatch):
+    # The password is checked on a thread while the event loop serves other requests, one of which
+    # may lock the account (a tenth wrong password) before this right one is through.
+    user = await create_user(db, "dave@example.com")
+    lock = datetime.now(UTC) + service.LOCKOUT_DURATION
+
+    async def lock_meanwhile(hash: str, pw: str) -> bool:
+        await db.execute(update(User).values(locked_until=lock))
+        await db.commit()
+        return True
+
+    monkeypatch.setattr(service, "verify_password_async", lock_meanwhile)
+    r = await post_form(client, "/login", email="dave@example.com", password=DEFAULT_PASSWORD)
+
+    assert r.status_code == 400
+    assert "Too many failed attempts. Try again in 15 minutes." in r.text
+    assert SESSION_COOKIE not in r.headers.get("set-cookie", "")
+    assert await count_rows(db, UserSession) == 0
+    await db.refresh(user)
+    assert user.locked_until == lock  # the lock stays
+    assert user.last_login_at is None  # and the sign-in left no trace
+
+
+@pytest.mark.parametrize("weak_hash", [False, True], ids=["current-hash", "rehash"])
+async def test_a_successful_login_runs_three_statements(app, client, db, weak_hash):
+    user = await create_user(db, "dave@example.com")
+    if weak_hash:  # the new hash goes in with the update, not in a statement of its own
+        user.password_hash = PasswordHasher(time_cost=1, memory_cost=8192, parallelism=1).hash(
+            DEFAULT_PASSWORD
+        )
+        await db.commit()
+    await client.get("/login")
+
+    with count_queries(SimpleNamespace(bind=app.state.engine)) as statements:
+        r = await post_form(client, "/login", email="dave@example.com", password=DEFAULT_PASSWORD)
+
+    assert r.status_code == 303
+    # The user, the update that signs in (guarded against a lock), the session.
+    assert len(statements) == 3, statements
 
 
 async def test_successful_login_resets_failures_and_rehashes(client, db):

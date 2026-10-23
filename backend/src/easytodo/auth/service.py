@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 from email_validator import EmailNotValidError, validate_email
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,9 +13,10 @@ from easytodo.models import User, UserStatus
 from easytodo.security.passwords import (
     MAX_PASSWORD_LENGTH,
     hash_password,
+    hash_password_async,
     needs_rehash,
     validate_password,
-    verify_password,
+    verify_password_async,
 )
 
 DEFAULT_BOARD_NAME = "My list"
@@ -55,7 +56,7 @@ async def register_user(db: AsyncSession, email: str, password: str) -> User:
     """A new account with its first board, "My list" (one transaction)."""
     email = normalize_email(email)
     validate_password(password)
-    user = User(email=email, password_hash=hash_password(password))
+    user = User(email=email, password_hash=await hash_password_async(password))
     db.add(user)
     try:
         await db.flush()
@@ -67,25 +68,42 @@ async def register_user(db: AsyncSession, email: str, password: str) -> User:
 
 
 async def authenticate(db: AsyncSession, email: str, password: str) -> User:
-    """The active user with these credentials. 10 failures in a row lock it for 15 minutes."""
+    """The active user with these credentials. 10 failures in a row lock it for 15 minutes.
+
+    The password is checked on a thread, so other requests run meanwhile: a lock set in that time
+    (the tenth wrong password of a parallel attempt) must still win over this right password.
+    That is what the guarded update at the end is for."""
     if len(password) > MAX_PASSWORD_LENGTH:  # refuse before hashing an arbitrarily long input
         raise InvalidCredentials()
     user = await _find_user(db, email)
     if user is None:
-        verify_password(DUMMY_HASH, password)
+        await verify_password_async(DUMMY_HASH, password)
         raise InvalidCredentials()
     now = datetime.now(UTC)
     if user.locked_until is not None and user.locked_until > now:
         raise AccountLocked()
-    if not verify_password(user.password_hash, password):
+    if not await verify_password_async(user.password_hash, password):
         raise await _failed_attempt(db, user, now)
     if user.status == UserStatus.DISABLED:
         raise AccountDisabled()
-    user.failed_login_count = 0
-    user.locked_until = None
-    user.last_login_at = now
-    if needs_rehash(user.password_hash):
-        user.password_hash = hash_password(password)
+    changes: dict[str, object] = {
+        "failed_login_count": 0,
+        "locked_until": None,
+        "last_login_at": now,
+    }
+    if needs_rehash(user.password_hash):  # before the update, which then holds its lock briefly
+        changes["password_hash"] = await hash_password_async(password)
+    signed_in = await db.scalar(
+        update(User)
+        .where(User.id == user.id, or_(User.locked_until.is_(None), User.locked_until <= now))
+        .values(changes)
+        .returning(User.id)
+    )
+    if signed_in is None:  # locked meanwhile
+        # Obligatory: with no row matched the update has still written its values to ``user``
+        # (it judged the where clause on the stale object), and the rollback drops them.
+        await db.rollback()
+        raise AccountLocked()
     await db.commit()
     return user
 

@@ -149,7 +149,12 @@ async def test_overlong_current_password_is_refused_before_hashing(client, db, m
     await create_user(db, EMAIL)
     await sign_in(client)
     calls = []
-    monkeypatch.setattr(account_routes, "verify_password", lambda *args: calls.append(args))
+
+    async def spy(*args) -> bool:
+        calls.append(args)
+        return False
+
+    monkeypatch.setattr(account_routes, "verify_password_async", spy)
 
     r = await client.post("/account/password", data=change_form(current="x" * 1000))
 

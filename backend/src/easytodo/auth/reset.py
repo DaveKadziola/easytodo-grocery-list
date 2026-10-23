@@ -18,7 +18,7 @@ from easytodo.errors import NotFound, ValidationFailed
 from easytodo.mail.mailer import Mailer, render_mail
 from easytodo.models import PasswordResetToken, User, UserStatus
 from easytodo.realtime.events import commit_and_publish
-from easytodo.security.passwords import hash_password, validate_password
+from easytodo.security.passwords import hash_password_async, validate_password
 from easytodo.security.ratelimit import RateLimiter
 from easytodo.security.tokens import hash_token, new_token
 
@@ -132,6 +132,7 @@ async def reset_password(db: AsyncSession, raw_token: str, new_password: str) ->
     a forced password change, and signs the account out on every device (one commit)."""
     token = await get_valid_reset_token(db, raw_token)
     validate_password(new_password)  # before the token is used up, so it can be tried again
+    new_hash = await hash_password_async(new_password)  # before the token row is locked
     # Conditional, so two concurrent resets cannot both use it.
     used = await db.scalar(
         update(PasswordResetToken)
@@ -142,7 +143,7 @@ async def reset_password(db: AsyncSession, raw_token: str, new_password: str) ->
     if used is None:
         raise NotFound(INVALID_RESET_LINK)
     user = await db.get_one(User, token.user_id)
-    user.password_hash = hash_password(new_password)
+    user.password_hash = new_hash
     user.must_change_password = False
     user.failed_login_count = 0
     user.locked_until = None

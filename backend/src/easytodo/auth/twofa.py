@@ -17,7 +17,7 @@ from easytodo.config import Settings
 from easytodo.errors import Conflict, ValidationFailed
 from easytodo.models import RecoveryCode, User, UserSession
 from easytodo.security.crypto import DecryptionError, decrypt, encrypt
-from easytodo.security.passwords import MAX_PASSWORD_LENGTH, verify_password
+from easytodo.security.passwords import MAX_PASSWORD_LENGTH, verify_password_async
 from easytodo.security.totp import new_totp_secret, verify_totp
 
 logger = logging.getLogger(__name__)
@@ -125,7 +125,7 @@ async def disable_2fa(
     phone is no dead end); the secret and the recovery codes are deleted."""
     if not user.totp_enabled:
         raise Conflict(NOT_ON)
-    check_password(user, password)
+    await check_password(user, password)
     if not await verify_second_factor(db, user, code, settings):
         raise ValidationFailed(INVALID_CODE)
     user.totp_enabled = False
@@ -139,7 +139,7 @@ async def regenerate_recovery_codes(db: AsyncSession, user: User, password: str)
     """New recovery codes in place of all the old ones; needs the password."""
     if not user.totp_enabled:
         raise Conflict(NOT_ON)
-    check_password(user, password)
+    await check_password(user, password)
     codes = await _replace_recovery_codes(db, user)
     await db.commit()
     return codes
@@ -197,9 +197,11 @@ def recovery_code_matches(code: str, code_hash: str) -> bool:
     return hmac.compare_digest(_hash_recovery_code(_normalize_recovery_code(code), salt), code_hash)
 
 
-def check_password(user: User, password: str) -> None:
+async def check_password(user: User, password: str) -> None:
     """``ValidationFailed`` unless ``password`` is the user's current password."""
-    if len(password) > MAX_PASSWORD_LENGTH or not verify_password(user.password_hash, password):
+    if len(password) > MAX_PASSWORD_LENGTH or not await verify_password_async(
+        user.password_hash, password
+    ):
         raise ValidationFailed(WRONG_PASSWORD)
 
 

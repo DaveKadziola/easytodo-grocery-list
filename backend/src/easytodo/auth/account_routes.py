@@ -27,9 +27,9 @@ from easytodo.models import RETENTION_CHOICES, SORT_FIELDS, User, UserSession
 from easytodo.realtime.events import commit_and_publish
 from easytodo.security.passwords import (
     MAX_PASSWORD_LENGTH,
-    hash_password,
+    hash_password_async,
     validate_password,
-    verify_password,
+    verify_password_async,
 )
 from easytodo.security.ratelimit import limit_user
 from easytodo.security.totp import provisioning_uri, qr_svg
@@ -109,7 +109,7 @@ async def change_password(
     new_password_confirm: FormField = "",
 ) -> Response:
     try:
-        if len(current_password) > MAX_PASSWORD_LENGTH or not verify_password(
+        if len(current_password) > MAX_PASSWORD_LENGTH or not await verify_password_async(
             user.password_hash, current_password
         ):
             raise ValidationFailed("Current password is incorrect.")
@@ -117,11 +117,13 @@ async def change_password(
             raise ValidationFailed("Passwords do not match.")
         validate_password(new_password)
         # A forced change replaces a password someone else knows (an admin's temporary one).
-        if user.must_change_password and verify_password(user.password_hash, new_password):
+        if user.must_change_password and await verify_password_async(
+            user.password_hash, new_password
+        ):
             raise ValidationFailed("Choose a new password, not the temporary one.")
     except AppError as exc:
         return render(request, "account/password.html", {"error": exc.message}, status_code=400)
-    user.password_hash = hash_password(new_password)
+    user.password_hash = await hash_password_async(new_password)
     user.must_change_password = False
     await invalidate_reset_tokens(db, user.id)  # a reset link in the mailbox would override it
     revoked = await revoke_all_sessions(db, user.id, except_session_id=request.state.session.id)
@@ -162,7 +164,7 @@ async def confirm_two_factor_setup(
         raise Conflict(ALREADY_ON)
     settings = request.app.state.settings
     try:
-        check_password(user, password)
+        await check_password(user, password)
         codes = await confirm_setup(db, user, code, settings)
     except ValidationFailed as exc:
         # The secret already scanned stays, so another try needs no new scan (a new one only
