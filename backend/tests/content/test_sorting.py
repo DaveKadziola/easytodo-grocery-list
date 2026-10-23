@@ -3,21 +3,23 @@ descending; open items first or not), a category's own order that beats it, "Use
 the "⇅" control on every category for every role. The order is the viewer's own: it changes
 nothing for the other members and publishes no event."""
 
+import asyncio
 import json
 import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from factories import create_board, create_category, create_item, create_user
-from helpers import NASTY, NASTY_ESCAPED, count_queries
-from sqlalchemy import select, update
+from helpers import NASTY, NASTY_ESCAPED, count_queries, wait_until_a_query_waits_for_a_lock
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from content.test_board_markup import EDIT_CONTROLS, section
 from easytodo.boards.service import SortChoice, get_board_view
 from easytodo.content import prefs, prefs_routes
 from easytodo.content.prefs import get_category_sort
-from easytodo.content.service import get_category_view
-from easytodo.models import CategorySortPref, Item, User
+from easytodo.content.service import CATEGORY_GONE, get_category_view
+from easytodo.models import Category, CategorySortPref, Item, User
 from easytodo.security.csrf import CSRF_HEADER
 
 HX = {"HX-Request": "true"}
@@ -280,6 +282,78 @@ async def test_sort_routes_are_404_for_foreign_ids(signed_in_client, db):  # Rev
                     assert json.loads(r.headers["hx-trigger"])["resync"] is True
 
     assert [(p.user_id, p.category_id) for p in await all_prefs(db)] == [(alice.id, alices.id)]
+
+
+@pytest.mark.parametrize("headers", [{}, HX], ids=["page", "htmx"])
+async def test_category_deleted_after_the_lookup_is_404(
+    editor_client, category, db, monkeypatch, headers
+):
+    """Looking the category up takes no lock, so another device can delete it before the row is
+    written: the foreign key refuses the write, and the answer is the same 404 as for a category
+    that was gone before (with a resync for the page)."""
+    load_category = prefs.load_category
+
+    async def load_then_delete_elsewhere(*args, **kwargs):
+        found = await load_category(*args, **kwargs)
+        await db.execute(delete(Category).where(Category.id == category.id))
+        await db.commit()  # as the other device's request does
+        return found
+
+    monkeypatch.setattr(prefs, "load_category", load_then_delete_elsewhere)
+
+    r = await editor_client.post(f"/categories/{category.id}/sort", data=VALID, headers=headers)
+
+    assert r.status_code == 404
+    if headers:
+        assert json.loads(r.headers["hx-trigger"]) == {
+            "toast": {"level": "error", "message": CATEGORY_GONE},
+            "resync": True,
+        }
+    else:
+        assert CATEGORY_GONE in r.text
+    assert await db.scalar(select(func.count()).select_from(Category)) == 0  # it did go
+    assert await all_prefs(db) == []
+
+
+async def test_two_sorts_of_the_same_category_at_once_leave_one_row(
+    editor_client, category, db, monkeypatch
+):
+    """The same member sorting the same category from two devices at the same moment: the second
+    write waits for the first one's commit, and then updates its row (one row, no error)."""
+    editor = await user_named(db, "editor@example.com")
+    commit_and_publish = prefs.commit_and_publish
+    first_is_writing, release_first = asyncio.Event(), asyncio.Event()
+    commits = 0
+
+    async def hold_the_first_commit(session, *events):
+        nonlocal commits
+        commits += 1
+        if commits == 1:  # the first writer, whose row is in but not committed
+            first_is_writing.set()
+            await release_first.wait()
+        await commit_and_publish(session, *events)
+
+    monkeypatch.setattr(prefs, "commit_and_publish", hold_the_first_commit)
+
+    async def sort(field: str, descending: bool) -> None:
+        async with AsyncSession(db.bind, expire_on_commit=False) as session:
+            await prefs.set_category_sort(
+                session, category.id, editor, field=field, descending=descending, open_first=True
+            )
+
+    async def race() -> None:
+        first = asyncio.create_task(sort("name", False))
+        await first_is_writing.wait()
+        second = asyncio.create_task(sort("created", True))
+        await wait_until_a_query_waits_for_a_lock(db)  # the second one's upsert, behind the first
+        release_first.set()
+        await asyncio.gather(first, second)  # neither raises
+
+    await asyncio.wait_for(race(), timeout=15)
+
+    (pref,) = await all_prefs(db)
+    assert (pref.user_id, pref.category_id) == (editor.id, category.id)
+    assert (pref.field, pref.descending) == ("created", True)  # the last one to write
 
 
 @pytest.mark.parametrize("breach", ["no_token", "foreign_origin"])

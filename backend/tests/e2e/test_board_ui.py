@@ -71,7 +71,7 @@ def sort_dairy(page: Page, order: str) -> None:
 def too_small_targets(page: Page) -> list[str]:
     return page.locator("#board-content").evaluate(
         """(board, selector) => Array.from(board.querySelectorAll(selector))
-            .filter((el) => el.getClientRects().length > 0)
+            .filter((el) => el.checkVisibility())
             .map((el) => [el.outerHTML.slice(0, 80), el.getBoundingClientRect()])
             .filter(([, box]) => box.width < 44 || box.height < 44)
             .map(([html, box]) => `${html} is ${box.width}x${box.height}`)""",

@@ -6,7 +6,7 @@ and the item modal by keyboard."""
 import re
 
 import pytest
-from factories import create_board
+from factories import create_board, create_category, create_item
 from playwright.sync_api import Locator, Page, expect
 
 from e2e.locators import TAP_TARGETS, category
@@ -68,10 +68,11 @@ def category_cards(page: Page) -> list[Locator]:
 
 
 def too_small_targets(page: Page) -> list[str]:
-    """Every control on the page (header, board, bottom bar) smaller than 44×44 px."""
+    """Every control shown on the page (header, board, bottom bar) smaller than 44×44 px. Not those
+    in a closed menu: checkVisibility() knows they are skipped, getClientRects() still lists them."""
     return page.evaluate(
         """(selector) => Array.from(document.querySelectorAll(selector))
-            .filter((el) => el.getClientRects().length > 0)
+            .filter((el) => el.checkVisibility())
             .map((el) => [el.outerHTML.slice(0, 80), el.getBoundingClientRect()])
             .filter(([, box]) => box.width < 44 || box.height < 44)
             .map(([html, box]) => `${html} is ${box.width}x${box.height}`)""",
@@ -104,22 +105,79 @@ def test_touch_targets_at_least_44px_on_phone(logged_in_page_mobile, seeded_boar
     assert too_small_targets(page) == []
 
 
-def test_sort_menu_fits_a_phone(logged_in_page_mobile, seeded_board, open_board):
-    page = logged_in_page_mobile
-    open_board(page, seeded_board)
-    category(page, "Dairy").get_by_label("Sort Dairy").click()
-    menu = (
-        category(page, "Dairy")
-        .locator("details", has=page.get_by_label("Sort Dairy"))
-        .locator(".menu")
+ITEMS = ["Butter", "Cheese", "Milk", "Yogurt"]
+
+
+def seed_categories(seed, user, names: list[str]) -> int:
+    """A board "Groceries" of ``user`` with these categories, each holding the same four items
+    (enough for several categories to be taller than a phone's screen)."""
+
+    async def make(db) -> int:
+        board = await create_board(db, user, "Groceries")
+        for position, name in enumerate(names):
+            category = await create_category(db, board, name, position)
+            for item_name in ITEMS:
+                await create_item(db, category, item_name)
+        return board.id
+
+    return seed(make)
+
+
+def reachable(control: Locator) -> bool:
+    """Whether a finger on the middle of ``control``, scrolled into view first, lands on it (or in
+    it) and not on what covers it, such as the phone's bottom bar."""
+    return control.evaluate(
+        """(el) => {
+            el.scrollIntoView({ block: "nearest" });
+            const box = el.getBoundingClientRect();
+            const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+            return hit === el || el.contains(hit);
+        }"""
     )
-    expect(menu).to_be_visible()
+
+
+@pytest.mark.parametrize(
+    "names", [["Dairy"], ["Dairy", "Bakery", "Fruit"]], ids=["one category", "last of three"]
+)
+def test_sort_menu_fits_a_phone(logged_in_page_mobile, seed, user, open_board, names):
+    page = logged_in_page_mobile
+    open_board(page, seed_categories(seed, user, names))
+    last = names[-1]  # its menu would open at the very end of the page
+    card = category(page, last)
+    sort_button = card.get_by_label(f"Sort {last}")
+    menu = card.locator("details", has=page.get_by_label(f"Sort {last}"))
+    items = card.locator("li[data-item-id]")
+    if len(names) > 1:  # the last card is below the fold: this tests the page scrolled to it
+        assert card.bounding_box()["y"] > page.viewport_size["height"]
+
+    sort_button.tap()
+    expect(menu.locator(".menu")).to_be_visible()
 
     assert too_small_targets(page) == []  # the options (through their labels) and the buttons
-    box = menu.bounding_box()
+    box = menu.locator(".menu").bounding_box()
     width = page.viewport_size["width"]
     assert box["x"] >= 0 and box["x"] + box["width"] <= width, box
+    bar = page.locator("#bottom-bar").bounding_box()
+    assert 0 <= box["y"] and box["y"] + box["height"] <= bar["y"], (box, bar)  # above the bar
     assert page.evaluate("document.scrollingElement.scrollWidth <= window.innerWidth")
+    controls = [
+        *menu.locator("label").all(),
+        menu.get_by_role("button", name="Apply", exact=True),
+        menu.get_by_role("button", name="Use my default"),
+    ]
+    assert len(controls) == 9
+    assert [c.inner_text() for c in controls if not reachable(c)] == []  # none under the bar
+
+    menu.get_by_text("Z–A / newest first").tap()
+    menu.get_by_role("button", name="Apply", exact=True).tap()
+    expect(sort_button).to_have_class(re.compile(r"\bsort-custom\b"))
+    expect(items).to_have_text([re.compile(name) for name in reversed(ITEMS)])
+
+    sort_button.tap()  # the menu again, now with a choice of its own to take back
+    assert reachable(menu.get_by_role("button", name="Use my default"))
+    menu.get_by_role("button", name="Use my default").tap()
+    expect(sort_button).not_to_have_class(re.compile("sort-custom"))
+    expect(items).to_have_text([re.compile(name) for name in ITEMS])
 
 
 def test_desktop_shows_three_columns(logged_in_page_with_seed):

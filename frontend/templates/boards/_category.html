@@ -19,7 +19,8 @@
     {#- The member's own order for this category, for every role: it changes nothing on the board for anyone else. #}
     <details class="relative shrink-0">
       <summary class="btn-icon cursor-pointer list-none text-slate-600 dark:text-slate-400 [&::-webkit-details-marker]:hidden{% if sort.custom %} sort-custom{% endif %}" title="{{ 'Custom order' if sort.custom else 'Sort' }}" aria-label="Sort {{ category.name }}">⇅</summary>
-      <div class="menu">
+      {#- A sheet above the phone's bottom bar (and its safe-area padding): the menu is 540 px high, and where it hung from the button its last buttons ended up under the bar, with nothing to scroll them out. #}
+      <div class="menu max-sm:fixed max-sm:inset-x-4 max-sm:bottom-[calc(5rem+env(safe-area-inset-bottom))] max-sm:max-h-[70dvh] max-sm:w-auto max-sm:overflow-y-auto">
         <form hx-post="/categories/{{ category.id }}/sort" hx-target="#category-{{ category.id }}" class="space-y-2 p-2">
           <fieldset>
             <legend class="label px-3 pt-2">Sort by</legend>
