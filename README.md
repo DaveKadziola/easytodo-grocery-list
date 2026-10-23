@@ -304,6 +304,16 @@ included.
 - `deploy/`: Dockerfile, entrypoint and Caddyfile.
 - `docs/`: deployment, migration from v1, performance.
 
+## Releases
+
+Every push to `main` whose CI passes gets the next `vX.Y.Z` tag and a GitHub release, and the
+releases are the changelog. The `release` job in `.github/workflows/ci.yml` runs
+`scripts/release-notes.py`, which reads the PR titles merged since the newest tag. A title is
+`type(scope): subject`: `!` after the type or `BREAKING CHANGE` in the body bumps the major
+version, any `feat` the minor, anything else the patch. A title in another form lands under Other
+and counts as a patch. A wrong version or text is fixed by editing the release on GitHub; the job
+never moves a tag. Preview: `python3 scripts/release-notes.py --target origin/main`.
+
 ## License
 
 [MIT](LICENSE)
