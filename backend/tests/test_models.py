@@ -490,5 +490,10 @@ async def test_upgrade_from_0001_keeps_v2_0_data(db, _db_engine: AsyncEngine):
         await asyncio.to_thread(command.upgrade, cfg, "head")
         assert await _count(db, Item) == 3
     finally:
-        await db.rollback()
+        # Whatever failed, leave the shared database at head and empty: if 0002 could not take the
+        # v2.0 rows, the upgrade fails again on them and every later test would find 0001 and
+        # these rows. At 0001 every table hangs from users or boards, so this empties them all.
+        await db.rollback()  # an open transaction would block the TRUNCATE and the ALTER
+        async with _db_engine.begin() as conn:
+            await conn.execute(text("TRUNCATE users, boards RESTART IDENTITY CASCADE"))
         await asyncio.to_thread(command.upgrade, cfg, "head")

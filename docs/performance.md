@@ -7,9 +7,12 @@ same machine, with the same seed (20 categories x 30 items) and 200 measured req
 v2.1 must not be slower than v2.0. The acceptance criterion: for the same three scenarios, the
 median of the p95 of 3 runs of v2.1 is at most the median of the p95 of 3 runs of v2.0 (the tag
 `v2.0.0`) plus 5%, both measured on the same machine in the same session, one after the other, with
-the same seed and request count and with the `scripts/bench.py` of v2.1 for both. The 5% allows
-for the spread between runs of v2.0, which reaches about 3% at p95 in the v2 result below. That
-result is not the baseline of v2.1: it was measured on another machine, by another method.
+the same seed and request count and with the `scripts/bench.py` of v2.1 for both. The 5% is a
+margin on top of the median, not an estimate of the noise between runs, which is larger: in the
+v2.1 result below the p95 of a single run of v2.0 is up to 5% from the median of its three runs on
+view_board and up to 12% on add_item and toggle_item (the highest and the lowest run differ by 6%,
+20% and 19%). That is why the medians of 3 runs are compared, never single runs. The v2 result
+further down is not the baseline of v2.1: it was measured on another machine, by another method.
 
 ## v2.1 result
 
@@ -165,8 +168,8 @@ empty for its runs to compare. v2 starts empty to match.
 the page. A second account, `bench-member-<run>@example.com` with the same password, joins the board
 as an editor through an invite link and adds every other item, so each item shows its author's
 initials. Then every 10th item gets 5 checklist entries and a small text file (`note.txt`). The
-scenarios are the same. The sign-up is limited to 10 an hour per address, and counts: start every
-realistic run on a fresh app (a restarted container does).
+scenarios are the same. The sign-up is limited to 10 an hour per client IP address, and counts:
+start every realistic run on a fresh app (a restarted container does).
 
 ### v2
 

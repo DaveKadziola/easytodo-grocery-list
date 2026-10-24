@@ -5,10 +5,10 @@ boards can be shared, and a change made on one phone shows up on every other ope
 moment, without reloading. It runs on your own server or home computer with docker compose, and
 works on a home network without internet access.
 
-This is v2.1 of EasyToDo v2, a rewrite of the original single-list Flask app as a multi-user
-FastAPI + HTMX app. Coming from v1? See [docs/migration-from-v1.md](docs/migration-from-v1.md).
-Updating from v2.0? See [What's new in v2.1](#whats-new-in-v21) and
-[Upgrading from v2.0](#upgrading-from-v20).
+This is EasyToDo v2.1, the second release of the v2 rewrite of the original single-list Flask
+app as a multi-user FastAPI + HTMX app. Coming from v1? See
+[docs/migration-from-v1.md](docs/migration-from-v1.md). Updating from v2.0? See
+[What's new in v2.1](#whats-new-in-v21) and [Upgrading from v2.0](#upgrading-from-v20).
 
 <p align="center">
   <img src="docs/images/board-phone.png" alt="A grocery board on a phone" width="260">
@@ -89,10 +89,10 @@ v2.1 adds these to v2.0, in this order:
    one member looks as before. Account → "Display name" is optional and defaults to the part of
    the email before the @.
 7. **Notifications.** The bell next to Admin, Account and Sign out counts the unread ones, and the
-   panel updates without reloading. It shows the last 30 days: someone joined your board or left
-   it; you were removed from a board, or your role on it changed; the owner archived or restored
-   a board you belong to; someone moved a category to or from a board you share. There are none
-   about items, no mails and no push messages.
+   panel updates without reloading. It lists the newest 20 of the last 30 days: someone joined
+   your board or left it; you were removed from a board, or your role on it changed; the owner
+   archived or restored a board you belong to; someone moved a category to or from a board you
+   share. There are none about items, no mails and no push messages.
 8. **"New category" dialog.** The button opens a dialog with the name and "On top" or "At the
    bottom" (the default), and the cursor then goes to "Add item" in the new category. The form at
    the bottom of the board is gone. It works the same on a phone and on a desktop.
@@ -111,10 +111,10 @@ v2.1 adds these to v2.0, in this order:
     `EASYTODO_ATTACHMENTS_TOTAL_BYTES`). The files live in their own docker volume, `attachments`,
     not in the database, and every download goes through the app, which checks the board access.
     The volume belongs in the backup ([Backup and restore](#backup-and-restore)).
-11. **Checklists.** An item's details can hold a checklist: entries to tick, edit, delete and drag
-    into another order. The item's tile shows a counter such as "5/20", which turns green when
-    every entry is ticked. All of it updates live. Ticking the last entry does not tick the item:
-    you do that yourself.
+11. **Checklists.** An item's details can hold a checklist of up to 100 entries to tick, edit,
+    delete and drag into another order. The item's tile shows a counter such as "5/20", which
+    turns green when every entry is ticked. All of it updates live. Ticking the last entry does
+    not tick the item: you do that yourself.
 
 Also changed since v2.0, from its review: rate limits count an IPv6 address by its /64 network,
 password guesses on the account pages are limited per account, and an account gets at most 3
@@ -149,8 +149,10 @@ the `attachments` volume creates itself. In order:
    archived boards kept longer, or forever, sets it there.
 6. **What looks different.** Existing items have no author, so they show no initials; items
    added from now on do, on boards with more than one member. Every account starts with the old
-   sort order (open items first, then by name) and no display name. "Delete board" and "Delete
-   category" are "Archive", and "Members" is "Invite and members" in the ⋮ menu of the board list.
+   sort order (open items first, then by name) and no display name. "Delete board" is "Archive" in
+   the board's ⋮ menu on the board list, "Delete category" is "Archive category" in the
+   category's ⋮ menu, and "Members" is now the page "Invite and members" (⋮ on the board list →
+   "Invite").
 
 **Going back to v2.0.** Stop the app, bring the database back to the v2.0 schema with the
 v2.1 image, then start v2.0:
@@ -284,19 +286,24 @@ browsers, or a normal and a private window, each signed in as someone else.
 11. **My boards and Shared with me.** The owner's list has the section "My boards", and a board
     that Bob has joined carries the badge "Shared". Bob's list has "Shared with me", where the
     board shows the owner's email and Bob's role.
-12. **Move a category to another board.** As the owner, make a second board "Party" with a
-    category "Dairy", and give "Dairy" on "Groceries" a few items, a checklist and a file
-    (steps 17 and 18). Open the category's ⋮ menu on "Groceries" → "Move to board…", pick "Party"
-    and choose "Move". The dialog says "That board already has a category with this name." and
-    fills in "Dairy (2)"; choose "Move" again. The category is the last one on "Party", with its
-    items, checklist and files, and "Groceries" no longer has it. Have both boards open in two
-    browsers: both change without reloading. Bob's dialog lists only the boards where he is an
-    editor or the owner, and he can move a category only from a board where he is an editor.
+12. **Move a category to another board.** As the owner, take the board you shared with Bob as an
+    editor (step 4); it is called "Groceries" here. Give it a category "Dairy" with a few items,
+    a checklist on one of them and a file on another (steps 17 and 18), and make a second board
+    "Party" with a category "Dairy" as well. Open the category's ⋮ menu on "Groceries" → "Move
+    to board…", pick "Party" and choose "Move". The dialog says "That board already has a
+    category with this name." and fills in "Dairy (2)"; choose "Move" again. The category is the
+    last one on "Party", with its items, checklist and files, and "Groceries" no longer has it.
+    Have both boards open in two browsers: both change without reloading. Bob's dialog lists only
+    the boards where he is an editor or the owner, and he can move a category only from a board
+    where he is an editor.
 13. **Who added an item.** On the board shared with Bob, add an item as Bob: a coloured circle
-    with his initials ("B" for bob@example.com) shows on it for both of you. Items from before the
-    board was shared, and every item on a board with one member, have none. Open the item: it
-    says "Added by bob" with the date, and when it was last modified. Bob sets Account →
-    "Display name" to "Bob Marley" and chooses "Save name": the circle reads "BM".
+    with his initials ("B" for bob@example.com) shows on it for both of you. Your own items on
+    that board, including the ones you added before sharing it, show your circle as well. Open
+    the item: it says "Added by bob" with the date, and when it was last modified. Bob sets
+    Account → "Display name" to "Bob Marley" and chooses "Save name": the circle reads "BM".
+    Remove Bob (step 4) and the board has one member again: no item shows a circle, and the
+    details say only "Added" with the date. Items from before v2.1 have no author and never show
+    one ([Upgrading from v2.0](#upgrading-from-v20), step 6).
 14. **Notifications.** As the owner, watch the bell in the header while Bob joins a board by an
     invite link (step 4): its counter goes up without reloading, and the panel says that Bob
     joined. Bob leaves the board: another notification. Change Bob's role, as the owner, and the

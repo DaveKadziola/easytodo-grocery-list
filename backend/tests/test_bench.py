@@ -337,10 +337,14 @@ async def test_v2_event_latencies_name_the_board_and_item_on_a_timeout(monkeypat
 
 
 def _realistic_handler(
-    *, invite_form: dict, attachments: list[httpx.Request], accept_status: int = 303
+    *,
+    invite_form: dict,
+    attachments: list[httpx.Request],
+    answers: dict[tuple[str, str], httpx.Response] | None = None,
 ):
     """One server stub for the owner's, the second and the member's client: board 7 whose items
-    are numbered in the order they were added, the invite page of ``/invite/tok``."""
+    are numbered in the order they were added, the invite page of ``/invite/tok``. ``answers``
+    replaces the answer to a (method, path)."""
     sessions = iter(f"session-{n}" for n in range(1, 100))
     items: list[int] = []
 
@@ -350,13 +354,15 @@ def _realistic_handler(
         if request.method == "POST":  # what the browser sends on every change
             assert request.headers.get("x-csrf-token") == "csrf" or path in ("/login", "/register")
             assert request.headers["origin"] == "http://bench.test"
+        if answers and route in answers:
+            return answers[route]
         if route in {("GET", "/login"), ("GET", "/register")}:
             return httpx.Response(200, headers={"set-cookie": "easytodo_csrf=csrf; Path=/"})
         if route in {("POST", "/login"), ("POST", "/register")}:
             cookie = f"easytodo_session={next(sessions)}; Path=/"
             return httpx.Response(303, headers={"location": "/", "set-cookie": cookie})
         if route == ("POST", "/invite/tok/accept"):
-            return httpx.Response(accept_status, headers={"location": "/boards/7"})
+            return httpx.Response(303, headers={"location": "/boards/7"})
         if route == ("POST", "/boards"):
             return httpx.Response(303, headers={"location": "/boards/7"})
         if route == ("POST", "/boards/7/invites"):
@@ -440,8 +446,37 @@ async def test_v2_realistic_seed_shares_the_board_and_adds_checklists_and_attach
     assert attachments[0].headers["x-csrf-token"] == "csrf"
 
 
-async def test_v2_realistic_seed_names_the_failed_step_when_joining(monkeypatch):
-    handler = _realistic_handler(invite_form={}, attachments=[], accept_status=403)
+@pytest.mark.parametrize(
+    ("route", "answer", "message"),
+    [
+        pytest.param(
+            ("GET", "/register"),
+            httpx.Response(500),
+            r"Joining by invite: opening the sign-up page failed: HTTP 500",
+            id="sign-up page",
+        ),
+        pytest.param(
+            ("POST", "/register"),
+            httpx.Response(400),
+            r"Joining by invite: signing up failed: HTTP 400",
+            id="signing up",
+        ),
+        pytest.param(
+            ("POST", "/boards/7/invites"),
+            httpx.Response(201, text="<p>No link here</p>"),
+            r"The invite page shows no invite link",
+            id="no invite link",
+        ),
+        pytest.param(
+            ("POST", "/invite/tok/accept"),
+            httpx.Response(403),
+            r"Joining by invite: accepting the invite failed: HTTP 403",
+            id="accepting",
+        ),
+    ],
+)
+async def test_v2_realistic_seed_names_the_failed_step_when_joining(route, answer, message):
+    handler = _realistic_handler(invite_form={}, attachments=[], answers={route: answer})
     owner, _ = _recording_client(handler)
     second, _ = _recording_client(handler)
     member, _ = _recording_client(handler)
@@ -449,7 +484,7 @@ async def test_v2_realistic_seed_names_the_failed_step_when_joining(monkeypatch)
         target = bench.V2Target(
             owner, second, email="b@example.com", password="pw", member_client=member
         )
-        with pytest.raises(RuntimeError, match=r"accepting the invite.*HTTP 403"):
+        with pytest.raises(RuntimeError, match=f"^{message}$"):
             await target.seed(categories=1, items=2)
 
 
