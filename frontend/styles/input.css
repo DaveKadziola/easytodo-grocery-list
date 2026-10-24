@@ -72,16 +72,114 @@
     @apply rounded focus-visible:outline-2 focus-visible:outline-emerald-600;
   }
 
+  /* A person's initials on a colour (partials/_avatar.html, which adds the colour and "md"). */
+  .avatar {
+    @apply inline-flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold;
+  }
+
+  /* How many of an item's checklist entries are done (partials/_checklist_count.html, which adds the
+     colour). inline-flex like the avatar: the line-through of a done item does not reach it. */
+  .checklist-count {
+    @apply inline-flex h-6 items-center text-xs font-semibold tabular-nums;
+  }
+
+  /* How many files an item has (partials/_attachment_count.html). inline-flex like the checklist
+     count: the line-through of a done item does not reach it. */
+  .attachment-count {
+    @apply inline-flex h-6 items-center gap-1 text-xs font-semibold tabular-nums;
+    @apply text-slate-600 dark:text-slate-400;
+  }
+
+  /* The button of a file field ("Choose file"): preflight leaves it bare, so it gets the look of
+     .btn-secondary (the file: utilities on the field set its size and corners). */
+  input[type="file"]::file-selector-button {
+    @apply cursor-pointer bg-slate-100 font-medium text-slate-700 ring-1 ring-slate-300;
+    @apply dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-600;
+  }
+
+  /* An attached Markdown file, rendered (attachments/view.html). Preflight takes the browser's own
+     look from headings, lists and the rest of what Markdown makes, so here they get one back. */
+  .markdown {
+    @apply leading-relaxed break-words;
+  }
+
+  .markdown :where(h1, h2, h3, h4, h5, h6) {
+    @apply mt-6 mb-2 font-semibold;
+  }
+
+  .markdown h1 {
+    @apply text-2xl;
+  }
+
+  .markdown h2 {
+    @apply text-xl;
+  }
+
+  .markdown h3 {
+    @apply text-lg;
+  }
+
+  .markdown :where(p, ul, ol, pre, blockquote) {
+    @apply my-3;
+  }
+
+  .markdown ul {
+    @apply list-disc pl-6;
+  }
+
+  .markdown ol {
+    @apply list-decimal pl-6;
+  }
+
+  .markdown a {
+    @apply font-medium text-emerald-700 underline underline-offset-2 dark:text-emerald-400;
+  }
+
+  .markdown code {
+    @apply rounded bg-slate-100 px-1 font-mono text-sm dark:bg-slate-800;
+  }
+
+  .markdown pre {
+    @apply overflow-x-auto rounded-lg bg-slate-100 p-3 dark:bg-slate-800;
+  }
+
+  .markdown pre code {
+    @apply bg-transparent p-0;
+  }
+
+  .markdown blockquote {
+    @apply border-l-4 border-slate-300 pl-4 text-slate-600 dark:border-slate-600 dark:text-slate-400;
+  }
+
+  .markdown hr {
+    @apply my-6 border-slate-200 dark:border-slate-700;
+  }
+
   /* A menu opened from a <details> summary: a category's actions, the board switcher. */
   .menu {
     @apply absolute right-0 z-10 mt-1 w-64 rounded-lg bg-white p-1 shadow-lg ring-1 ring-slate-200;
     @apply dark:bg-slate-800 dark:ring-slate-700;
   }
 
+  /* A category's menus on a phone: a sheet above the bottom bar (and its safe-area padding).
+     Hung from their buttons, the ones of a card at the foot of the board ended under the bar,
+     with nothing to scroll them out (the sort menu is 540 px high). */
+  .menu-sheet {
+    @apply max-sm:fixed max-sm:inset-x-4 max-sm:bottom-[calc(5rem+env(safe-area-inset-bottom))];
+    @apply max-sm:max-h-[70dvh] max-sm:w-auto max-sm:overflow-y-auto;
+  }
+
   .menu-item {
     @apply flex min-h-11 w-full items-center rounded-md px-3 text-left text-sm font-medium;
     @apply hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-emerald-600;
     @apply dark:hover:bg-slate-700;
+  }
+
+  /* A sort button of a category that has an order of its own: a dot in its corner, so that the
+     state shows without the title (a phone has none). */
+  .sort-custom {
+    @apply relative after:absolute after:top-2 after:right-2 after:size-2 after:rounded-full after:bg-emerald-600 after:content-[''];
+    @apply dark:after:bg-emerald-400;
   }
 
   /* Where a dragged item or category will land. */
@@ -96,6 +194,14 @@
   .form-error {
     @apply rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-200;
     @apply dark:bg-red-950 dark:text-red-200 dark:ring-red-900;
+  }
+
+  /* The number of unread notifications on the bell (notifications/_badge.html). White on red-600
+     is above 4.5:1 (WCAG AA); the bell's button is 44×44 px, the badge sits on its corner and
+     does not take the tap. */
+  .notifications-badge {
+    @apply pointer-events-none absolute top-0.5 right-0.5 inline-flex h-5 min-w-5 items-center justify-center;
+    @apply rounded-full bg-red-600 px-1 text-xs leading-none font-semibold text-white tabular-nums;
   }
 
   /* The board's connection in the header: a dot, and the word beside it from a tablet up (on a
@@ -133,6 +239,12 @@
   .toast-error {
     @apply bg-red-700;
   }
+
+  /* The Undo button in a toast: sky-300 on slate-900 (and on dark mode's slate-700) is over 4.5:1. */
+  .toast-action {
+    @apply min-h-11 min-w-11 shrink-0 rounded font-semibold text-sky-300 underline;
+    @apply focus-visible:outline-2 focus-visible:outline-sky-300;
+  }
 }
 
 /* With the bottom bar on a phone, the page ends above it and toasts show above it. */
@@ -154,5 +266,11 @@
 /* A category's "Move up" / "Move down" only where there is somewhere to move to. */
 #categories > section:first-of-type [data-move="up"],
 #categories > section:last-of-type [data-move="down"] {
+  display: none;
+}
+
+/* A category's "Move to board…" only on a page that has the dialog (there is another board to move
+   it to): the category fragments are the same on every page, and do not know. */
+body:not(:has(#move-category)) [data-move-category-id] {
   display: none;
 }

@@ -1,16 +1,21 @@
-{# The members page. Context: board, role (the viewer's own), members (list of MemberView),
-   invites (the pending ones; owner only), new_link (a link invite just created, or the link of
-   an e-mail invite to link_email whose mail was not delivered: shown this once),
-   valid_days (how long an invite works) and notice. Every change here answers with this whole page, and its htmx controls swap in
-   #sharing (they inherit hx-target and hx-select from it). -#}
+{# The members page, reached from "Invite" in the owner's ⋮ menu on the board list. Context: board,
+   role (the viewer's own), members (list of MemberView), invites (the pending ones; owner only),
+   new_link (a link invite just created, or the link of an e-mail invite to link_email whose mail
+   was not delivered: shown this once), valid_days (how long an invite works) and notice. Every
+   change here answers with this whole page, and its htmx controls swap in #sharing (they inherit
+   hx-target and hx-select from it). -#}
 {% extends "base.html" %}
-{% block title %}Members · {{ board.name }} · EasyToDo{% endblock %}
+{% block title %}Invite and members · {{ board.name }} · EasyToDo{% endblock %}
 {% block content %}
 {% set manage = can(role, Action.MANAGE_MEMBERS) %}
+{#- Invite links (no address) work for anyone who has one: removing a member does not stop them
+    rejoining with one. #}
+{% set open_links = invites|selectattr("email", "none")|list %}
 <div id="sharing" hx-target="#sharing" hx-select="#sharing" class="mx-auto w-full max-w-2xl space-y-6">
   <div>
-    <a href="/boards/{{ board.id }}" class="link inline-flex min-h-11 items-center text-sm">Back to the board</a>
-    <h1 class="break-words text-2xl font-semibold">{{ board.name }}: members</h1>
+    <a href="/boards" class="link inline-flex min-h-11 items-center text-sm">Back to boards</a>
+    <h1 class="text-2xl font-semibold">Invite and members</h1>
+    <p class="break-words text-slate-600 dark:text-slate-400">{{ board.name }}</p>
   </div>
 
   {% if manage %}
@@ -67,7 +72,7 @@
             <option value="{{ value }}"{% if m.role == value %} selected{% endif %}>{{ value|capitalize }}</option>
             {% endfor %}
           </select>
-          <button type="button" class="btn-danger" hx-delete="/boards/{{ board.id }}/members/{{ m.user_id }}" hx-confirm="Remove {{ m.email }} from this board?">Remove</button>
+          <button type="button" class="btn-danger" hx-delete="/boards/{{ board.id }}/members/{{ m.user_id }}" hx-confirm="Remove {{ m.email }} from this board?{% if open_links %} The invite links below still work, so they could rejoin with one. Revoke a link to stop that.{% endif %}">Remove</button>
         </div>
         {% else %}
         <span class="rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-xs font-medium text-slate-700 dark:text-slate-300">{{ m.role|capitalize }}</span>

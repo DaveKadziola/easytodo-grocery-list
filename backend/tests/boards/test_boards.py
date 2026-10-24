@@ -1,16 +1,17 @@
 import json
-from collections.abc import Iterator
-from contextlib import contextmanager
+import re
+from datetime import UTC, datetime
 
 import pytest
 from factories import DEFAULT_PASSWORD, create_board, create_category, create_item, create_user
-from helpers import login
-from sqlalchemy import event, func, select
+from helpers import NASTY, NASTY_ESCAPED, count_queries, login, require_polish_order
+from sqlalchemy import func, select
 
-from easytodo.boards import service
+from easytodo import db as database
+from easytodo.boards import routes, service
 from easytodo.boards.permissions import Action
-from easytodo.boards.service import get_board_view, list_boards
-from easytodo.models import Board, BoardMember, BoardRole, Category, Item, User
+from easytodo.boards.service import BoardChoice, get_board_view, list_board_choices, list_boards
+from easytodo.models import Board, BoardMember, BoardRole, CategorySortPref, User
 from easytodo.realtime.events import BoardEvent, EventType, current_origin
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
 
@@ -23,22 +24,6 @@ async def client_for(client_factory, email: str):
     client = await client_factory()
     await login(client, email)
     return client
-
-
-@contextmanager
-def count_queries(db) -> Iterator[list[str]]:
-    """The SQL statements ``db``'s engine runs inside the block."""
-    statements: list[str] = []
-
-    def record(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
-
-    engine = db.bind.sync_engine
-    event.listen(engine, "before_cursor_execute", record)
-    try:
-        yield statements
-    finally:
-        event.remove(engine, "before_cursor_execute", record)
 
 
 async def count_rows(db, model) -> int:
@@ -108,7 +93,7 @@ async def test_root_redirects_to_boards(client, db):
     assert r.headers["location"] == "/boards"
 
 
-@pytest.mark.parametrize("path", ["/boards", "/boards/1"])
+@pytest.mark.parametrize("path", ["/boards", "/boards/1", "/boards/archived"])
 async def test_board_pages_require_sign_in(client, path):
     r = await client.get(path)
     assert r.status_code == 303
@@ -132,13 +117,11 @@ async def test_user_sees_only_own_and_shared_boards(client_factory, db):
     r = await client.get("/boards")
 
     assert r.status_code == 200
-    assert f'href="/boards/{groceries.id}"' in r.text
-    assert f'href="/boards/{hardware.id}"' in r.text
-    assert r.text.count('href="/boards/') == 2
+    assert re.findall(r'href="/boards/(\d+)"', r.text) == [str(groceries.id), str(hardware.id)]
     assert "Groceries" in r.text and "Hardware store" in r.text
     assert "Eve private plans" not in r.text and "Mallory board" not in r.text
     assert "2 open items" in r.text and "0 open items" in r.text
-    assert "Owner" in r.text and "Viewer" in r.text
+    assert "Owner: eve@example.com" in r.text and "Viewer" in r.text
     assert 'action="/boards"' in r.text and "New board" in r.text
 
 
@@ -152,20 +135,98 @@ async def test_list_boards_puts_own_boards_first_then_sorts_by_name_in_one_query
         db, eve, "Apple club", members={dave: BoardRole.EDITOR, frank: BoardRole.VIEWER}
     )
     await create_board(db, eve, "Eve private plans")
+    await create_board(db, dave, "Archived list", archived_at=datetime(2026, 10, 1, tzinfo=UTC))
+    await create_board(
+        db, eve, "Archived club", {dave: BoardRole.EDITOR}, archived_at=datetime.now(UTC)
+    )
     bread = await create_category(db, club, "Bread")
     await create_item(db, bread, "Rye")
     await create_item(db, bread, "Baguette")
     await create_item(db, bread, "Stale loaf", is_done=True)
+    old_bread = await create_category(db, club, "Old bread", archived_at=datetime.now(UTC))
+    await create_item(db, old_bread, "Archived loaf")  # open, but its category is archived
 
     with count_queries(db) as statements:
         summaries = await list_boards(db, dave)
 
     assert len(statements) == 1
-    assert [(s.board.name, s.role, s.member_count, s.open_items) for s in summaries] == [
-        ("banana list", BoardRole.OWNER, 1, 0),
-        ("Cherry list", BoardRole.OWNER, 1, 0),
-        ("Apple club", BoardRole.EDITOR, 3, 2),
+    assert [
+        (s.board.name, s.role, s.member_count, s.open_items, s.owner_email) for s in summaries
+    ] == [
+        ("banana list", BoardRole.OWNER, 1, 0, "dave@example.com"),
+        ("Cherry list", BoardRole.OWNER, 1, 0, "dave@example.com"),
+        ("Apple club", BoardRole.EDITOR, 3, 2, "eve@example.com"),
     ]
+
+
+async def test_boards_sort_in_polish_alphabetical_order(db):
+    require_polish_order()
+    dave = await create_user(db, "dave@example.com")
+    for name in ("Zakupy", "Łódź", "Apteka"):
+        await create_board(db, dave, name)
+
+    summaries = await list_boards(db, dave)
+    choices = await list_board_choices(db, dave)
+
+    assert [s.board.name for s in summaries] == ["Apteka", "Łódź", "Zakupy"]
+    assert [c.name for c in choices] == ["Apteka", "Łódź", "Zakupy"]
+
+
+async def test_without_the_collation_boards_sort_in_the_databases_own_order(db, monkeypatch):
+    monkeypatch.setattr(database, "_name_collation", None)
+    dave = await create_user(db, "dave@example.com")
+    for name in ("Zakupy", "Łódź", "Apteka"):
+        await create_board(db, dave, name)
+
+    assert [s.board.name for s in await list_boards(db, dave)] == ["Apteka", "Zakupy", "Łódź"]
+    assert [c.name for c in await list_board_choices(db, dave)] == ["Apteka", "Zakupy", "Łódź"]
+
+
+async def test_board_page_lists_boards_with_one_light_statement(client_factory, db, monkeypatch):
+    dave = await create_user(db, "dave@example.com")
+    eve = await create_user(db, "eve@example.com")
+    cherry = await create_board(db, dave, "Cherry list")
+    banana = await create_board(db, dave, "banana list")
+    club = await create_board(db, eve, "Apple club", members={dave: BoardRole.EDITOR})
+    await create_board(db, eve, "Eve private plans")
+    await create_board(db, dave, "Archived list", archived_at=datetime(2026, 10, 1, tzinfo=UTC))
+    await create_board(
+        db, eve, "Archived club", {dave: BoardRole.EDITOR}, archived_at=datetime.now(UTC)
+    )
+    await create_item(db, await create_category(db, club, "Bread"), "Rye")
+
+    with count_queries(db) as statements:
+        choices = await list_board_choices(db, dave)
+
+    assert len(statements) == 1
+    assert "count(" not in statements[0].lower()  # the board list counts members and items
+    assert choices == [  # in the order of the board list, which the switcher keeps
+        BoardChoice(banana.id, "banana list", BoardRole.OWNER),
+        BoardChoice(cherry.id, "Cherry list", BoardRole.OWNER),
+        BoardChoice(club.id, "Apple club", BoardRole.EDITOR),
+    ]
+    assert [c.id for c in choices] == [s.board.id for s in await list_boards(db, dave)]
+
+    async def not_the_board_list(*args, **kwargs):
+        raise AssertionError("the board page does not need the counts of the board list")
+
+    monkeypatch.setattr(routes, "list_boards", not_the_board_list)
+    client = await client_for(client_factory, "dave@example.com")
+
+    r = await client.get(f"/boards/{banana.id}")
+
+    assert r.status_code == 200
+    bar = re.findall(
+        r'<a href="/boards/(\d+)" class="menu-item[^>]*?( aria-current="page")?>', r.text
+    )
+    assert bar == [
+        (str(banana.id), ' aria-current="page"'),
+        (str(cherry.id), ""),
+        (str(club.id), ""),
+    ]
+    for name in ("banana list", "Cherry list", "Apple club"):
+        assert f">{name}</a>" in r.text
+    assert "Archived" not in r.text.split('id="bottom-bar"')[1]
 
 
 async def test_create_board_redirects_to_it_with_the_creator_as_owner(client, db):
@@ -275,7 +336,7 @@ async def test_owner_renames_board(client, db, published):
     board = await create_board(db, dave, "Groceries")
     await login(client, "dave@example.com")
 
-    page = await client.get(f"/boards/{board.id}")
+    page = await client.get("/boards")  # the rename form is in the board's ⋮ menu on the list
     assert f'hx-patch="/boards/{board.id}"' in page.text
 
     r = await client.patch(
@@ -288,6 +349,12 @@ async def test_owner_renames_board(client, db, published):
     assert r.headers["hx-refresh"] == "true"
     assert await db.scalar(select(Board.name)) == "Weekly shop"
     assert published == [((BoardEvent(EventType.BOARD_UPDATED, board_id=board.id),), "tab-1")]
+
+    r = await client.patch(f"/boards/{board.id}", data={"name": "Without htmx"})
+
+    assert r.status_code == 303
+    assert r.headers["location"] == "/boards"
+    assert await db.scalar(select(Board.name)) == "Without htmx"
 
 
 @pytest.mark.parametrize("name", ["", "x" * 81])
@@ -305,60 +372,36 @@ async def test_rename_validates_the_name(client, db, name):
     assert await db.scalar(select(Board.name)) == "Groceries"
 
 
-async def test_owner_deletes_board_with_everything_on_it(client, db, published):
-    dave = await create_user(db, "dave@example.com")
-    eve = await create_user(db, "eve@example.com")
-    board = await create_board(db, dave, "Groceries", members={eve: BoardRole.EDITOR})
-    keep = await create_board(db, dave, "Keep me")
-    await create_item(db, await create_category(db, board, "Dairy"), "Milk")
-    await create_item(db, await create_category(db, keep, "Tools"), "Hammer")
-    await login(client, "dave@example.com")
-
-    page = await client.get(f"/boards/{board.id}")
-    assert f'hx-delete="/boards/{board.id}"' in page.text
-
-    r = await client.delete(f"/boards/{board.id}", headers=HX | {"X-Client-Id": "tab-1"})
-
-    assert r.status_code == 200
-    assert r.headers["hx-redirect"] == "/boards"
-    assert list(await db.scalars(select(Board.name))) == ["Keep me"]
-    assert set(await db.scalars(select(BoardMember.board_id))) == {keep.id}
-    assert list(await db.scalars(select(Category.name))) == ["Tools"]
-    assert list(await db.scalars(select(Item.name))) == ["Hammer"]
-    assert published == [((BoardEvent(EventType.BOARD_DELETED, board_id=board.id),), "tab-1")]
-    assert (await client.get(f"/boards/{board.id}")).status_code == 404
-
-
-async def test_delete_without_htmx_redirects_to_the_list(client, db):
-    dave = await create_user(db, "dave@example.com")
-    board = await create_board(db, dave, "Groceries")
-    await login(client, "dave@example.com")
-
-    r = await client.delete(f"/boards/{board.id}")
-
-    assert r.status_code == 303
-    assert r.headers["location"] == "/boards"
-    assert await count_rows(db, Board) == 0
-
-
+@pytest.mark.parametrize("breach", ["no_token", "foreign_origin"])
 @pytest.mark.parametrize(
-    "method,path,data",
+    "method,path,data,archived",
     [
-        ("POST", "/boards", {"name": "New one"}),
-        ("PATCH", "/boards/{id}", {"name": "Renamed"}),
-        ("DELETE", "/boards/{id}", None),
+        ("POST", "/boards", {"name": "New one"}, False),
+        ("PATCH", "/boards/{id}", {"name": "Renamed"}, False),
+        ("POST", "/boards/{id}/archive", None, False),
+        ("POST", "/boards/{id}/restore", None, True),
+        ("DELETE", "/boards/{id}", None, True),
     ],
 )
-async def test_board_writes_require_the_csrf_token(client, db, method, path, data):
+async def test_board_writes_require_the_csrf_token(
+    client, db, method, path, data, archived, breach
+):
     dave = await create_user(db, "dave@example.com")
-    board = await create_board(db, dave, "Groceries")
+    archived_at = datetime(2026, 10, 1, tzinfo=UTC) if archived else None
+    board = await create_board(db, dave, "Groceries", archived_at=archived_at)
     await login(client, "dave@example.com")
-    del client.headers[CSRF_HEADER]
+    if breach == "no_token":
+        del client.headers[CSRF_HEADER]
+    else:
+        client.headers["Origin"] = "https://evil.example"
 
-    r = await client.request(method, path.format(id=board.id), data=data)
+    r = await client.request(
+        method, path.format(id=board.id), data=data, headers={"HX-Prompt": "Groceries"}
+    )
 
     assert r.status_code == 403
-    assert list(await db.scalars(select(Board.name))) == ["Groceries"]
+    rows = await db.execute(select(Board.name, Board.archived_at))
+    assert rows.all() == [("Groceries", archived_at)]
 
 
 async def test_board_page_lists_categories_and_items(client, db):
@@ -379,17 +422,13 @@ async def test_board_page_lists_categories_and_items(client, db):
 
 async def test_board_names_are_rendered_escaped(client, db):  # Review Focus 1
     dave = await create_user(db, "dave@example.com")
-    nasty = 'O\'Reilly <b>"x"</b> <script>alert(1)</script>'
-    board = await create_board(db, dave, nasty)
+    board = await create_board(db, dave, NASTY)
     await login(client, "dave@example.com")
 
     for path in ("/boards", f"/boards/{board.id}"):
         html = (await client.get(path)).text
         assert "<script>alert(1)</script>" not in html and "<b>" not in html
-        assert (
-            "O&#39;Reilly &lt;b&gt;&#34;x&#34;&lt;/b&gt; &lt;script&gt;alert(1)&lt;/script&gt;"
-            in html
-        )
+        assert NASTY_ESCAPED in html
 
 
 async def test_board_view_uses_two_queries(db, monkeypatch):
@@ -399,11 +438,21 @@ async def test_board_view_uses_two_queries(db, monkeypatch):
     fruit = await create_category(db, board, "Fruit", position=0)
     await create_category(db, board, "Empty", position=2)
     await create_item(db, dairy, "milk")
+    await create_item(db, dairy, "butter")
     await create_item(db, fruit, "banana", is_done=True)
     await create_item(db, fruit, "Apple")
     await create_item(db, fruit, "cherry")
+    archived = await create_category(db, board, "Archived", archived_at=datetime.now(UTC))
+    await create_item(db, archived, "Not on the board any more")
     elsewhere = await create_category(db, await create_board(db, owner, "Other"), "Elsewhere")
     await create_item(db, elsewhere, "Not on this board")
+    # The owner's own order for Dairy (Z-A), which the board view reads in the same two queries.
+    db.add(
+        CategorySortPref(
+            user_id=owner.id, category_id=dairy.id, field="name", descending=True, open_first=True
+        )
+    )
+    await db.commit()
 
     authorized: list[Action] = []
     require_board = service.require_board
@@ -422,9 +471,9 @@ async def test_board_view_uses_two_queries(db, monkeypatch):
     assert authorized == [Action.VIEW]
     assert len(statements) == 2
     assert (view.board.id, view.role) == (board.id, BoardRole.OWNER)
-    assert [(c.category.name, [i.name for i in c.items]) for c in view.categories] == [
+    assert [(c.category.name, [i.item.name for i in c.items]) for c in view.categories] == [
         ("Fruit", ["Apple", "cherry", "banana"]),  # open first, then by name ignoring case
-        ("Dairy", ["milk"]),
+        ("Dairy", ["milk", "butter"]),  # its own order: Z-A
         ("Empty", []),
     ]
 

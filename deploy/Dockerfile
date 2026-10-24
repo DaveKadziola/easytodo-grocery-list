@@ -4,7 +4,8 @@
 # Third-party binaries are downloaded by BuildKit itself and verified against a pinned sha256,
 # so a swapped release asset fails the build instead of running. Bumping a version means
 # bumping its hashes (the release's sha256sums.txt / *.sha256 files) and, for Tailwind, the
-# Makefile pins as well. Supported platforms: linux/amd64 and linux/arm64.
+# Makefile pins as well (backend/tests/test_deploy_files.py checks that they match). Supported
+# platforms: linux/amd64 and linux/arm64.
 ARG TAILWIND_VERSION=4.1.13
 ARG TAILWIND_SHA256_AMD64=b9ed9f8f640d3323711f9f68608aa266dff3adbc42e867c38ea2d009b973be11
 ARG TAILWIND_SHA256_ARM64=c90529475a398adbf3315898721c0f9fe85f434a2b3ea3eafada68867641819a
@@ -68,8 +69,12 @@ COPY frontend/ /app/frontend/
 COPY --from=css /build/frontend/static/css/app.css /app/frontend/static/css/app.css
 COPY --chmod=755 deploy/entrypoint.sh /app/entrypoint.sh
 
+# The files attached to items (EASYTODO_ATTACHMENTS_DIR, relative to /app/backend): a volume in
+# docker-compose.yml, which starts out with this directory's owner, so that the app can write there.
 RUN groupadd --gid 10001 app \
-    && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
+    && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /app/backend/data/attachments \
+    && chown app:app /app/backend/data/attachments
 USER app
 
 EXPOSE 8000

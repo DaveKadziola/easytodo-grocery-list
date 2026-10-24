@@ -1,26 +1,73 @@
-{# Context: boards (list of BoardSummary), name and error (the "New board" form). -#}
+{# The board list: the user's own boards, then the ones shared with them. A card opens its board
+   from its whole area (the link's ::after covers the card and carries the hover and focus rings;
+   the ⋮ menu, later in the DOM, sits above it): rename, invite and archive in the owner's menu,
+   leave in the menu of anyone else. Context: boards (list of BoardSummary), archived_count (the
+   user's archived boards), name and error (the "New board" form). -#}
 {% extends "base.html" %}
 {% block title %}Boards · EasyToDo{% endblock %}
 {% block content %}
+{% macro board_card(s) %}
+{% set is_owner = s.role == "owner" %}
+<li class="card relative flex items-start gap-2">
+  <a href="/boards/{{ s.board.id }}" class="min-w-0 flex-1 after:absolute after:inset-0 after:rounded-xl hover:after:ring-1 hover:after:ring-emerald-600 focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-emerald-600">
+    <span class="block break-words text-lg font-semibold">{{ s.board.name }}</span>
+    <span class="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+      {% if not is_owner %}
+      <span class="rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-xs font-medium text-slate-700 dark:text-slate-300">{{ s.role|capitalize }}</span>
+      {% elif s.member_count > 1 %}
+      <span class="rounded-full bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:text-emerald-200">Shared</span>
+      {% endif %}
+      <span>{{ s.open_items }} open item{% if s.open_items != 1 %}s{% endif %}</span>
+      {% if not is_owner %}<span class="break-all">Owner: {{ s.owner_email }}</span>{% endif %}
+    </span>
+  </a>
+  <details class="relative shrink-0">
+    <summary class="btn-icon cursor-pointer list-none text-slate-600 dark:text-slate-400 [&::-webkit-details-marker]:hidden" aria-label="Actions for {{ s.board.name }}">⋮</summary>
+    <div class="menu">
+      {% if is_owner %}
+      <form hx-patch="/boards/{{ s.board.id }}" class="space-y-2 p-2">
+        <label for="board-{{ s.board.id }}-name" class="label">Board name</label>
+        <input id="board-{{ s.board.id }}-name" name="name" value="{{ s.board.name }}" required maxlength="80" autocomplete="off" class="input">
+        <button type="submit" class="btn-secondary w-full">Rename</button>
+      </form>
+      <a href="/boards/{{ s.board.id }}/members" class="menu-item">Invite</a>
+      <button type="button" class="menu-item text-red-700 dark:text-red-400" hx-post="/boards/{{ s.board.id }}/archive" hx-confirm="Archive “{{ s.board.name }}”? Its members lose access until you restore it.">Archive</button>
+      {% else %}
+      <button type="button" class="menu-item text-red-700 dark:text-red-400" hx-post="/boards/{{ s.board.id }}/leave" hx-confirm="Leave “{{ s.board.name }}”?">Leave board</button>
+      {% endif %}
+    </div>
+  </details>
+</li>
+{% endmacro %}
 <div class="mx-auto w-full max-w-3xl space-y-6">
   <h1 class="text-2xl font-semibold">Boards</h1>
 
-  {% if boards %}
-  <ul class="grid gap-4 sm:grid-cols-2">
-    {% for s in boards %}
-    <li>
-      <a href="/boards/{{ s.board.id }}" class="card block hover:ring-emerald-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600">
-        <span class="block break-words text-lg font-semibold">{{ s.board.name }}</span>
-        <span class="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-          <span class="rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-xs font-medium text-slate-700 dark:text-slate-300">{{ s.role|capitalize }}</span>
-          <span>{{ s.open_items }} open item{% if s.open_items != 1 %}s{% endif %}</span>
-        </span>
-      </a>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="text-slate-600 dark:text-slate-400">You have no boards yet.</p>
+  <section aria-labelledby="my-boards" class="space-y-3">
+    <h2 id="my-boards" class="text-lg font-semibold">My boards</h2>
+    {% set own = boards|selectattr("role", "equalto", "owner")|list %}
+    {% if own %}
+    <ul class="grid gap-4 sm:grid-cols-2">
+      {% for s in own %}{{ board_card(s) }}{% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-slate-600 dark:text-slate-400">You have no boards yet.</p>
+    {% endif %}
+  </section>
+
+  <section aria-labelledby="shared-boards" class="space-y-3">
+    <h2 id="shared-boards" class="text-lg font-semibold">Shared with me</h2>
+    {% set shared = boards|rejectattr("role", "equalto", "owner")|list %}
+    {% if shared %}
+    <ul class="grid gap-4 sm:grid-cols-2">
+      {% for s in shared %}{{ board_card(s) }}{% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-slate-600 dark:text-slate-400">Nobody has shared a board with you yet.</p>
+    {% endif %}
+  </section>
+
+  {% if archived_count > 0 %}
+  <p><a href="/boards/archived" class="link inline-flex min-h-11 items-center">Archived ({{ archived_count }})</a></p>
   {% endif %}
 
   <form method="post" action="/boards" class="card space-y-3">

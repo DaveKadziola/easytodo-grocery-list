@@ -1,0 +1,7 @@
+{#- {% from "partials/_attachment_count.html" import attachment_count %} {{ attachment_count(n) }}:
+    how many files an item has, as "📎 2", on the item's tile (after its checklist count). inline-flex,
+    so that the line-through of a done item does not reach it (see styles/input.css). The icon is a
+    decoration; the title says it in words. -#}
+{% macro attachment_count(count) -%}
+<span class="attachment-count" title="{{ count }} {{ 'attachment' if count == 1 else 'attachments' }}"><span aria-hidden="true">📎</span> {{ count }}</span>
+{%- endmacro %}

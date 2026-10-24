@@ -1,7 +1,9 @@
-"""A board socket's sending side (realtime.routes) against a stand-in WebSocket: what is queued
-when the hub closes the socket still goes out first, and a page that went away is not closed."""
+"""A socket's sending side (realtime.routes) against a stand-in WebSocket: what is queued when the
+hub closes the socket still goes out first, a page that went away is not closed, and a socket whose
+session expires is closed at that moment."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 from easytodo.realtime.hub import CloseCode, Subscriber
 from easytodo.realtime.routes import _serve
@@ -48,4 +50,54 @@ async def test_a_page_that_went_away_is_not_closed_again():
     await asyncio.wait_for(serving, timeout=1)
 
     assert socket.sent == ["message"]
+    assert socket.closes == []
+
+
+def expiring(seconds: float) -> Subscriber:
+    return Subscriber(
+        board_id=None,
+        user_id=1,
+        session_id=1,
+        client_id=None,
+        expires_at=datetime.now(UTC) + timedelta(seconds=seconds),
+    )
+
+
+async def test_socket_closes_with_4401_when_its_session_expires():
+    """The session's end (#93) closes the socket then and there: the page signs in again."""
+    sub = expiring(0.3)
+    socket = StandInSocket()
+    serving = asyncio.create_task(_serve(socket, sub))
+    sub.queue.put_nowait("before")
+    await asyncio.sleep(0.1)
+    assert socket.sent == ["before"] and socket.closes == []  # signed in until then
+
+    await asyncio.wait_for(serving, timeout=2)
+
+    assert socket.sent == ["before"]
+    assert socket.closes == [CloseCode.NOT_AUTHENTICATED]
+
+
+async def test_an_expired_session_gets_no_queue_before_the_4401():
+    sub = expiring(-1)  # expired while the socket was being admitted
+    for n in range(3):
+        sub.queue.put_nowait(f"message {n}")
+    socket = StandInSocket()
+
+    await asyncio.wait_for(_serve(socket, sub), timeout=1)
+
+    assert socket.sent == []
+    assert socket.closes == [CloseCode.NOT_AUTHENTICATED]
+
+
+async def test_a_socket_without_an_end_of_session_goes_on():
+    sub = Subscriber(board_id=1, user_id=1, session_id=1, client_id=None)
+    socket = StandInSocket()
+    serving = asyncio.create_task(_serve(socket, sub))
+
+    await asyncio.sleep(0.1)
+
+    assert not serving.done()
+    socket.gone.set()
+    await asyncio.wait_for(serving, timeout=1)
     assert socket.closes == []

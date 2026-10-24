@@ -1,5 +1,5 @@
-"""The account pages: changing the password, two-factor authentication and managing the
-signed-in devices."""
+"""The account pages: the profile and settings, changing the password, two-factor authentication
+and managing the signed-in devices."""
 
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -7,12 +7,19 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from markupsafe import Markup
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.auth.deps import CurrentUser, DbSession, FormField, require_user
 from easytodo.auth.reset import invalidate_reset_tokens
-from easytodo.auth.sessions import revoke_all_sessions, revoke_session, sessions_revoked
+from easytodo.auth.sessions import (
+    clear_session_cookie,
+    revoke_all_sessions,
+    revoke_session,
+    rotate_session_token,
+    sessions_revoked,
+    set_session_cookie,
+)
 from easytodo.auth.twofa import (
     ALREADY_ON,
     begin_setup,
@@ -21,27 +28,45 @@ from easytodo.auth.twofa import (
     disable_2fa,
     regenerate_recovery_codes,
 )
+from easytodo.content.validation import clean_name
 from easytodo.errors import AppError, Conflict, NotFound, ValidationFailed
-from easytodo.models import User, UserSession
+from easytodo.models import RETENTION_CHOICES, SORT_FIELDS, User, UserSession
 from easytodo.realtime.events import commit_and_publish
 from easytodo.security.passwords import (
     MAX_PASSWORD_LENGTH,
-    hash_password,
+    hash_password_async,
     validate_password,
-    verify_password,
+    verify_password_async,
 )
-from easytodo.security.ratelimit import rate_limit
+from easytodo.security.ratelimit import limit_user
 from easytodo.security.totp import provisioning_uri, qr_svg
-from easytodo.web import flash, render
+from easytodo.web import flash, no_store, render
 
 router = APIRouter(prefix="/account")
 
 _MAX_SESSION_ID = 2**63 - 1  # user_sessions.id is a BigInteger; a larger id cannot exist
 
-# Every form that checks the current password shares this budget. The limiter comes after
-# require_user, so only signed-in requests use it up: a wrong password is a password guess for
-# whoever holds a stolen session.
-PasswordGuesses = Annotated[None, Depends(rate_limit("password-change", 10, 900))]
+
+async def count_password_guess(request: Request, user: CurrentUser) -> None:
+    """Every form that checks the current password shares one budget per account, whichever
+    address it is used from: a wrong password is a password guess for whoever holds a stolen
+    session. Every attempt counts, and only signed-in requests (after ``require_user``) do. The
+    accepted risk: whoever holds a stolen session can use the owner's budget up for a while."""
+    limit_user(request, "password-change", user.id, 10, 900)
+
+
+PasswordGuesses = Annotated[None, Depends(count_password_guess)]
+
+DISPLAY_NAME_MAX_LENGTH = 60  # users.display_name is a String(60)
+PROFILE_SAVED = "Profile saved."
+ARCHIVE_SAVED = "Archive settings saved."
+SORT_SAVED = "Sorting saved."
+RETENTION_INVALID = "Choose how long archived items are kept."
+SORT_INVALID = "Choose a valid sort order."
+
+# The archive form's "days" -> users.archive_retention_days; None (NULL) keeps archived items.
+_RETENTION_BY_FORM_VALUE = {str(days): days for days in RETENTION_CHOICES} | {"never": None}
+_SORT_DIRECTIONS = ("asc", "desc")  # the sort form's "sort_direction"
 
 
 async def _account_page(
@@ -56,14 +81,12 @@ async def _account_page(
         .where(UserSession.user_id == user.id, UserSession.expires_at > datetime.now(UTC))
         .order_by(UserSession.last_seen_at.desc(), UserSession.id.desc())
     )
-    context = {"sessions": list(sessions), "current_session_id": request.state.session.id} | context
+    context = {
+        "sessions": list(sessions),
+        "current_session_id": request.state.session.id,
+        "retention_choices": RETENTION_CHOICES,
+    } | context
     return render(request, "account/index.html", context, status_code=status_code)
-
-
-def _no_store(response: HTMLResponse) -> HTMLResponse:
-    """For a page with a TOTP secret or recovery codes: no copy is kept in any cache."""
-    response.headers["Cache-Control"] = "no-store"
-    return response
 
 
 @router.get("")
@@ -86,26 +109,60 @@ async def change_password(
     new_password: FormField = "",
     new_password_confirm: FormField = "",
 ) -> Response:
+    """Set the new password and sign every other device out. This device stays signed in, with a
+    new session token: the old one may be what a thief holds, and now opens nothing. If this
+    session was signed out meanwhile, the new password stands all the same and the answer sends
+    the device to the sign-in page.
+
+    Accepted: when a sign-in rehashes the old password at the same time, the update below finds
+    the hash changed and this answers "Current password is incorrect." once; a retry succeeds."""
+    # The hash the password is checked against. The checks and the hash take their time on threads,
+    # so the connection goes back to the pool meanwhile, and a reset or change that commits in that
+    # time must not be undone: the update below writes only while this is still the user's hash.
+    verified_hash = user.password_hash
+    await db.commit()
     try:
-        if len(current_password) > MAX_PASSWORD_LENGTH or not verify_password(
-            user.password_hash, current_password
+        if len(current_password) > MAX_PASSWORD_LENGTH or not await verify_password_async(
+            verified_hash, current_password
         ):
             raise ValidationFailed("Current password is incorrect.")
         if new_password != new_password_confirm:
             raise ValidationFailed("Passwords do not match.")
         validate_password(new_password)
         # A forced change replaces a password someone else knows (an admin's temporary one).
-        if user.must_change_password and verify_password(user.password_hash, new_password):
+        if user.must_change_password and await verify_password_async(verified_hash, new_password):
             raise ValidationFailed("Choose a new password, not the temporary one.")
+        new_hash = await hash_password_async(new_password)
+        changed = await db.scalar(
+            update(User)
+            .where(User.id == user.id, User.password_hash == verified_hash)
+            .values(password_hash=new_hash, must_change_password=False)
+            .returning(User.id)
+            # Updates ``user`` only if a row matched: the default would give it the new values
+            # either way, and the page that answers a refusal is rendered from it.
+            .execution_options(synchronize_session="fetch")
+        )
+        if changed is None:  # a reset or change got in first: the password given is not current
+            raise ValidationFailed("Current password is incorrect.")
     except AppError as exc:
         return render(request, "account/password.html", {"error": exc.message}, status_code=400)
-    user.password_hash = hash_password(new_password)
-    user.must_change_password = False
     await invalidate_reset_tokens(db, user.id)  # a reset link in the mailbox would override it
-    revoked = await revoke_all_sessions(db, user.id, except_session_id=request.state.session.id)
+    session_id = request.state.session.id
+    raw_token = await rotate_session_token(db, session_id)  # None: signed out meanwhile
+    revoked = await revoke_all_sessions(db, user.id, except_session_id=session_id)
+    # The current session is not revoked, so it gets no SESSIONS_REVOKED event (it would close the
+    # sockets of this device's other tabs, which would then go to /login); a reconnect has the new
+    # cookie. Committed in every case: the new password stands, and the revoked sessions with it.
     await commit_and_publish(db, *sessions_revoked(user.id, revoked))  # with the new hash
+    settings = request.app.state.settings
+    if raw_token is None:
+        response = RedirectResponse("/login", status_code=303)
+        clear_session_cookie(response)
+        flash(response, "Password changed. Sign in with your new password.", settings)
+        return response
     response = RedirectResponse("/account", status_code=303)
-    flash(response, "Password changed.", request.app.state.settings)
+    set_session_cookie(response, raw_token, settings)
+    flash(response, "Password changed.", settings)
     return response
 
 
@@ -115,7 +172,7 @@ def _setup_page(
     # segno's SVG holds only the QR code's paths (the URI is encoded in them), so it goes in as is.
     qr_code = Markup(qr_svg(provisioning_uri(secret, user.email)))
     context = {"secret": secret, "qr_code": qr_code, "error": error}
-    return _no_store(render(request, "account/2fa_setup.html", context, status_code=status_code))
+    return no_store(render(request, "account/2fa_setup.html", context, status_code=status_code))
 
 
 @router.get("/2fa/setup")
@@ -140,14 +197,20 @@ async def confirm_two_factor_setup(
         raise Conflict(ALREADY_ON)
     settings = request.app.state.settings
     try:
-        check_password(user, password)
+        await check_password(user, password)
         codes = await confirm_setup(db, user, code, settings)
     except ValidationFailed as exc:
         # The secret already scanned stays, so another try needs no new scan (a new one only
         # when there is none, or it cannot be decrypted since EASYTODO_SECRET_KEY changed).
         secret = await begin_setup(db, user, settings)
         return _setup_page(request, user, secret, error=exc.message, status_code=400)
-    return _no_store(render(request, "account/2fa_recovery.html", {"codes": codes}))
+    return no_store(
+        render(
+            request,
+            "account/2fa_recovery.html",
+            {"codes": codes, "generated_at": datetime.now(UTC)},
+        )
+    )
 
 
 @router.post("/2fa/disable")
@@ -181,11 +244,32 @@ async def new_recovery_codes(
         codes = await regenerate_recovery_codes(db, user, password)
     except ValidationFailed as exc:
         return await _account_page(request, db, user, {"twofa_error": exc.message}, 400)
-    return _no_store(render(request, "account/2fa_recovery.html", {"codes": codes}))
+    return no_store(
+        render(
+            request,
+            "account/2fa_recovery.html",
+            {"codes": codes, "generated_at": datetime.now(UTC)},
+        )
+    )
 
 
 @router.post("/sessions/revoke-others")
 async def revoke_other_sessions(request: Request, db: DbSession, user: CurrentUser) -> Response:
+    # The account's users row first, as in ``revoke_all_sessions``: a password change deletes
+    # sessions too, and the two would otherwise wait for each other's rows. This session's row is
+    # locked with it (users first), because a lock that waited re-checks only the rows it locks:
+    # one that is not locked would still be found after a password change had deleted it, and
+    # this would sign out the new session that change has just rotated.
+    alive = await db.scalar(
+        select(User.id)
+        .join(UserSession, UserSession.user_id == User.id)
+        .where(User.id == user.id, UserSession.id == request.state.session.id)
+        .with_for_update(key_share=True, of=[User, UserSession])
+    )
+    if alive is None:  # signed out meanwhile (by a password change, say): nothing to sign out of
+        response = RedirectResponse("/login", status_code=303)
+        clear_session_cookie(response)
+        return response
     revoked = await revoke_all_sessions(db, user.id, except_session_id=request.state.session.id)
     await commit_and_publish(db, *sessions_revoked(user.id, revoked))
     return RedirectResponse("/account", status_code=303)
@@ -201,3 +285,64 @@ async def revoke_own_session(db: DbSession, user: CurrentUser, session_id: int) 
     await revoke_session(db, session_id)
     await commit_and_publish(db, *sessions_revoked(user.id, [session_id]))
     return RedirectResponse("/account", status_code=303)
+
+
+def _saved(request: Request, message: str) -> Response:
+    response = RedirectResponse("/account", status_code=303)
+    flash(response, message, request.app.state.settings)
+    return response
+
+
+# The three settings forms below check all of their fields before they change any. They do not
+# publish an event (nobody else's page shows these) and are not password guesses.
+@router.post("/profile")
+async def save_profile(
+    request: Request, db: DbSession, user: CurrentUser, display_name: FormField = ""
+) -> Response:
+    try:
+        # Empty is not an error here: it takes the name away, and the email's part shows instead.
+        name = (
+            clean_name(display_name, max_len=DISPLAY_NAME_MAX_LENGTH, label="Display name")
+            if display_name.strip()
+            else None
+        )
+    except ValidationFailed as exc:
+        # The field keeps what was typed (without the NUL it cannot show), not the saved name.
+        shown = {"profile_error": exc.message, "profile_name": display_name.replace("\x00", "")}
+        return await _account_page(request, db, user, shown, 400)
+    user.display_name = name
+    await db.commit()
+    return _saved(request, PROFILE_SAVED)
+
+
+@router.post("/archive-retention")
+async def save_archive_retention(
+    request: Request, db: DbSession, user: CurrentUser, days: FormField = ""
+) -> Response:
+    if days not in _RETENTION_BY_FORM_VALUE:
+        return await _account_page(request, db, user, {"archive_error": RETENTION_INVALID}, 400)
+    user.archive_retention_days = _RETENTION_BY_FORM_VALUE[days]  # "never": NULL
+    await db.commit()
+    return _saved(request, ARCHIVE_SAVED)
+
+
+@router.post("/sort")
+async def save_sort(
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    sort_field: FormField = "",
+    sort_direction: FormField = "",
+    sort_open_first: FormField = "",  # a checkbox: "true" when ticked, absent when not
+) -> Response:
+    if (
+        sort_field not in SORT_FIELDS
+        or sort_direction not in _SORT_DIRECTIONS
+        or sort_open_first not in ("", "true")
+    ):
+        return await _account_page(request, db, user, {"sort_error": SORT_INVALID}, 400)
+    user.sort_field = sort_field
+    user.sort_descending = sort_direction == "desc"
+    user.sort_open_first = sort_open_first == "true"
+    await db.commit()
+    return _saved(request, SORT_SAVED)

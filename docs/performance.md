@@ -4,7 +4,88 @@ v2 must not be slower than v1 where users feel it. The acceptance criterion: for
 **add item** and **toggle item**, the v2 p95 is at most the v1 p95 of the baseline below, on the
 same machine, with the same seed (20 categories x 30 items) and 200 measured requests per scenario.
 
-## Result
+v2.1 must not be slower than v2.0. The acceptance criterion: for the same three scenarios, the
+median of the p95 of 3 runs of v2.1 is at most the median of the p95 of 3 runs of v2.0 (the tag
+`v2.0.0`) plus 5%, both measured on the same machine in the same session, one after the other, with
+the same seed and request count and with the `scripts/bench.py` of v2.1 for both. The 5% is a
+margin on top of the median, not an estimate of the noise between runs, which is larger: in the
+v2.1 result below the p95 of a single run of v2.0 is up to 5% from the median of its three runs on
+view_board, up to 12% on add_item and up to 9% on toggle_item (the highest and the lowest run
+differ by 6%, 20% and 19%). That is why the medians of 3 runs are compared, never single runs.
+The v2 result further down is not the baseline of v2.1: it was measured on another machine, by
+another method.
+
+## v2.1 result
+
+Measured on 2026-10-24, on a 4 vCPU Intel Xeon @ 2.10 GHz virtual machine with about 16 GiB RAM,
+Ubuntu 24.04, Linux 6.18, Python 3.12.3, PostgreSQL 16. v2.0 (tag `v2.0.0`, `bb37f50`) and v2.1
+(`669948d`) ran alternately, one at a time, 3 runs each, in this order: v2.0, v2.1, v2.0, v2.1,
+v2.0, v2.1. Each value is the per-column median of 3 runs. Every run started on an empty database
+that the version under test had migrated itself. Nothing else ran on the machine. Docker could
+not build images where this was measured, so the numbers are not from `docker compose`: each
+version ran as the image runs it, as `uvicorn` with the flags of `deploy/entrypoint.sh` (one
+worker, access log on), straight from its own source tree, with the same interpreter and the same
+dependencies for both (v2.0's code with v2.1's dependencies, which are a superset), against
+PostgreSQL on loopback with TLS on (asyncpg's default). The app, the database and the benchmark
+client all ran on the machine. The compose recipe under "How it is measured" is how you repeat it
+on your own stack.
+
+| scenario | v2.0 p50 ms | v2.0 p95 ms | v2.1 p50 ms | v2.1 p95 ms | limit: v2.0 p95 + 5% | result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| view_board | 38.99 | 87.37 | 34.83 | 49.83 | 91.74 | pass |
+| add_item | 11.72 | 16.64 | 10.87 | 13.83 | 17.47 | pass |
+| toggle_item | 11.62 | 15.15 | 10.47 | 13.58 | 15.91 | pass |
+
+Every v2.1 p95 is below the limit, and below v2.0's own p95: view_board by 43%, add_item by 17%
+and toggle_item by 10%. The gap is mostly in the tail: the p95 of a page view is set by Python's
+full garbage collections (see "The v2 tail" below). v2.1 does more per request than v2.0 (authors,
+checklist and attachment counts, the member's sort order) and makes up for it: it keeps the objects
+loaded at start-up out of the garbage collector (`gc.freeze()`), compresses pages at gzip level 6
+instead of 9, renders an item through a macro instead of an include, builds its main statements
+once and answers some requests with fewer statements.
+
+For information, not part of the criterion:
+
+| scenario | v2.0 p50 ms | v2.0 p95 ms | v2.1 p50 ms | v2.1 p95 ms |
+| --- | ---: | ---: | ---: | ---: |
+| view_board_content (`GET /boards/{id}/content`) | 35.26 | 88.25 | 32.21 | 45.35 |
+| ws_event (100 changes) | 7.19 | 9.19 | 6.68 | 8.48 |
+
+`--realistic` (3 further runs of v2.1, after the six above, medians; v2.0 has no authors, checklists
+or attachments to compare with): the same board is shared with a second account that added every
+other item (so each item shows its author), and 60 of the 600 items have 5 checklist entries and a
+file.
+
+| scenario | v2.1 --realistic p50 ms | v2.1 --realistic p95 ms |
+| --- | ---: | ---: |
+| view_board | 43.48 | 55.04 |
+| view_board_content | 42.96 | 59.83 |
+| add_item | 11.29 | 14.23 |
+| toggle_item | 11.87 | 14.99 |
+| ws_event | 7.29 | 9.16 |
+
+The shared board costs about 9 ms at p50 on a page view (avatars, counters) and still stays below
+v2.0's own p95 for every one of the three scenarios.
+
+Not measured: the notification bell. Its badge (`GET /notifications/badge`) is a request of its own
+that every page makes after it has loaded, one count statement, and `/ws/user`, the socket that
+tells a page to ask for it again, carries no data. Neither is part of a board view.
+
+Individual runs, p50 / p95 in ms (the tables above take the median of each column):
+
+| run | view_board | view_board_content | add_item | toggle_item | ws_event |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v2.0, 1 | 38.99 / 88.03 | 37.45 / 89.03 | 14.76 / 17.58 | 12.13 / 16.27 | 7.44 / 9.96 |
+| v2.0, 2 | 38.04 / 83.34 | 34.99 / 88.25 | 11.26 / 14.62 | 11.62 / 15.15 | 7.19 / 9.02 |
+| v2.0, 3 | 41.02 / 87.37 | 35.26 / 83.90 | 11.72 / 16.64 | 11.43 / 13.72 | 7.11 / 9.19 |
+| v2.1, 1 | 33.61 / 49.83 | 32.21 / 45.93 | 10.67 / 13.70 | 10.40 / 13.58 | 6.49 / 7.73 |
+| v2.1, 2 | 34.83 / 47.41 | 31.20 / 43.76 | 10.87 / 13.83 | 10.47 / 14.40 | 6.94 / 9.29 |
+| v2.1, 3 | 34.83 / 51.00 | 32.27 / 45.35 | 10.99 / 14.02 | 10.47 / 12.79 | 6.68 / 8.48 |
+| v2.1 --realistic, 1 | 42.32 / 55.04 | 42.36 / 61.29 | 11.16 / 14.23 | 11.04 / 13.92 | 6.37 / 7.91 |
+| v2.1 --realistic, 2 | 44.17 / 58.72 | 42.96 / 58.87 | 11.29 / 14.14 | 12.23 / 14.99 | 7.29 / 9.16 |
+| v2.1 --realistic, 3 | 43.48 / 54.28 | 43.22 / 59.83 | 12.57 / 16.50 | 11.87 / 15.59 | 7.84 / 9.45 |
+
+## v2 result
 
 Measured on 2026-10-21. v1 and v2 ran one after the other on the same machine as the baseline:
 a 4 vCPU Intel Xeon @ 2.80 GHz virtual machine with 16 GiB RAM, Ubuntu 24.04, Linux 6.18. The
@@ -84,21 +165,63 @@ Each version is measured 3 times, each run on an empty database, and the table t
 each column separately. v1's `GET /` renders every category in the database, so v1 has to start
 empty for its runs to compare. v2 starts empty to match.
 
+`--realistic` (v2 only) seeds the board the way a household uses it, so that what v2.1 added is on
+the page. A second account, `bench-member-<run>@example.com` with the same password, joins the board
+as an editor through an invite link and adds every other item, so each item shows its author's
+initials. Then every 10th item gets 5 checklist entries and a small text file (`note.txt`). The
+scenarios are the same. The sign-up is limited to 10 an hour per client IP address, and counts:
+start every realistic run on a fresh app (a restarted container does).
+
 ### v2
 
 The docker compose stack of this repository: the image built from `deploy/Dockerfile`, one
 Uvicorn worker, `.env` as the README's quick start makes it (`cp .env.example .env` plus its
 `sed` line, which fills in the required `EASYTODO_SECRET_KEY`; `EASYTODO_PUBLIC_URL` stays
 `http://localhost:8000`, which `--base-url` must equal because the CSRF check compares the
-`Origin`). Per run, from the
-repository root (`down -v` deletes the database, so use a checkout that holds no data you need):
+`Origin`). Per run, from the repository root. `docker-compose.yml` fixes the project name
+(`easytodo`), so every checkout shares the volumes of your installation, and `down -v` would
+delete its data: give the benchmark stack a project name of its own, which also gives it its own
+volumes (`COMPOSE_PROJECT_NAME` beats the name in the file):
 
 ```sh
+export COMPOSE_PROJECT_NAME=easytodo-bench
 docker compose down -v && docker compose up -d --build --wait
-docker compose exec app python -m easytodo.cli create-admin --email bench@example.com --password-stdin <<< "bench-password-123"
+printf '%s\n' bench-password-123 | docker compose exec -T app python -m easytodo.cli create-admin --email bench@example.com --password-stdin
 cd backend && uv run python ../scripts/bench.py --target v2 --base-url http://localhost:8000 \
     --email bench@example.com --password bench-password-123 && cd ..
+docker compose down -v   # when you are done: removes the benchmark stack's volumes only
 ```
+
+### v2.0 against v2.1
+
+The criterion at the top compares v2.1 with v2.0 itself, on one machine in one session. v2.0 is the
+tag `v2.0.0` (`bb37f50`): never create, move or delete tags for this. Check it out beside the
+repository, with the same `.env`:
+
+```sh
+V20=$(mktemp -d)/v20
+git worktree add "$V20" v2.0.0
+cp .env "$V20/"
+```
+
+Then measure the two alternately, 3 runs each, with the recipe of "v2" above, one stack at a time
+(both publish port 8000), and each version with its own project name so that `down -v` removes only
+its own volumes: `easytodo-v20` in `$V20` and `easytodo-v21` in the repository. Always run
+`scripts/bench.py` of v2.1 (with `--realistic` in 3 more runs of v2.1, for information), from the
+v2.1 checkout. Take the median of each column of the 3 runs of each version; v2.1's p95 of
+`view_board`, `add_item` and `toggle_item` must each be at most v2.0's times 1.05. When done,
+`git worktree remove "$V20"`.
+
+The numbers in "v2.1 result" were not measured this way, because Docker could not build images on
+the machine they were measured on. Each version was started as the container starts it, with
+`uvicorn --factory easytodo.main:create_app --host 0.0.0.0 --port 8000 --proxy-headers
+--forwarded-allow-ips 127.0.0.1 --ws-ping-interval 25 --ws-ping-timeout 20 --workers 1`, in the
+`backend` directory of a checkout of the tag (or of the repository), with `PYTHONPATH` set to that
+checkout's `backend/src` and one Python environment for both, after `alembic upgrade head` and
+`create-admin` of that checkout on a new database each time (PostgreSQL 16 on the same machine,
+reached over TLS). v2.0's page needs the built stylesheet, so its checkout got
+`tailwindcss -i frontend/styles/input.css -o frontend/static/css/app.css --minify` first, as the
+image build does.
 
 ### v1 (legacy)
 

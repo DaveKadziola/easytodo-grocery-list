@@ -1,11 +1,28 @@
 """Test data factories. Each one commits, so the app under test (own connection) sees the rows."""
 
-from datetime import UTC, datetime
+import io
+import secrets
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from easytodo.models import Board, BoardMember, BoardRole, Category, Item, User, UserStatus
+from easytodo.attachments.storage import AttachmentStore
+from easytodo.models import (
+    Attachment,
+    Board,
+    BoardMember,
+    BoardRole,
+    Category,
+    ChecklistEntry,
+    Item,
+    Notification,
+    NotificationKind,
+    PasswordResetToken,
+    User,
+    UserStatus,
+)
 from easytodo.security.passwords import hash_password
+from easytodo.security.tokens import hash_token, new_token
 
 DEFAULT_PASSWORD = "correct-horse-battery-staple"
 
@@ -18,6 +35,7 @@ async def create_user(
     is_admin: bool = False,
     must_change_password: bool = False,
     status: UserStatus = UserStatus.ACTIVE,
+    display_name: str | None = None,
 ) -> User:
     user = User(
         email=email,
@@ -25,10 +43,26 @@ async def create_user(
         is_admin=is_admin,
         must_change_password=must_change_password,
         status=status,
+        display_name=display_name,
     )
     db.add(user)
     await db.commit()
     return user
+
+
+async def create_reset_token(db: AsyncSession, user: User) -> str:
+    """An unused password-reset link of ``user``, valid for an hour; returns the raw token, the
+    last part of the link."""
+    raw_token = new_token()
+    db.add(
+        PasswordResetToken(
+            user_id=user.id,
+            token_hash=hash_token(raw_token),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    await db.commit()
+    return raw_token
 
 
 async def create_board(
@@ -36,9 +70,12 @@ async def create_board(
     owner: User,
     name: str = "Groceries",
     members: dict[User, BoardRole] = {},  # noqa: B006 (read only)
+    *,
+    archived_at: datetime | None = None,
 ) -> Board:
-    """A board with ``owner`` as its owner member, plus ``members`` with the given roles."""
-    board = Board(name=name, owner_id=owner.id)
+    """A board with ``owner`` as its owner member, plus ``members`` with the given roles;
+    archived at ``archived_at`` when that is given."""
+    board = Board(name=name, owner_id=owner.id, archived_at=archived_at)
     db.add(board)
     await db.flush()
     db.add(BoardMember(board_id=board.id, user_id=owner.id, role=BoardRole.OWNER))
@@ -50,16 +87,28 @@ async def create_board(
 
 
 async def create_category(
-    db: AsyncSession, board: Board, name: str = "Dairy", position: int = 0
+    db: AsyncSession,
+    board: Board,
+    name: str = "Dairy",
+    position: int = 0,
+    *,
+    archived_at: datetime | None = None,
 ) -> Category:
-    category = Category(board_id=board.id, name=name, position=position)
+    """A category of ``board``; archived at ``archived_at`` when that is given."""
+    category = Category(board_id=board.id, name=name, position=position, archived_at=archived_at)
     db.add(category)
     await db.commit()
     return category
 
 
 async def create_item(
-    db: AsyncSession, category: Category, name: str = "Milk", is_done: bool = False
+    db: AsyncSession,
+    category: Category,
+    name: str = "Milk",
+    is_done: bool = False,
+    *,
+    created_by: User | None = None,
+    description: str | None = None,
 ) -> Item:
     item = Item(
         board_id=category.board_id,
@@ -67,7 +116,70 @@ async def create_item(
         name=name,
         is_done=is_done,
         done_at=datetime.now(UTC) if is_done else None,
+        created_by=created_by.id if created_by else None,
+        description=description,
     )
     db.add(item)
     await db.commit()
     return item
+
+
+async def create_checklist_entry(
+    db: AsyncSession, item: Item, text: str = "Eggs", is_done: bool = False, position: int = 0
+) -> ChecklistEntry:
+    entry = ChecklistEntry(item_id=item.id, text=text, is_done=is_done, position=position)
+    db.add(entry)
+    await db.commit()
+    return entry
+
+
+async def create_attachment(
+    db: AsyncSession,
+    item: Item,
+    *,
+    store: AttachmentStore | None = None,
+    filename: str = "note.txt",
+    content: bytes = b"Buy oat milk.\n",
+    kind: str = "text",
+    content_type: str = "text/plain",
+    uploaded_by: User | None = None,
+    size_bytes: int | None = None,
+) -> Attachment:
+    """An attachment of ``item``. With ``store`` the file is written there too (``content``, under
+    the row's key; no thumbnail or preview); without it only the row exists. ``size_bytes`` is
+    the content's length unless given (to fill the instance's quota without the bytes)."""
+    key = secrets.token_hex(16)
+    if store is not None:
+        await store.save(key, io.BytesIO(content))
+    attachment = Attachment(
+        item_id=item.id,
+        filename=filename,
+        kind=kind,
+        content_type=content_type,
+        size_bytes=len(content) if size_bytes is None else size_bytes,
+        storage_key=key,
+        uploaded_by=uploaded_by.id if uploaded_by else None,
+    )
+    db.add(attachment)
+    await db.commit()
+    return attachment
+
+
+async def create_notification(
+    db: AsyncSession,
+    user: User,
+    kind: NotificationKind = NotificationKind.MEMBER_JOINED,
+    message: str = "x joined “Groceries”.",
+    board: Board | None = None,
+    read: bool = False,
+) -> Notification:
+    notification = Notification(
+        user_id=user.id,
+        kind=kind,
+        message=message,
+        board_id=board.id if board else None,
+        read_at=datetime.now(UTC) if read else None,
+    )
+    db.add(notification)
+    await db.commit()
+    return notification

@@ -1,9 +1,11 @@
 .PHONY: test-db test e2e css run lint
 
 # Tailwind standalone CLI (no Node.js), fetched once into ./bin (git-ignored) for this platform.
+# The version and the linux sha256 pins are also in deploy/Dockerfile (backend/tests/test_deploy_files.py checks that they match).
 TAILWIND_VERSION := v4.1.13
 TAILWIND_OS := $(if $(filter Darwin,$(shell uname -s)),macos,linux)
 TAILWIND_ARCH := $(if $(filter arm64 aarch64,$(shell uname -m)),arm64,x64)
+TAILWIND_BIN := bin/tailwindcss-$(TAILWIND_VERSION)
 TAILWIND_URL := https://github.com/tailwindlabs/tailwindcss/releases/download/$(TAILWIND_VERSION)/tailwindcss-$(TAILWIND_OS)-$(TAILWIND_ARCH)
 # sha256 of each release asset (the release's sha256sums.txt); a download that differs is deleted.
 TAILWIND_SHA256_linux-x64 := b9ed9f8f640d3323711f9f68608aa266dff3adbc42e867c38ea2d009b973be11
@@ -22,15 +24,15 @@ test: test-db css
 e2e: test-db css
 	cd backend && uv run pytest -m e2e
 
-bin/tailwindcss:
+$(TAILWIND_BIN):
 	mkdir -p bin
 	curl -fsSL -o $@.download $(TAILWIND_URL)
 	echo "$(TAILWIND_SHA256)  $@.download" | $(SHA256_CHECK) || { rm -f $@.download; exit 1; }
 	chmod +x $@.download
 	mv $@.download $@
 
-css: bin/tailwindcss
-	./bin/tailwindcss -i frontend/styles/input.css -o frontend/static/css/app.css --minify
+css: $(TAILWIND_BIN)
+	./$(TAILWIND_BIN) -i frontend/styles/input.css -o frontend/static/css/app.css --minify
 
 run:
 	cd backend && uv run uvicorn --factory easytodo.main:create_app --reload

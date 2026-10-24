@@ -5,6 +5,8 @@
 set -eu
 
 if ! python - <<'PY'
+import ipaddress
+import os
 import sys
 
 from pydantic import ValidationError
@@ -18,6 +20,33 @@ except ValidationError as exc:
         name = "EASYTODO_" + "_".join(str(part) for part in error["loc"]).upper()
         print(f"entrypoint: {name}: {error['msg']}", file=sys.stderr)
     sys.exit(1)
+
+
+def trusts_everyone(allowed):
+    """Whether uvicorn trusts X-Forwarded-For from every peer: "*" as the whole value, or an item
+    that is a network of all addresses (/0 in any spelling: 0::/0, 0.0.0.0/00, 0.0.0.0/0.0.0.0)."""
+    if allowed == "*":
+        return True
+    for item in allowed.split(","):
+        try:
+            if ipaddress.ip_network(item.strip(), strict=False).prefixlen == 0:
+                return True
+        except ValueError:  # a host name: uvicorn takes it as it is
+            pass
+    return False
+
+
+# Trusting X-Forwarded-For from everyone is safe only when nobody but the reverse proxy can
+# connect: a warning, not a refusal. The value is read as the shell below hands it to uvicorn.
+allowed = os.environ.get("EASYTODO_FORWARDED_ALLOW_IPS", "127.0.0.1")
+if trusts_everyone(allowed) and os.environ.get("EASYTODO_BIND", "").strip() != "127.0.0.1":
+    print(
+        f"entrypoint: warning: EASYTODO_FORWARDED_ALLOW_IPS={allowed} trusts X-Forwarded-For from"
+        " anyone who can connect, but EASYTODO_BIND is not 127.0.0.1, so anyone on the network"
+        " can dodge the per-IP rate limits; set EASYTODO_BIND=127.0.0.1 in .env"
+        " (docs/deployment.md)",
+        file=sys.stderr,
+    )
 PY
 then
     echo "entrypoint: the settings in .env are not valid (see above); fix them, then run" \

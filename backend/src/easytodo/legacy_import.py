@@ -18,6 +18,8 @@ from easytodo.content.validation import (
     CATEGORY_NAME_MAX_LENGTH,
     DESCRIPTION_MAX_LENGTH,
     ITEM_NAME_MAX_LENGTH,
+    normalize_description,
+    normalize_name,
 )
 from easytodo.errors import ValidationFailed
 from easytodo.models import Category, Item, User
@@ -140,6 +142,7 @@ async def _write(
                 name=_fit_name(task["name"], ITEM_NAME_MAX_LENGTH, f"task {task['id']}"),
                 description=_fit_description(task["description"]),
                 is_done=is_done,
+                created_by=owner.id,  # v1 has no authors: the account that imports stands in
                 done_at=updated if is_done else None,  # v1 does not know when: the last change
                 created_at=created,
                 updated_at=updated,
@@ -155,18 +158,18 @@ async def _write(
 
 
 def _fit_name(value: str, max_len: int, what: str) -> str:
-    """``value`` as a name typed into v2 is stored (whitespace collapsed), cut to ``max_len``
+    """``value`` as a name typed into v2 is stored (``normalize_name``), cut to ``max_len``
     characters."""
-    name = " ".join(value.split())
+    name = normalize_name(value)
     if not name:
         raise ValidationFailed(f"v1 {what} has a blank name.")
     return name[:max_len].rstrip()
 
 
 def _fit_description(value: str | None) -> str | None:
-    """``value`` as a description typed into v2 is stored, cut to the limit; None if blank."""
-    description = (value or "").replace("\r\n", "\n").strip()
-    return description[:DESCRIPTION_MAX_LENGTH].rstrip() or None
+    """``value`` as a description typed into v2 is stored (``normalize_description``), cut to the
+    limit; None if blank."""
+    return normalize_description(value)[:DESCRIPTION_MAX_LENGTH].rstrip() or None
 
 
 def _unique(name: str, taken: dict[str, Category]) -> str:

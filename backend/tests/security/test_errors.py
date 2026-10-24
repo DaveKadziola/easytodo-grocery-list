@@ -15,6 +15,7 @@ from easytodo.errors import (
     NotFound,
     ValidationFailed,
 )
+from easytodo.security.tokens import unmask_token
 from easytodo.web import is_htmx, render
 
 HX = {"HX-Request": "true"}
@@ -133,7 +134,7 @@ def test_render_adds_csrf_token_current_user_and_settings(mini_app, settings):
     request = _request(mini_app, {"csrf_token": "tok", "user": user})
     r = render(request, "errors/error.html", {"status_code": 418, "message": "Teapot."}, 418)
     assert r.status_code == 418
-    assert r.context["csrf_token"] == "tok"
+    assert unmask_token(r.context["csrf_token"]) == "tok"  # masked: no two renders alike
     assert r.context["current_user"] is user
     assert r.context["settings"] is settings
     assert r.context["message"] == "Teapot."

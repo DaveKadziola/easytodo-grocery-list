@@ -1,7 +1,7 @@
 """Two-factor authentication: a TOTP secret kept encrypted, and single-use recovery codes kept
 as salted, slow hashes (scrypt), so that a stolen database or backup gives neither factor.
 
-Every function here that writes commits its change, except ``count_failed_code``.
+Every function here that writes commits its change.
 """
 
 import hashlib
@@ -17,14 +17,16 @@ from easytodo.config import Settings
 from easytodo.errors import Conflict, ValidationFailed
 from easytodo.models import RecoveryCode, User, UserSession
 from easytodo.security.crypto import DecryptionError, decrypt, encrypt
-from easytodo.security.passwords import MAX_PASSWORD_LENGTH, verify_password
+from easytodo.security.passwords import MAX_PASSWORD_LENGTH, verify_password_async
 from easytodo.security.totp import new_totp_secret, verify_totp
 
 logger = logging.getLogger(__name__)
 
 RECOVERY_CODE_COUNT = 10
 RECOVERY_CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"  # no 0/o, 1/i/l to mix up
-MAX_CODE_FAILURES = 5  # wrong codes before a pending sign-in is dropped
+# Code attempts a pending sign-in gets, counted in ``user_sessions.mfa_failures`` before each is
+# checked: the fifth wrong one drops the sign-in, and a sixth is never checked.
+MAX_CODE_FAILURES = 5
 # Codes one account may try at the second step per window, over all its pending sign-ins and
 # from any IP: whoever has the password gets no more guesses by signing in again.
 ACCOUNT_CODE_ATTEMPTS = 20
@@ -41,6 +43,7 @@ _RECOVERY_CODE_SHAPE = re.compile(
 )
 
 INVALID_CODE = "Invalid code. Try again."
+TOO_MANY_CODES = "Too many invalid codes. Sign in again."
 WRONG_PASSWORD = "Current password is incorrect."
 ALREADY_ON = "Two-factor authentication is already on."
 NOT_ON = "Two-factor authentication is off."
@@ -107,15 +110,21 @@ async def verify_second_factor(db: AsyncSession, user: User, code: str, settings
     return used is not None
 
 
-async def count_failed_code(db: AsyncSession, session_id: int) -> int | None:
-    """Count a wrong code on a pending session (atomically, so parallel attempts all count; not
-    committed yet); returns how many it has had, or ``None`` once the session is gone."""
-    return await db.scalar(
+async def reserve_code_attempt(db: AsyncSession, session_id: int) -> int | None:
+    """Count a code attempt on a pending session, before the code is checked, and commit it;
+    returns the attempt's number (1 for the first), or ``None`` once the session is gone.
+
+    One atomic update, so parallel requests each get their own number, and the caller checks only
+    the first ``MAX_CODE_FAILURES`` of them: codes sent at once are no more guesses than the same
+    codes one after another."""
+    attempt = await db.scalar(
         update(UserSession)
         .where(UserSession.id == session_id)
         .values(mfa_failures=UserSession.mfa_failures + 1)
         .returning(UserSession.mfa_failures)
     )
+    await db.commit()
+    return attempt
 
 
 async def disable_2fa(
@@ -125,7 +134,7 @@ async def disable_2fa(
     phone is no dead end); the secret and the recovery codes are deleted."""
     if not user.totp_enabled:
         raise Conflict(NOT_ON)
-    check_password(user, password)
+    await check_password(user, password)
     if not await verify_second_factor(db, user, code, settings):
         raise ValidationFailed(INVALID_CODE)
     user.totp_enabled = False
@@ -139,7 +148,7 @@ async def regenerate_recovery_codes(db: AsyncSession, user: User, password: str)
     """New recovery codes in place of all the old ones; needs the password."""
     if not user.totp_enabled:
         raise Conflict(NOT_ON)
-    check_password(user, password)
+    await check_password(user, password)
     codes = await _replace_recovery_codes(db, user)
     await db.commit()
     return codes
@@ -197,9 +206,11 @@ def recovery_code_matches(code: str, code_hash: str) -> bool:
     return hmac.compare_digest(_hash_recovery_code(_normalize_recovery_code(code), salt), code_hash)
 
 
-def check_password(user: User, password: str) -> None:
+async def check_password(user: User, password: str) -> None:
     """``ValidationFailed`` unless ``password`` is the user's current password."""
-    if len(password) > MAX_PASSWORD_LENGTH or not verify_password(user.password_hash, password):
+    if len(password) > MAX_PASSWORD_LENGTH or not await verify_password_async(
+        user.password_hash, password
+    ):
         raise ValidationFailed(WRONG_PASSWORD)
 
 

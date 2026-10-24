@@ -27,6 +27,8 @@
       </div>
       {% endfor %}
     </dl>
+    {#- In MB of 1024 × 1024 bytes, to one decimal and without a needless ".0". #}
+    <p class="mt-4 text-sm text-slate-600 dark:text-slate-400">Attachment storage: {{ "%g"|format((stats.attachments_bytes / 1048576)|round(1)) }} MB of {{ "%g"|format((settings.attachments_total_bytes / 1048576)|round(1)) }} MB</p>
   </section>
 </div>
 {% endblock %}

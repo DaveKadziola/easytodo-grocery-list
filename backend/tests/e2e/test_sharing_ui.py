@@ -7,31 +7,20 @@ import re
 
 import pytest
 from factories import DEFAULT_PASSWORD, create_board
+from helpers import LINKS_STILL_WORK
 from playwright.sync_api import Browser, Page, expect
 
+from e2e.conftest import open_board_menu, watch_console
 from easytodo.config import Settings
 
 pytestmark = pytest.mark.e2e
 
 
-def watch_console(page: Page) -> list[str]:
-    """Every console error or warning and every uncaught exception on ``page`` from now on."""
-    problems: list[str] = []
-    page.on(
-        "console",
-        lambda msg: (
-            problems.append(f"{msg.type}: {msg.text}") if msg.type in ("error", "warning") else None
-        ),
-    )
-    page.on("pageerror", lambda exc: problems.append(f"pageerror: {exc}"))
-    return problems
-
-
 def create_invite_link(page: Page, base_url: str, board_id: int) -> str:
-    """From the board, go to its members page and create a link invite as a viewer; returns the
-    link the page shows (once)."""
-    page.goto(f"/boards/{board_id}")
-    page.get_by_role("link", name="Members").click()
+    """From the ⋮ menu of the board "Groceries" on the board list, go to its members page and
+    create a link invite as a viewer; returns the link the page shows (once)."""
+    page.goto("/boards")
+    open_board_menu(page, "Groceries").get_by_role("link", name="Invite", exact=True).click()
     expect(page).to_have_url(re.compile(rf"/boards/{board_id}/members$"))
     page.get_by_label("Role", exact=True).select_option("viewer")
     page.get_by_role("button", name="Invite").click()
@@ -86,9 +75,17 @@ def test_invite_link_round_trip(browser, live_server, logged_in_page, seed, user
         role.select_option("editor")
     assert changed.value.status == 200
     expect(page.get_by_label("Role of newbie@example.com")).to_have_value("editor")
-    page.once("dialog", lambda dialog: dialog.accept())
+    confirmations: list[str] = []
+
+    def accept(dialog):
+        confirmations.append(dialog.message)
+        dialog.accept()
+
+    page.once("dialog", accept)
     page.get_by_role("button", name="Remove").click()
     expect(page.get_by_text("newbie@example.com")).to_have_count(0)
+    # The invite link still works for the person removed: the confirmation says so.
+    assert len(confirmations) == 1 and confirmations[0].endswith(LINKS_STILL_WORK)
 
     assert problems == []
 

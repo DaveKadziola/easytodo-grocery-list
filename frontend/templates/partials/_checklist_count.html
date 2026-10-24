@@ -1,0 +1,8 @@
+{#- {% from "partials/_checklist_count.html" import checklist_count %} {{ checklist_count(done, total) }}:
+    how many of an item's checklist entries are done, as "2/3": on the item's tile and above the
+    checklist in its details. Green when all are, slate otherwise (both pass AA). inline-flex, so
+    that the line-through of a done item does not reach it (see css/input.css). The classes are
+    whole words so that Tailwind finds them. -#}
+{% macro checklist_count(done, total) -%}
+<span class="checklist-count {% if done == total %}text-emerald-700 dark:text-emerald-400{% else %}text-slate-600 dark:text-slate-400{% endif %}" title="{{ done }} of {{ total }} checklist entries done">{{ done }}/{{ total }}</span>
+{%- endmacro %}

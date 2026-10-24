@@ -1,6 +1,7 @@
 """Board invites: a link (reusable until it expires or is revoked), an e-mail (single use, for that
 address only), and the sign-in or sign-up round trip from an invite link."""
 
+import asyncio
 import logging
 import re
 import socket
@@ -9,15 +10,15 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 from factories import DEFAULT_PASSWORD, create_board, create_user
-from helpers import login, signed_in, toast_message
-from sqlalchemy import func, select, update
+from helpers import login, signed_in, toast_message, wait_until_blocked_by
+from sqlalchemy import func, select, text, update
 
 from easytodo.boards.invite_routes import EMAIL_INVITE_LIMIT
 from easytodo.boards.invites import INVITE_TTL, create_email_invite, create_link_invite
 from easytodo.mail.mailer import ConsoleMailer
 from easytodo.models import BoardInvite, BoardMember, BoardRole
 from easytodo.realtime.events import BoardEvent, EventType
-from easytodo.security.csrf import CSRF_COOKIE
+from easytodo.security.csrf import CSRF_COOKIE, CSRF_FIELD
 from easytodo.security.tokens import hash_token
 
 INVALID = "This invite is no longer valid."
@@ -85,7 +86,16 @@ async def test_link_invite_grants_role(client_factory, db, sharing_events):
         assert await role_of(db, board.id, user.id) == BoardRole.EDITOR
         assert (await member.get(f"/boards/{board.id}")).status_code == 200
 
-    assert sharing_events == [BoardEvent(EventType.BOARD_UPDATED, board_id=board.id)] * 2
+    assert (
+        sharing_events
+        == [
+            BoardEvent(EventType.BOARD_UPDATED, board_id=board.id),
+            BoardEvent(
+                EventType.NOTIFICATIONS_CHANGED, user_id=owner.id
+            ),  # each joining tells the owner
+        ]
+        * 2
+    )
 
 
 async def test_only_owner_can_invite(editor_client, board, client_factory, db):
@@ -210,6 +220,33 @@ async def test_email_invite_sends_mail_with_link(client, board, mail_outbox, db)
     )
     page = await client.get(f"/boards/{board.id}/members")
     assert "friend@example.com" in page.text  # listed as pending
+
+
+async def test_malformed_invite_email_is_refused(client, board, db, mail_outbox):
+    await login(client, "owner@example.com")
+
+    r = await client.post(
+        f"/boards/{board.id}/invites",
+        data={"role": "editor", "email": "not-an-email"},
+        headers=HX,
+    )
+
+    assert r.status_code == 422
+    assert toast_message(r) == "Enter a valid email address."
+    assert await count_invites(db) == 0
+    assert mail_outbox == []
+
+
+async def test_blank_invite_email_makes_a_link_invite(client, board, db, mail_outbox):
+    await login(client, "owner@example.com")
+
+    r = await client.post(f"/boards/{board.id}/invites", data={"role": "editor", "email": "   "})
+
+    assert r.status_code == 201
+    assert LINK.search(r.text)
+    assert await count_invites(db) == 1
+    assert await db.scalar(select(BoardInvite.email)) is None  # a link, not an address's invite
+    assert mail_outbox == []
 
 
 async def test_email_invite_matches_case_insensitively(client_factory, db, mail_outbox):
@@ -386,6 +423,66 @@ async def test_board_deleted_while_an_invite_is_accepted_is_a_404_not_a_500(
     assert "Board not found." in r.text
 
 
+async def test_board_deleted_right_after_an_accept_still_redirects(
+    client_factory, db, board, invite_token, monkeypatch, _db_engine
+):
+    """The accept is committed; another device deletes the board before the answer is sent. The
+    answer is still the redirect to the board (whose page then says it is gone), not a 500."""
+    from sqlalchemy import delete
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from easytodo.boards import invites
+    from easytodo.models import Board
+
+    commit_and_publish = invites.commit_and_publish
+
+    async def commit_then_delete_the_board(session, *events):
+        await commit_and_publish(session, *events)
+        async with AsyncSession(_db_engine) as other:
+            await other.execute(delete(Board).where(Board.id == board.id))
+            await other.commit()
+
+    monkeypatch.setattr(invites, "commit_and_publish", commit_then_delete_the_board)
+    await create_user(db, "bob@example.com")
+    bob = await signed_in(client_factory, "bob@example.com")
+
+    r = await bob.post(f"/invite/{invite_token}/accept")
+
+    assert r.status_code == 303
+    assert r.headers["location"] == f"/boards/{board.id}"
+
+
+async def test_email_accept_locks_the_board_before_the_invite(
+    client_factory, db, settings, board, owner
+):
+    """In the order a delete of the board takes them (the board, then its invites through the
+    cascade), so the two cannot deadlock: while it waits for the board, the accept holds no lock
+    on the invite."""
+    newcomer = await create_user(db, "bob@example.com")
+    sent = await create_email_invite(
+        db, board.id, owner, "bob@example.com", BoardRole.EDITOR, ConsoleMailer(), settings
+    )
+    bob = await signed_in(client_factory, "bob@example.com")
+
+    async with db.bind.connect() as deleting:
+        transaction = await deleting.begin()
+        await deleting.execute(
+            text("SELECT 1 FROM boards WHERE id = :id FOR UPDATE"), {"id": board.id}
+        )
+        deleting_pid = await deleting.scalar(text("SELECT pg_backend_pid()"))
+        accept = asyncio.create_task(bob.post(f"/invite/{sent.link.rsplit('/', 1)[1]}/accept"))
+        await wait_until_blocked_by(db, deleting_pid)
+        await deleting.execute(  # LockNotAvailableError if the accept held the invite
+            text("SELECT 1 FROM board_invites WHERE id = :id FOR UPDATE NOWAIT"),
+            {"id": sent.invite.id},
+        )
+        await transaction.rollback()
+        r = await accept
+
+    assert r.status_code == 303
+    assert await role_of(db, board.id, newcomer.id) == BoardRole.EDITOR
+
+
 async def test_member_reopening_a_link_invite_goes_to_the_board(
     client_factory, db, board, owner, invite_token
 ):
@@ -447,6 +544,42 @@ async def test_registration_from_an_invite_link_returns_to_it(client, db, invite
     assert r.headers["location"] == next_path
     page = await client.get(next_path)
     assert page.status_code == 200 and "Groceries" in page.text
+
+
+async def test_pages_with_a_live_invite_link_are_never_cached(client_factory, db, board):
+    """The members page right after an invite (it shows the link, once), the invite's own page
+    (the link is in its form) and the sign-in and sign-up pages an invite link leads to (they
+    pass it on in their links): a cache must keep none of them."""
+    owner_client = await signed_in(client_factory, "owner@example.com")
+    r = await owner_client.post(f"/boards/{board.id}/invites", data={"role": "editor", "email": ""})
+    assert r.status_code == 201 and r.headers["cache-control"] == "no-store"
+    token = LINK.search(r.text)[1]
+    r = await invite_by_email(owner_client, board.id, "friend@example.com")  # console: link shown
+    assert "No email was sent" in r.text and r.headers["cache-control"] == "no-store"
+    r = await owner_client.get(f"/boards/{board.id}/members")  # the link is not on it any more
+    assert r.status_code == 200 and "cache-control" not in r.headers
+    assert f"/invite/{token}" not in r.text
+
+    await create_user(db, "bob@example.com")
+    bob = await signed_in(client_factory, "bob@example.com")
+    r = await bob.get(f"/invite/{token}")
+    assert r.status_code == 200 and "Join board" in r.text
+    assert r.headers["cache-control"] == "no-store"
+
+    visitor = await client_factory()
+    next_path = f"/invite/{token}"
+    for page in ("/login", "/register"):
+        r = await visitor.get(page, params={"next": next_path})
+        assert r.status_code == 200 and next_path in r.text
+        assert r.headers["cache-control"] == "no-store", page
+        assert "cache-control" not in (await visitor.get(page)).headers, page
+    # A refused sign-in or sign-up shows the page again, with the same links.
+    form = {"email": "not an address", "password": "x", CSRF_FIELD: visitor.cookies[CSRF_COOKIE]}
+    for page in ("/login", "/register"):
+        r = await visitor.post(page, params={"next": next_path}, data=form)
+        assert r.status_code == 400 and next_path in r.text
+        assert r.headers["cache-control"] == "no-store", page
+        assert "cache-control" not in (await visitor.post(page, data=form)).headers, page
 
 
 @pytest.mark.parametrize("next_path", ["https://evil.example", "//evil.example", "/\\evil.example"])

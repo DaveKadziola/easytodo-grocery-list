@@ -14,6 +14,7 @@ from jinja2 import DictLoader
 from easytodo.config import Settings
 from easytodo.mail import mailer
 from easytodo.mail.mailer import (
+    CONSOLE_MAIL_WARNING,
     OUTBOX_SIZE,
     ConsoleMailer,
     SentMail,
@@ -58,6 +59,31 @@ async def test_console_outbox_keeps_only_the_newest_mails():
 def test_get_mailer_picks_the_configured_backend(settings):
     assert isinstance(get_mailer(settings), ConsoleMailer)
     assert isinstance(get_mailer(smtp_settings(settings, smtp_host="mail")), SmtpMailer)
+
+
+@pytest.mark.parametrize(
+    "backend,public_url,warned",
+    [
+        ("console", "https://todo.example.com", True),
+        ("console", "http://192.168.1.20:8000", True),
+        ("console", "http://localhost:8000", False),
+        ("console", "http://127.0.0.1:8000", False),
+        ("console", "http://[::1]:8000", False),
+        ("smtp", "https://todo.example.com", False),
+    ],
+)
+def test_console_backend_warns_on_a_non_local_address(
+    settings, caplog, backend, public_url, warned
+):
+    """No mail goes out when the app is not run on the machine of whoever reads its log: say so
+    at start, once."""
+    s = smtp_settings(settings, smtp_host="mail", mail_backend=backend, public_url=public_url)
+
+    with caplog.at_level(logging.WARNING, logger="easytodo.mail"):
+        get_mailer(s)
+
+    warnings = [r.getMessage() for r in caplog.records if r.name == "easytodo.mail.mailer"]
+    assert warnings == ([CONSOLE_MAIL_WARNING % s.public_origin] if warned else [])
 
 
 def test_render_mail_takes_the_subject_from_the_first_line():

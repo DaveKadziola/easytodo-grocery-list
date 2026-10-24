@@ -5,8 +5,8 @@ from urllib.parse import unquote
 import httpx
 import pytest
 from factories import DEFAULT_PASSWORD, create_user
-from helpers import login
-from sqlalchemy import select, update
+from helpers import flash_of, login
+from sqlalchemy import delete, select, update
 from starlette.requests import Request
 
 from easytodo.auth import account_routes
@@ -14,8 +14,8 @@ from easytodo.auth.deps import require_user
 from easytodo.auth.sessions import SESSION_COOKIE, create_session
 from easytodo.errors import Forbidden, PasswordChangeRequired
 from easytodo.models import User, UserSession
-from easytodo.security.csrf import CSRF_COOKIE
-from easytodo.security.passwords import verify_password
+from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
+from easytodo.security.passwords import hash_password, verify_password
 from easytodo.security.tokens import hash_token
 from easytodo.web import FLASH_COOKIE
 
@@ -149,7 +149,12 @@ async def test_overlong_current_password_is_refused_before_hashing(client, db, m
     await create_user(db, EMAIL)
     await sign_in(client)
     calls = []
-    monkeypatch.setattr(account_routes, "verify_password", lambda *args: calls.append(args))
+
+    async def spy(*args) -> bool:
+        calls.append(args)
+        return False
+
+    monkeypatch.setattr(account_routes, "verify_password_async", spy)
 
     r = await client.post("/account/password", data=change_form(current="x" * 1000))
 
@@ -158,18 +163,177 @@ async def test_overlong_current_password_is_refused_before_hashing(client, db, m
     assert calls == []
 
 
+@pytest.mark.parametrize("forced", [False, True], ids=["plain", "forced"])
+async def test_a_reset_during_the_password_check_is_not_undone(
+    client_factory, db, monkeypatch, forced
+):
+    # A reset that commits while the current password is being checked has signed every device
+    # out and set a password of its own: the change must neither overwrite that nor revoke more.
+    # A forced change shows what the refused update leaves in the session: the 400 page is
+    # rendered from the user object, which must not be given the values of the update that wrote
+    # nothing (``synchronize_session="fetch"``), or it would drop the forced-change page.
+    await create_user(db, EMAIL, must_change_password=forced)
+    a, b = await sign_in(await client_factory()), await sign_in(await client_factory())
+    reset_hash = hash_password("a-passphrase-from-a-reset")
+
+    async def reset_meanwhile(hash: str, pw: str) -> bool:
+        await db.execute(update(User).values(password_hash=reset_hash))
+        await db.commit()
+        return pw == DEFAULT_PASSWORD  # the current password is right; the new one is not the old
+
+    monkeypatch.setattr(account_routes, "verify_password_async", reset_meanwhile)
+    r = await a.post("/account/password", data=change_form())
+
+    assert r.status_code == 400
+    assert "Current password is incorrect." in r.text
+    assert "dave@example.com" in r.text  # the page is the usual one, with the signed-in header
+    assert ("You must change your password before you continue." in r.text) is forced
+    assert await db.scalar(select(User.must_change_password)) is forced
+    assert FLASH_COOKIE not in r.headers.get("set-cookie", "")
+    assert await password_hash(db) == reset_hash
+    assert len(await session_ids(db)) == 2
+    assert (await b.get("/account/password" if forced else "/account")).status_code == 200
+
+
+@pytest.mark.parametrize("forced", [False, True], ids=["plain", "forced"])
+async def test_no_connection_is_held_while_the_password_is_checked_and_hashed(
+    app, client, db, monkeypatch, forced
+):
+    await create_user(db, EMAIL, must_change_password=forced)
+    await sign_in(client)
+    held: list[int] = []  # connections of the app checked out at each hash and check
+    real_verify, real_hash = (
+        account_routes.verify_password_async,
+        account_routes.hash_password_async,
+    )
+
+    async def verify(hash: str, pw: str) -> bool:
+        held.append(app.state.engine.pool.checkedout())
+        return await real_verify(hash, pw)
+
+    async def hash_(pw: str) -> str:
+        held.append(app.state.engine.pool.checkedout())
+        return await real_hash(pw)
+
+    monkeypatch.setattr(account_routes, "verify_password_async", verify)
+    monkeypatch.setattr(account_routes, "hash_password_async", hash_)
+    r = await client.post("/account/password", data=change_form())
+
+    assert r.status_code == 303
+    # The current password; for a forced change also the new one against it; then the hash.
+    assert held == [0] * (3 if forced else 2)
+
+
+async def test_password_change_gives_this_device_a_new_token(client_factory, db):
+    await create_user(db, EMAIL)
+    a = await sign_in(await client_factory())
+    old_token, old_id = a.cookies[SESSION_COOKIE], await session_id(db, a)
+    expiry = select(UserSession.expires_at).where(UserSession.id == old_id)
+    old_expiry = await db.scalar(expiry)
+
+    r = await a.post("/account/password", data=change_form())
+
+    assert r.status_code == 303 and r.cookies.get(SESSION_COOKIE) not in (None, old_token)
+    cookie = next(c for c in r.headers.get_list("set-cookie") if c.startswith(SESSION_COOKIE))
+    assert "HttpOnly" in cookie and "SameSite=lax" in cookie and "Path=/" in cookie
+    assert await session_id(db, a) == old_id  # the same row
+    assert await db.scalar(expiry) == old_expiry  # the rotation does not move the expiry
+    assert (await a.get("/account")).status_code == 200
+    leaked = await client_factory()
+    leaked.cookies.set(SESSION_COOKIE, old_token)
+    r = await leaked.get("/account")
+    assert r.status_code == 303 and r.headers["location"] == "/login?next=%2Faccount"
+
+
+@pytest.mark.parametrize("who", ["logout", "sign-out-others"])
+async def test_a_password_change_stands_when_its_session_is_signed_out_meanwhile(
+    client_factory, db, monkeypatch, who
+):
+    # This device's session is deleted while the new password is hashed: by a logout in another
+    # tab, or by device B's "Sign out other devices". The new password and the sign-out of the
+    # other devices stand (as in v2.0), and this device is sent to sign in: no 500.
+    await create_user(db, EMAIL)
+    a, b = await sign_in(await client_factory()), await sign_in(await client_factory())
+    a_id, b_id = await session_id(db, a), await session_id(db, b)
+    real_hash = account_routes.hash_password_async
+
+    async def hash_then_sign_out(pw: str) -> str:
+        new_hash = await real_hash(pw)
+        gone = UserSession.id == a_id if who == "logout" else UserSession.id != b_id
+        await db.execute(delete(UserSession).where(gone))
+        await db.commit()
+        return new_hash
+
+    monkeypatch.setattr(account_routes, "hash_password_async", hash_then_sign_out)
+    r = await a.post("/account/password", data=change_form())
+
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+    assert SESSION_COOKIE not in a.cookies
+    assert flash_of(r) == {
+        "level": "info",
+        "message": "Password changed. Sign in with your new password.",
+    }
+    assert verify_password(await password_hash(db), NEW_PASSWORD)
+    assert await session_ids(db) == set()  # B's went with the change, as in v2.0
+    assert (await b.get("/account")).status_code == 303
+
+
+async def test_a_request_keeps_its_own_state_while_another_one_runs(
+    client_factory, db, monkeypatch
+):
+    # Each request has its own copy of the lifespan state, as under uvicorn. With one dict for all,
+    # B's request, which runs while A's password is hashed, would put B's session into A's
+    # ``request.state.session``, and A's change would rotate B's row.
+    await create_user(db, EMAIL)
+    a, b = await sign_in(await client_factory()), await sign_in(await client_factory())
+    a_id = await session_id(db, a)
+    real_hash = account_routes.hash_password_async
+
+    async def hash_while_b_browses(pw: str) -> str:
+        assert (await b.get("/account")).status_code == 200
+        return await real_hash(pw)
+
+    monkeypatch.setattr(account_routes, "hash_password_async", hash_while_b_browses)
+    r = await a.post("/account/password", data=change_form())
+
+    assert r.status_code == 303 and r.headers["location"] == "/account"
+    assert await session_id(db, a) == a_id  # A's new cookie belongs to A's row
+
+
+async def test_a_refused_password_change_keeps_this_devices_token(client, db):
+    await create_user(db, EMAIL)
+    await sign_in(client)
+    token = client.cookies[SESSION_COOKIE]
+
+    r = await client.post("/account/password", data=change_form(current="not-the-right-password"))
+
+    assert r.status_code == 400 and SESSION_COOKIE not in r.headers.get("set-cookie", "")
+    assert client.cookies[SESSION_COOKIE] == token
+    assert await session_id(db, client) is not None  # the stored token is still the one it has
+
+
 async def test_password_form_requires_sign_in(client):
     r = await client.get("/account/password")
     assert r.status_code == 303
     assert r.headers["location"] == "/login?next=%2Faccount%2Fpassword"
 
 
-async def test_password_change_is_rate_limited_per_ip(client, db):
+async def test_password_guesses_are_counted_per_account(client_factory, client_from_ip, db):
     await create_user(db, EMAIL)
-    await sign_in(client)
+    await create_user(db, "bob@example.com")
+    dave = await sign_in(await client_factory())
+    bob = await sign_in(await client_factory(), "bob@example.com")  # the same address as Dave
     wrong = change_form(current="not-the-right-password")
-    statuses = [(await client.post("/account/password", data=wrong)).status_code for _ in range(11)]
+
+    statuses = [(await dave.post("/account/password", data=wrong)).status_code for _ in range(11)]
     assert statuses == [400] * 10 + [429]
+    # Bob shares Dave's address, not his budget.
+    assert (await bob.post("/account/password", data=wrong)).status_code == 400
+    # Dave's budget goes with his session, whichever address it is used from.
+    elsewhere = await client_from_ip("203.0.113.7")
+    elsewhere.cookies.update(dave.cookies)
+    elsewhere.headers[CSRF_HEADER] = dave.headers[CSRF_HEADER]
+    assert (await elsewhere.post("/account/password", data=wrong)).status_code == 429
 
 
 async def test_must_change_password_redirects_everything(client, db):
@@ -221,6 +385,7 @@ async def test_must_change_password_htmx_get_gets_hx_redirect(client, db):
         ("POST", "/logout", "allowed"),  # no route calls require_user there yet
         ("GET", "/account/password/extra", "redirect"),
         ("GET", "/", "redirect"),
+        ("HEAD", "/", "redirect"),
         ("POST", "/boards", "forbidden"),
         ("DELETE", "/account/sessions/1", "forbidden"),
     ],

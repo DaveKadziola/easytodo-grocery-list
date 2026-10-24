@@ -9,8 +9,18 @@ from factories import create_board, create_category, create_item, create_user
 from helpers import login
 from sqlalchemy import select
 
-from easytodo.content import service
-from easytodo.models import Board, BoardMember, BoardRole, Category, Item
+from easytodo.attachments import service as attachments
+from easytodo.content import checklist, service
+from easytodo.models import (
+    Attachment,
+    Board,
+    BoardMember,
+    BoardRole,
+    Category,
+    ChecklistEntry,
+    Item,
+    User,
+)
 from easytodo.realtime.events import BoardEvent, current_origin
 
 SignedInClient = Callable[[str], Awaitable[httpx.AsyncClient]]
@@ -62,29 +72,46 @@ async def viewer_client(signed_in_client, db, board) -> httpx.AsyncClient:
 
 
 @pytest.fixture
+async def target_board(db, editor_client) -> Board:
+    """The board "Weekend" of target-owner@example.com, on which editor@example.com
+    (``editor_client``) is an editor: where a category of ``board`` can be moved to."""
+    owner = await create_user(db, "target-owner@example.com")
+    editor = await db.scalar(select(User).where(User.email == "editor@example.com"))
+    return await create_board(db, owner, "Weekend", {editor: BoardRole.EDITOR})
+
+
+@pytest.fixture
 def published(monkeypatch) -> list[tuple[tuple[BoardEvent, ...], str | None]]:
-    """Every ``commit_and_publish`` call the content service makes: its events and the request's
-    origin (``X-Client-Id``)."""
+    """Every ``commit_and_publish`` call the content services (categories and items, checklists,
+    attachments) make: its events and the request's origin (``X-Client-Id``)."""
     calls: list[tuple[tuple[BoardEvent, ...], str | None]] = []
-    commit_and_publish = service.commit_and_publish
 
-    async def spy(db, *events):
-        calls.append((events, current_origin.get()))
-        await commit_and_publish(db, *events)
+    def spying_on(commit_and_publish):
+        async def spy(db, *events):
+            calls.append((events, current_origin.get()))
+            await commit_and_publish(db, *events)
 
-    monkeypatch.setattr(service, "commit_and_publish", spy)
+        return spy
+
+    for module in (service, checklist, attachments):
+        monkeypatch.setattr(module, "commit_and_publish", spying_on(module.commit_and_publish))
     return calls
 
 
 @pytest.fixture
-def content_snapshot(db) -> Callable[[], Awaitable[tuple[list, list]]]:
-    """``await content_snapshot()`` -> every category and item row, to show nothing changed."""
+def content_snapshot(db) -> Callable[[], Awaitable[tuple[list, list, list, list]]]:
+    """``await content_snapshot()`` -> every category, item, checklist entry and attachment row,
+    to show nothing changed."""
 
-    async def take() -> tuple[list, list]:
+    async def take() -> tuple[list, list, list, list]:
         categories = await db.execute(
-            select(Category.id, Category.board_id, Category.name, Category.position).order_by(
-                Category.id
-            )
+            select(
+                Category.id,
+                Category.board_id,
+                Category.name,
+                Category.position,
+                Category.archived_at,
+            ).order_by(Category.id)
         )
         items = await db.execute(
             select(
@@ -95,8 +122,23 @@ def content_snapshot(db) -> Callable[[], Awaitable[tuple[list, list]]]:
                 Item.description,
                 Item.is_done,
                 Item.done_at,
+                Item.deleted_at,
             ).order_by(Item.id)
         )
-        return categories.all(), items.all()
+        entries = await db.execute(
+            select(
+                ChecklistEntry.id,
+                ChecklistEntry.item_id,
+                ChecklistEntry.text,
+                ChecklistEntry.is_done,
+                ChecklistEntry.position,
+            ).order_by(ChecklistEntry.id)
+        )
+        attachments = await db.execute(
+            select(
+                Attachment.id, Attachment.item_id, Attachment.filename, Attachment.storage_key
+            ).order_by(Attachment.id)
+        )
+        return categories.all(), items.all(), entries.all(), attachments.all()
 
     return take

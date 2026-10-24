@@ -55,9 +55,9 @@ The first request can take a few seconds while Caddy gets the certificate. `dock
 
 **`EASYTODO_FORWARDED_ALLOW_IPS=*` and `EASYTODO_BIND=127.0.0.1` go together:**
 
-- The per-IP rate limits (sign-in, second sign-in step, sign-up, forgotten password, password change) need each visitor's own address. Behind Caddy, the connection to the app always comes from Caddy's container. With `*`, the app takes the visitor's address from the `X-Forwarded-For` header that Caddy sets; Caddy drops any such header a visitor sends. Without `*`, all visitors share one budget, so one person's typos, or an attacker, block sign-in for everyone.
+- The per-IP rate limits (sign-in, second sign-in step, sign-up, forgotten password) need each visitor's own address. An IPv6 address counts with its whole /64 network, the block one home or phone connection usually gets. Password guesses on the account pages count per account. Each account gets at most 3 reset mails an hour: further requests show the same page and send nothing. Behind Caddy, the connection to the app always comes from Caddy's container. With `*`, the app takes the visitor's address from the `X-Forwarded-For` header that Caddy sets; Caddy drops any such header a visitor sends. Without `*`, all visitors share one budget, so one person's typos, or an attacker, block sign-in for everyone.
 - `*` trusts that header from anyone who can connect to the app's port. `EASYTODO_BIND=127.0.0.1` publishes that port only on the server itself, so only Caddy (over the compose network) and programs on the server can connect. If you set `*` while the port is open to the network, anyone on the network can send a made-up `X-Forwarded-For` with each request and never hit a limit. Never set `*` without `EASYTODO_BIND=127.0.0.1`.
-- On Linux, Docker Engine before 28.0 can still let other machines on your local network reach a port published on 127.0.0.1. Check with `docker version` (Server: Engine). If it is older than 28.0, upgrade Docker or block port 8000 from the network in the server's firewall. Otherwise, with `*`, a device on your network can bypass the rate limits.
+- On Linux, Docker Engine before 28.0 can still let other machines on your local network reach a port published on 127.0.0.1. Check with `docker version` (Server: Engine). If it is older than 28.0, upgrade Docker, or drop connections from the network to the app's port (`EASYTODO_PORT`, 8000 by default) in the `DOCKER-USER` iptables chain, e.g. `sudo iptables -I DOCKER-USER -i <network interface> -p tcp -m conntrack --ctorigdstport 8000 --ctdir ORIGINAL -j DROP`, and save the rule. ufw and other `INPUT` chain rules do not apply to ports Docker publishes. If you do neither, with `*`, a device on your network can bypass the rate limits.
 
 The `caddy_data` volume holds the certificates and the ACME account. Keep it: Let's Encrypt limits how often the same certificate can be issued again.
 
@@ -73,47 +73,54 @@ A tunnel connector on your side opens an outgoing connection to the provider. Th
      ```yaml
      services:
        cloudflared:
-         image: cloudflare/cloudflared:latest
+         image: cloudflare/cloudflared:2026.10.3
          command: tunnel --no-autoupdate run
          environment:
            TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
          restart: unless-stopped
      ```
 
+     The image is pinned to a release: bump the tag deliberately, after reading the release notes (github.com/cloudflare/cloudflared/releases).
+
    - **Tailscale Funnel:** with Tailscale installed on the server, `tailscale funnel --bg 8000` serves `https://<machine>.<tailnet>.ts.net` from the app's port. If Funnel is not enabled for your tailnet yet, the command tells you how to enable it.
 2. In `.env`, set `EASYTODO_PUBLIC_URL=https://<the tunnel's host name>` and `EASYTODO_BIND=127.0.0.1`, so the tunnel is the only way in.
 3. Start the stack: `docker compose up -d`
 
-**Rate limits behind a tunnel.** The app sees the tunnel's peer address, not the visitor's, as the client of every request. That is the cloudflared container's address, or the compose network's gateway for a connector on the server. So all visitors share one per-IP budget: one person's typos, or an attacker, can block sign-in, sign-up and password resets for everyone. The visitor's address reaches the app only if the app trusts the connector's forwarding headers. To do that, set `EASYTODO_FORWARDED_ALLOW_IPS` to the connector's address as the app sees it: an IP address, or a range in CIDR form such as the compose network's subnet (`docker network inspect <project>_default`). Do not use `*` here. Cloudflare, for one, keeps an `X-Forwarded-For` header the visitor sent and appends the real address. With `*` the app takes the first entry, which the visitor controls. With named addresses it takes the last entry that is not one of them, which is the one the tunnel added.
+**Rate limits behind a tunnel.** The app sees the tunnel's peer address, not the visitor's, as the client of every request. That is the cloudflared container's address, or the compose network's gateway for a connector on the server. So all visitors share one per-IP budget: one person's typos, or an attacker, can block sign-in, sign-up and password resets for everyone. The visitor's address reaches the app only if the app trusts the connector's forwarding headers. To do that, set `EASYTODO_FORWARDED_ALLOW_IPS` to the connector's address as the app sees it: an IP address, or a range in CIDR form such as the compose network's subnet (`docker network inspect easytodo_default`, under IPAM → Config → Subnet). Do not use `*` here. Cloudflare, for one, keeps an `X-Forwarded-For` header the visitor sent and appends the real address. With `*` the app takes the first entry, which the visitor controls. With named addresses it takes the last entry that is not one of them, which is the one the tunnel added.
 
 ## (d) Checklist
 
 - [ ] **`POSTGRES_PASSWORD`**: set a random value before the first `docker compose up`, e.g. `openssl rand -hex 24`. Postgres stores it in the `pgdata` volume on its first start, so changing `.env` later does not change it.
 - [ ] **`EASYTODO_SECRET_KEY`**: a strong random key, e.g. `openssl rand -hex 32` (at least 32 characters). It encrypts the 2FA secrets stored in the database. Keep it unchanged, and keep a copy in a safe place apart from the backups (a password manager, say): without it, the 2FA secrets in a restored database cannot be read, and with it anyone holding a dump can read them.
-- [ ] **`EASYTODO_REGISTRATION_OPEN=false`** once everyone has an account, then apply it with `docker compose up -d`. While it is `true`, anyone who can reach the app can sign up. With `false`, people can still sign up from a valid invite link: an e-mail invite works only for its own address, but a link invite lets anyone who has the link create an account until it expires (after 7 days) or is revoked. Revoke the links you no longer need on the board's Members page.
+- [ ] **`EASYTODO_REGISTRATION_OPEN=false`** once everyone has an account, then apply it with `docker compose up -d`. While it is `true`, anyone who can reach the app can sign up. With `false`, people can still sign up from a valid invite link: an e-mail invite works only for its own address, but a link invite lets anyone who has the link create an account until it expires (after 7 days) or is revoked. Revoke the links you no longer need on the board's "Invite and members" page (⋮ on the board list → Invite). On an install reachable from the internet, keep it `false` and invite with links: while it is `true`, each new account may send 20 invite mails an hour, so 10 sign-ups an hour from one address allow about 200 invite mails an hour through your SMTP account.
 - [ ] **Mail over SMTP, not the console.** Set `EASYTODO_MAIL_BACKEND=smtp` and the `EASYTODO_SMTP_*` settings (the README's SMTP section has a Proton Mail example). The default `console` backend sends nothing: it writes every mail, password-reset and invite links included, to the app's log as a WARNING. Never use it in production.
 - [ ] **Logs contain live links. Restrict who can read them.**
   - `/invite/{token}` links let anyone who has one join the board (and create an account, even with registration closed) until the link expires (after 7 days) or is revoked.
   - `/password/reset/{token}` links work once within 60 minutes, and until then they are a full account takeover.
-  - Both appear in the app's access log (`docker compose logs app`), in a proxy's access log if you turn one on (Caddy logs no requests by default), and, with the console mail backend, in the mails the app writes to that same log.
+  - The app's access log (`docker compose logs app`) shows them as `/invite/[redacted]` and `/password/reset/[redacted]`. They appear in full in a proxy's access log if you turn one on (Caddy logs no requests by default) and, with the console mail backend, in the mails the app writes to its log (it warns at startup unless its address is localhost).
   - On Linux, anyone in the `docker` group can read the container logs.
-  - Revoke a leaked invite link on the board's Members page. A password change invalidates all of the account's reset links.
-- [ ] **Backups** with `pg_dump`, run from the repository root, into `backups/` (git-ignored). A dump holds every account's password hash, so it is created readable by your user only (`umask 077`). Copy the dumps off the server, e.g. from a daily cron job:
+  - Revoke a leaked invite link on the board's "Invite and members" page (⋮ on the board list → Invite). A password change, or disabling the account in the admin panel, invalidates all of the account's reset links.
+- [ ] **Backups** with `pg_dump` and a `tar` of the attachments volume, run from the repository root, into `backups/` (git-ignored). A dump holds every account's password hash, so it is created readable by your user only (`umask 077`). Copy both off the server, e.g. from a daily cron job (the one that runs at 03:15 must include the volume `easytodo_attachments`, i.e. the second line, next to the dump: a database restored without its files shows "This attachment no longer exists." for every file):
 
   ```sh
   mkdir -p backups
   (umask 077 && docker compose exec -T db pg_dump -U easytodo -d easytodo -Fc > backups/easytodo-$(date +%F).dump)
+  (umask 077 && docker compose exec -T app tar -C /app/backend/data/attachments -cf - . > backups/attachments-$(date +%F).tar)
   ```
 
-  To restore a dump:
+  To restore a dump and the files of the same day: stop the app, restore the database, restore the files with the app still stopped, start the app:
 
   ```sh
   docker compose stop app
   docker compose exec -T db pg_restore -U easytodo -d easytodo --clean --if-exists < backups/easytodo-2026-10-21.dump
+  docker compose run --rm --no-deps -T --entrypoint tar app -C /app/backend/data/attachments -xf - < backups/attachments-2026-10-21.tar
   docker compose start app
   ```
 
-  Never run `docker compose down -v`: `-v` deletes the database volume, and Caddy's certificates with it.
+  The app's periodic purge (every 24 hours by default; off with `EASYTODO_PURGE_INTERVAL_HOURS=0`, then run `docker compose exec -T app python -m easytodo.cli purge` yourself) removes the files that have no row in the database (attached after the dump); `tar` keeps the files' old modification times, so a restore does not make files look new to it.
+
+  Never run `docker compose down -v`: `-v` deletes the database and attachments volumes, and Caddy's certificates with it.
+- [ ] **Clean-up runs inside the app.** There is nothing to schedule: 5 minutes after it starts, and then every `EASYTODO_PURGE_INTERVAL_HOURS` hours (24 by default), the app deletes the archived boards and categories past their owner's retention, tasks deleted more than 10 minutes ago, notifications older than 30 days and attached files that no task has any more, and logs one line (`Purged: ...`) when it deleted anything. With `EASYTODO_PURGE_INTERVAL_HOURS=0` it is off, and a cron job has to run `docker compose exec -T app python -m easytodo.cli purge` instead (a second run while one is going does nothing and exits with an error). The files are cleaned only if the database holds at least one attachment (see the restore note above).
 - [ ] **Updates:** take a backup first, then run:
 
   ```sh
@@ -121,3 +128,17 @@ A tunnel connector on your side opens an outgoing connection to the provider. Th
   ```
 
   With the proxy, run `docker compose --profile proxy up -d --build` instead, or set `COMPOSE_PROFILES=proxy` in `.env`. Database migrations run when the app starts.
+
+  **From v2.0 to v2.1:** the update adds a volume, `attachments` (`easytodo_attachments`), for the files attached to items. docker compose creates it by itself on the first start; add the `tar` line of the backup above to your backup job at once, because the database dump alone does not hold the files. Then go through [Upgrading from v2.0](../README.md#upgrading-from-v20) in the README: it also says how to go back to v2.0.
+- [ ] **Memory for photos.** To make a thumbnail the app decodes the picture, which takes memory in proportion to its size in pixels, not to the size of its file, so `EASYTODO_ATTACHMENT_MAX_BYTES` does not limit it. The app therefore refuses a picture that has more pixels than a limit for its format, with "This picture has too many pixels.": 20 million for WebP, 36 million for PNG and GIF, 50 million for HEIC (a 48 MP phone photo fits) and for a progressive JPEG, and Pillow's own 89 million for an ordinary (baseline) JPEG, which costs little because it is decoded at a fraction of its size. Decoding runs one picture at a time per worker, so uploads at the same moment wait for each other and the peaks do not add up; each waiting upload holds a database connection, so only dozens of large uploads at the same moment would run a worker's pool dry. A fresh worker takes about 100 MB; what decoding adds to that, measured in a fresh process:
+  - a typical 12 MP phone photo: about 100 MB as HEIC (20 MB as a baseline JPEG), so the app peaks near 200 MB;
+  - a 48 MP phone photo (8064 × 6048): about 370 MB as HEIC, about 300 MB as a progressive JPEG and 20 MB as a baseline one, so near 460 MB;
+  - a panorama of 48 MP (16000 × 3000): about 365 MB, near 455 MB. A panorama of more than 50 MP is refused (some iPhone panoramas are larger);
+  - the largest pictures under these limits: a 50 MP HEIC or progressive JPEG takes 300 to 400 MB, a 20 MP WebP about 310 MB and a 36 MP PNG with transparency about 280 MB.
+
+  A worker that has decoded large pictures keeps part of that memory until it restarts, so its next large picture peaks higher: plan for about 700 MB per worker. The compose file sets no memory limit. If you set one for the `app` service, use `mem_limit: 1g`; 768m is the floor for one worker. 512m is too little: a 48 MP photo uses nearly all of it, and the container is killed and restarted. With more than one worker (`EASYTODO_WORKERS`) each can decode a picture at the same time: add about 700 MB for every extra one.
+- [ ] **Files in a host directory.** The `attachments` volume belongs to the app's user (uid and gid 10001) from the start. If you mount a host directory there instead (a bind mount), it must be writable by that user: `chown -R 10001:10001 <dir>`. Keep the owner when you restore a backup of it on the host (`tar -x` as root, which keeps it, or `rsync -a`). When the app starts and the directory is not writable, it logs an ERROR, and every upload fails.
+
+## Third-party licences
+
+The app itself is MIT-licensed. The `pillow-heif` wheels that read iPhone (HEIC) photos are not: they are licensed GPLv2 as a whole, because they bundle libx265 (GPLv2) beside libheif and libde265 (LGPLv3); see `LICENSES_bundled.txt` in the wheel's `dist-info`. Building the image for your own use is fine. If you publish the image you built (to a registry, say), you must ship those licence notices with it and offer the source of the bundled libraries (the source links are in that file).

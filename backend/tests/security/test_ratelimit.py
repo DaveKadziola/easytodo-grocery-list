@@ -1,9 +1,10 @@
 import json
 
 import httpx
+import pytest
 
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
-from easytodo.security.ratelimit import RateLimiter
+from easytodo.security.ratelimit import RateLimiter, client_address
 
 
 def test_rate_limiter_resets_after_window():
@@ -71,3 +72,37 @@ async def test_rate_limit_dependency_returns_429_per_client_ip(mini_app):
         }
         assert (await _post_limited(b)).status_code == 200  # another IP has its own counter
     assert set(mini_app.state.rate_limiter._windows) == {"test:10.0.0.1", "test:10.0.0.2"}
+
+
+@pytest.mark.parametrize(
+    ("host", "key"),
+    [
+        ("10.0.0.1", "10.0.0.1"),
+        ("2001:DB8:1:2::B", "2001:db8:1:2::/64"),  # one /64 is one connection's worth of addresses
+        ("::ffff:10.0.0.1", "10.0.0.1"),  # a dual-stack socket's IPv4 client: not the ::/64 block
+        ("fe80::1%eth0", "fe80::/64"),
+        ("testclient", "testclient"),  # not an address (the test client's host): kept as it is
+        (None, "unknown"),
+    ],
+)
+def test_client_address_groups_ipv6_by_64(host, key):
+    assert client_address(host) == key
+
+
+async def test_one_ipv6_64_shares_a_budget(mini_app):
+    async def status_from(ip: str) -> int:
+        async with _client(mini_app, ip) as c:
+            return (await _post_limited(c)).status_code
+
+    # The limit is 2: three addresses of one /64 (whatever their last 64 bits) share it.
+    same_64 = ["2001:db8:1:2::a", "2001:db8:1:2:ffff::b", "2001:db8:1:2::a"]
+    assert [await status_from(ip) for ip in same_64] == [200, 200, 429]
+    # Another /64, and the two IPv4 clients (one of them dual-stack), have budgets of their own.
+    others = ["2001:db8:1:3::1", "::ffff:10.0.0.9", "10.0.0.10"]
+    assert [await status_from(ip) for ip in others] == [200, 200, 200]
+    assert set(mini_app.state.rate_limiter._windows) == {
+        "test:2001:db8:1:2::/64",
+        "test:2001:db8:1:3::/64",
+        "test:10.0.0.9",
+        "test:10.0.0.10",
+    }

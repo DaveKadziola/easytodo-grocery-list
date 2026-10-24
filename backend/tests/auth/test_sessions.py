@@ -1,15 +1,21 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from factories import create_user
-from sqlalchemy import select
+from helpers import count_queries
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from easytodo.auth import sessions
+from easytodo.auth.deps import active_session
 from easytodo.auth.sessions import (
     create_session,
     load_session,
+    load_session_and_user,
     revoke_all_sessions,
     revoke_session,
 )
-from easytodo.models import UserSession
+from easytodo.models import User, UserSession, UserStatus
 from easytodo.security.tokens import hash_token
 
 
@@ -56,6 +62,96 @@ async def test_last_seen_at_is_updated_at_most_every_5_minutes(db, settings):
     await load_session(db, raw_token)
     await db.refresh(session)  # re-read from the database: the update was committed
     assert datetime.now(UTC) - session.last_seen_at < timedelta(minutes=1)
+
+
+async def test_load_session_and_user_reads_both_in_one_statement(db, settings):
+    user = await create_user(db)
+    raw_token, session = await new_session(db, user, settings)
+    other_token, _ = await new_session(db, await create_user(db, "other@example.com"), settings)
+    db.expunge_all()
+
+    with count_queries(db) as statements:
+        found = await load_session_and_user(db, raw_token)
+
+    assert len(statements) == 1
+    assert found is not None
+    loaded_session, loaded_user = found
+    assert (loaded_session.id, loaded_session.user_id) == (session.id, user.id)
+    assert loaded_user.id == user.id  # not the other token's user
+    assert (await load_session_and_user(db, raw_token + "x")) is None
+    assert (await load_session_and_user(db, "")) is None
+    assert (await load_session_and_user(db, other_token))[1].email == "other@example.com"
+
+
+async def test_load_session_and_user_skips_expired_sessions(db, settings):
+    user = await create_user(db)
+    raw_token, session = await new_session(db, user, settings)
+    session.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    await db.commit()
+    assert (await load_session_and_user(db, raw_token)) is None
+
+
+async def test_load_session_and_user_updates_last_seen_at_like_load_session(db, settings):
+    user = await create_user(db)
+    raw_token, session = await new_session(db, user, settings)
+
+    recent = datetime.now(UTC) - timedelta(minutes=4)
+    session.last_seen_at = recent
+    await db.commit()
+    await load_session_and_user(db, raw_token)
+    await db.refresh(session)
+    assert session.last_seen_at == recent
+
+    session.last_seen_at = datetime.now(UTC) - timedelta(minutes=6)
+    await db.commit()
+    found = await load_session_and_user(db, raw_token)
+    assert found is not None
+    assert datetime.now(UTC) - found[0].last_seen_at < timedelta(minutes=1)
+    await db.refresh(session)  # re-read from the database: the update was committed
+    assert datetime.now(UTC) - session.last_seen_at < timedelta(minutes=1)
+    assert found[1].email == user.email  # the user is still usable after that commit
+
+
+@pytest.mark.parametrize("load", [load_session, load_session_and_user])
+async def test_a_session_gone_before_its_bump_is_no_session(db, settings, monkeypatch, load):
+    """The user is deleted (and the session with it) after the session was read and before the
+    UPDATE of ``last_seen_at``: that matches no row. Not an error: no session."""
+    user = await create_user(db)
+    raw_token, session = await new_session(db, user, settings)
+    session.last_seen_at = datetime.now(UTC) - timedelta(minutes=6)  # the bump is due
+    await db.commit()
+    touch = sessions._touch
+
+    async def delete_the_user_then_touch(session_db, found, now):
+        async with AsyncSession(db.bind) as other:  # an admin, just then
+            await other.execute(delete(User).where(User.id == user.id))
+            await other.commit()
+        return await touch(session_db, found, now)
+
+    monkeypatch.setattr(sessions, "_touch", delete_the_user_then_touch)
+
+    assert await load(db, raw_token) is None
+
+    monkeypatch.setattr(sessions, "_touch", touch)
+    assert await load(db, raw_token) is None  # the cookie does not work any more
+    assert await db.scalar(select(func.count()).select_from(UserSession)) == 0  # db is usable
+
+
+async def test_active_session_leaves_out_a_disabled_user_but_not_a_pending_session(db, settings):
+    user = await create_user(db)
+    raw_token, _ = await create_session(
+        db, user, mfa_pending=True, user_agent=None, ip=None, settings=settings
+    )
+    signed_in = await active_session(db, raw_token)
+    assert signed_in is not None  # what a pending session may do is for require_user to say
+    assert (signed_in[0].id, signed_in[1].mfa_pending) == (user.id, True)
+    assert await active_session(db, None) is None
+    assert await active_session(db, raw_token + "x") is None
+
+    await db.execute(update(User).where(User.id == user.id).values(status=UserStatus.DISABLED))
+    await db.commit()
+    db.expunge_all()
+    assert await active_session(db, raw_token) is None
 
 
 async def test_revoke_all_sessions_can_keep_the_current_one(db, settings):

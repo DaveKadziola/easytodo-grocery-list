@@ -24,7 +24,7 @@ target_metadata = Base.metadata
 
 def get_url() -> str:
     """The URL passed by the caller (``config.attributes["url"]``), else EASYTODO_DATABASE_URL."""
-    return config.attributes.get("url") or get_settings().database_url
+    return config.attributes.get("url") or get_settings().database_url.get_secret_value()
 
 
 def run_migrations_offline() -> None:
@@ -44,6 +44,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        compare_server_default=True,
     )
 
     with context.begin_transaction():
@@ -51,7 +52,9 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection, target_metadata=target_metadata, compare_server_default=True
+    )
 
     with context.begin_transaction():
         context.run_migrations()
