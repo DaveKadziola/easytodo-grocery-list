@@ -1,6 +1,7 @@
 import httpx
 import pytest
-from helpers import toast_message
+from factories import create_user
+from helpers import signed_in, toast_message
 from pydantic import AnyHttpUrl
 
 from easytodo.auth.sessions import SESSION_COOKIE
@@ -112,3 +113,24 @@ async def test_a_database_failure_still_gets_the_error_page(client_factory):
 
     assert r.status_code == 500 and SERVER_ERROR in r.text
     assert {name: r.headers.get(name) for name in HEADERS} == HEADERS
+
+
+async def test_the_error_page_of_a_signed_in_user_does_not_show_them(
+    client_factory, db, monkeypatch
+):
+    """A route fails after ``CurrentUser`` has loaded the user: the 500 page is still made
+    without them (the failure may be the database's), so it names nobody."""
+    await create_user(db, "dave@example.com", display_name="Dave Kowalski")
+    c = await signed_in(client_factory, "dave@example.com")
+    c._transport.raise_app_exceptions = False  # the server's 500, not the exception
+
+    async def fail(*args, **kwargs):
+        raise RuntimeError("secret detail")
+
+    monkeypatch.setattr("easytodo.boards.routes.list_boards", fail)
+
+    r = await c.get("/boards")
+
+    assert r.status_code == 500 and SERVER_ERROR in r.text
+    assert "dave@example.com" not in r.text and "Dave Kowalski" not in r.text
+    assert "secret detail" not in r.text

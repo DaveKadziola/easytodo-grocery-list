@@ -2,10 +2,10 @@
 notification service publishes."""
 
 import pytest
-from easytodo.notifications import service
 from factories import create_board, create_user
 
 from easytodo.models import Board, BoardRole, User
+from easytodo.notifications import service
 from easytodo.realtime.events import BoardEvent, current_origin
 
 
