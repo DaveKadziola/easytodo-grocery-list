@@ -8,10 +8,10 @@ import re
 import pytest
 from factories import create_board, create_category, create_checklist_entry, create_item
 from playwright.sync_api import Locator, Page, expect
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from e2e.locators import TAP_TARGETS, category
-from easytodo.models import Item
+from easytodo.models import Category, Item
 
 pytestmark = pytest.mark.e2e
 
@@ -180,6 +180,58 @@ def test_sort_menu_fits_a_phone(logged_in_page_mobile, seed, user, open_board, n
     menu.get_by_role("button", name="Use my default").tap()
     expect(sort_button).not_to_have_class(re.compile("sort-custom"))
     expect(items).to_have_text([re.compile(name) for name in ITEMS])
+
+
+@pytest.mark.parametrize(
+    "names", [["Dairy"], ["Dairy", "Bakery", "Fruit"]], ids=["one category", "last of three"]
+)
+def test_category_menu_fits_a_phone(logged_in_page_mobile, seed, user, open_board, names):
+    """The ⋮ menu of the last category, with every action it can have (a ticked item for "Clear
+    done", a board to move to). On a short card at the foot of the board its last actions hung
+    under the bottom bar, out of reach even with the page scrolled to its end. (With one
+    category the menu fits either way: that case pins which actions it lists.)"""
+    page = logged_in_page_mobile
+    board_id = seed_categories(seed, user, names)
+
+    async def more(db) -> None:
+        last = await db.scalar(select(Category).where(Category.name == names[-1]))
+        await db.execute(delete(Item).where(Item.category_id == last.id))  # a short card
+        await create_item(db, last, "Cream", is_done=True)
+        await create_board(db, user, "Weekend")  # somewhere to move a category to
+
+    seed(more)
+    open_board(page, board_id)
+    last = names[-1]
+    card = category(page, last)
+    actions = card.get_by_label("Category actions")
+    menu = card.locator("details", has=page.get_by_label("Category actions"))
+    if len(names) > 1:  # the last card is below the fold: this tests the page scrolled to it
+        assert card.bounding_box()["y"] > page.viewport_size["height"]
+
+    actions.tap()
+    expect(menu.locator(".menu")).to_be_visible()
+
+    assert too_small_targets(page) == []
+    box = menu.locator(".menu").bounding_box()
+    width = page.viewport_size["width"]
+    assert box["x"] >= 0 and box["x"] + box["width"] <= width, box
+    bar = page.locator("#bottom-bar").bounding_box()
+    assert 0 <= box["y"] and box["y"] + box["height"] <= bar["y"], (box, bar)  # above the bar
+    assert page.evaluate("document.scrollingElement.scrollWidth <= window.innerWidth")
+    controls = [
+        menu.get_by_label("Category name"),
+        *menu.get_by_role("button").all(),  # those the page shows, not "Move up" of the first
+    ]
+    expected = ["Rename", "Clear done (1)", "Move to board…", "Archive category"]
+    if len(names) > 1:  # the last one has no "Move down", and the only one no "Move up" either
+        expected.insert(1, "Move up")
+    visible = [c.inner_text() for c in controls[1:] if c.is_visible()]
+    assert visible == expected
+    assert [c.inner_text() for c in controls if c.is_visible() and not reachable(c)] == []
+
+    page.once("dialog", lambda dialog: dialog.accept())  # "Archive “Fruit” with its items?"
+    menu.get_by_role("button", name="Archive category").tap()
+    expect(card).to_have_count(0)
 
 
 def test_desktop_shows_three_columns(logged_in_page_with_seed):

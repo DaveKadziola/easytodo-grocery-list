@@ -161,6 +161,14 @@
     @apply dark:bg-slate-800 dark:ring-slate-700;
   }
 
+  /* A category's menus on a phone: a sheet above the bottom bar (and its safe-area padding).
+     Hung from their buttons, the ones of a card at the foot of the board ended under the bar,
+     with nothing to scroll them out (the sort menu is 540 px high). */
+  .menu-sheet {
+    @apply max-sm:fixed max-sm:inset-x-4 max-sm:bottom-[calc(5rem+env(safe-area-inset-bottom))];
+    @apply max-sm:max-h-[70dvh] max-sm:w-auto max-sm:overflow-y-auto;
+  }
+
   .menu-item {
     @apply flex min-h-11 w-full items-center rounded-md px-3 text-left text-sm font-medium;
     @apply hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-emerald-600;
