@@ -62,7 +62,7 @@ WINTER = datetime(2026, 1, 15, 12, 0)
 @pytest.fixture
 def legacy_dsn(settings) -> str:
     """The test database's DSN as asyncpg takes it (the v1 schema lives in that database)."""
-    return settings.database_url.replace("+asyncpg", "")
+    return settings.database_url.get_secret_value().replace("+asyncpg", "")
 
 
 @pytest.fixture

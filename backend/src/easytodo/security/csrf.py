@@ -2,7 +2,9 @@
 (``Settings.allowed_origins``) plus a double-submit token.
 
 ``CsrfCookieMiddleware`` issues the token cookie; pages send it back in the ``X-CSRF-Token``
-header (HTMX) or the ``csrf_token`` form field.
+header (HTMX) or the ``csrf_token`` form field. A page holds a mask of the token, new on every
+render (``security.tokens.mask_token``), and sends that; the token itself, as the cookie holds it,
+is accepted too, for tests, ``scripts/bench.py`` and curl.
 """
 
 import hmac
@@ -12,6 +14,7 @@ from urllib.parse import urlsplit
 from starlette.requests import HTTPConnection, Request
 
 from easytodo.errors import Forbidden
+from easytodo.security.tokens import unmask_token
 
 CSRF_COOKIE = "easytodo_csrf"
 CSRF_HEADER = "X-CSRF-Token"
@@ -32,6 +35,18 @@ def _request_origin(request: Request) -> str | None:
     except ValueError:
         return None
     return f"{parts.scheme}://{parts.netloc}"
+
+
+def _token_matches(cookie: str | None, submitted: object) -> bool:
+    """Whether ``submitted`` is the cookie's token: as it is when it has the cookie's length,
+    otherwise as a mask of it (one that is no mask is refused)."""
+    if not cookie or not isinstance(submitted, str):
+        return False
+    if len(submitted) != len(cookie):
+        submitted = unmask_token(submitted)
+        if submitted is None:
+            return False
+    return hmac.compare_digest(submitted.encode(), cookie.encode())
 
 
 async def verify_csrf(request: HTTPConnection) -> AsyncIterator[None]:
@@ -58,11 +73,7 @@ async def verify_csrf(request: HTTPConnection) -> AsyncIterator[None]:
             if submitted is None:
                 form = await request.form()
                 submitted = form.get(CSRF_FIELD)
-            if (
-                not cookie
-                or not isinstance(submitted, str)
-                or not hmac.compare_digest(submitted.encode(), cookie.encode())
-            ):
+            if not _token_matches(cookie, submitted):
                 raise Forbidden("Invalid CSRF token.")
         yield
     finally:

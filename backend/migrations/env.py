@@ -24,7 +24,7 @@ target_metadata = Base.metadata
 
 def get_url() -> str:
     """The URL passed by the caller (``config.attributes["url"]``), else EASYTODO_DATABASE_URL."""
-    return config.attributes.get("url") or get_settings().database_url
+    return config.attributes.get("url") or get_settings().database_url.get_secret_value()
 
 
 def run_migrations_offline() -> None:

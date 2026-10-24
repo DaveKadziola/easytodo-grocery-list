@@ -12,7 +12,7 @@ import httpx
 import pyotp
 import pytest
 from factories import DEFAULT_PASSWORD, create_board, create_reset_token, create_user
-from helpers import login
+from helpers import login, without_csrf_mask
 from markupsafe import escape
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -120,7 +120,8 @@ async def test_known_unknown_and_invalid_emails_get_the_same_page(client, db, ma
     pages = [await forgot(client, email) for email in (EMAIL, "nobody@example.com", "not-an-email")]
 
     assert [r.status_code for r in pages] == [200, 200, 200]
-    assert pages[0].text == pages[1].text == pages[2].text
+    first, second, third = (without_csrf_mask(r.text) for r in pages)  # each has its own mask
+    assert first == second == third
     assert [mail.to for mail in mail_outbox] == [EMAIL]
 
 
@@ -397,7 +398,7 @@ async def test_forgot_answers_before_any_account_work(_running_app, app, db, mon
     # The token and the mail come after the answer, and only for the account that exists, so
     # the time the answer takes does not tell the two apart.
     assert order == ["response", "token", "mail", "response"]
-    assert known.text == unknown.text
+    assert without_csrf_mask(known.text) == without_csrf_mask(unknown.text)
     assert held_connections == [0]  # the mail is sent with no database connection held
 
 
@@ -408,7 +409,7 @@ async def test_reset_mails_are_capped_per_account(client, db, mail_outbox):
     pages = [await forgot(client) for _ in range(4)]
 
     assert [r.status_code for r in pages] == [200] * 4
-    assert len({r.text for r in pages}) == 1  # the capped request shows the same page
+    assert len({without_csrf_mask(r.text) for r in pages}) == 1  # the capped one: the same page
     assert [mail.to for mail in mail_outbox] == [EMAIL] * 3
     assert await db.scalar(select(func.count()).select_from(PasswordResetToken)) == 3
     # The fourth request ended no link: the one in the third mail is the one that works.

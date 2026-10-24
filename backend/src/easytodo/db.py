@@ -26,7 +26,9 @@ class Base(DeclarativeBase):
 
 
 def create_engine(settings: Settings) -> AsyncEngine:
-    return create_async_engine(settings.database_url, pool_size=10, pool_pre_ping=True)
+    return create_async_engine(
+        settings.database_url.get_secret_value(), pool_size=10, pool_pre_ping=True
+    )
 
 
 async def get_db(request: Request) -> AsyncIterator[AsyncSession]:

@@ -43,6 +43,7 @@ from easytodo.attachments.service import (
 from easytodo.attachments.storage import AttachmentStore
 from easytodo.boards.permissions import Action, RowLock
 from easytodo.content.service import _category_changed
+from easytodo.errors import SERVER_ERROR
 from easytodo.middleware import FORM_OVERHEAD, UploadSizeLimitMiddleware
 from easytodo.models import Attachment, Category, User
 from easytodo.security.csrf import CSRF_HEADER
@@ -506,7 +507,7 @@ async def test_a_file_that_cannot_be_written_is_a_server_error_and_leaves_nothin
     )
 
     assert r.status_code == 500
-    assert BROKEN_IMAGE not in r.text and "hx-trigger" not in r.headers
+    assert BROKEN_IMAGE not in r.text and toast_message(r) == SERVER_ERROR  # not a file's fault
     assert nothing_left(await attachment_rows(db), store)
 
 

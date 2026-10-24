@@ -7,6 +7,7 @@ import re
 
 import pytest
 from factories import DEFAULT_PASSWORD, create_board
+from helpers import LINKS_STILL_WORK
 from playwright.sync_api import Browser, Page, expect
 
 from e2e.conftest import open_board_menu, watch_console
@@ -74,9 +75,17 @@ def test_invite_link_round_trip(browser, live_server, logged_in_page, seed, user
         role.select_option("editor")
     assert changed.value.status == 200
     expect(page.get_by_label("Role of newbie@example.com")).to_have_value("editor")
-    page.once("dialog", lambda dialog: dialog.accept())
+    confirmations: list[str] = []
+
+    def accept(dialog):
+        confirmations.append(dialog.message)
+        dialog.accept()
+
+    page.once("dialog", accept)
     page.get_by_role("button", name="Remove").click()
     expect(page.get_by_text("newbie@example.com")).to_have_count(0)
+    # The invite link still works for the person removed: the confirmation says so.
+    assert len(confirmations) == 1 and confirmations[0].endswith(LINKS_STILL_WORK)
 
     assert problems == []
 

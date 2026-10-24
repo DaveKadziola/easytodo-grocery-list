@@ -32,7 +32,7 @@ from easytodo.boards.service import (
 from easytodo.errors import ValidationFailed
 from easytodo.models import BoardRole, User
 from easytodo.security.ratelimit import limit_user
-from easytodo.web import flash, is_htmx, render
+from easytodo.web import flash, is_htmx, no_store, render
 
 router = APIRouter()
 
@@ -60,7 +60,8 @@ async def _members_page(
     link_email: str | None = None,
 ) -> Response:
     """The members page; ``new_link`` is a link invite just created (shown only this once), or
-    the link of an e-mail invite to ``link_email`` whose mail was not delivered."""
+    the link of an e-mail invite to ``link_email`` whose mail was not delivered. A page that shows
+    a link is never cached."""
     board, role = await require_board(db, board_id, user, Action.VIEW)
     manage = can(role, Action.MANAGE_MEMBERS)
     context = {
@@ -73,7 +74,8 @@ async def _members_page(
         "valid_days": INVITE_TTL.days,
         "notice": notice,
     }
-    return render(request, "boards/members.html", context, status_code)
+    response = render(request, "boards/members.html", context, status_code)
+    return no_store(response) if new_link else response
 
 
 @router.get("/boards/{board_id}/members")
@@ -154,7 +156,8 @@ async def invite_page(request: Request, db: DbSession, user: CurrentUser, token:
         response = RedirectResponse(f"/boards/{preview.board_id}", status_code=303)
         flash(response, "You're already a member of this board.", request.app.state.settings)
         return response
-    return render(request, "boards/invite.html", {"token": token, "preview": preview})
+    # The token is in the page (the accept form's address): no cache keeps a copy.
+    return no_store(render(request, "boards/invite.html", {"token": token, "preview": preview}))
 
 
 @router.post("/invite/{token}/accept")

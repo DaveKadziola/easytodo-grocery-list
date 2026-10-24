@@ -116,13 +116,28 @@ def _kept_next(next_: str | None) -> str | None:
     return None if target == "/" else target
 
 
+def _sign_in_or_up_page(
+    request: Request,
+    name: str,
+    context: dict[str, object],
+    next_: str | None,
+    status_code: int = 200,
+) -> Response:
+    """The sign-in or sign-up page (``name``), passing ``next_`` on to the other one. When ``next_``
+    is an invite's page, the page writes the live invite link into its HTML, so no cache may keep
+    it; without such a ``next`` the headers are as for any page."""
+    kept = _kept_next(next_)
+    response = render(request, name, context | {"next_path": kept}, status_code)
+    return no_store(response) if kept and kept.startswith("/invite/") else response
+
+
 @router.get("/register")
 async def register_page(
     request: Request, invite: RegistrationInvite, next_: NextParam = None
 ) -> Response:
     # An e-mail invite's page: its address, which the account must have.
     email = invite.email if invite is not None and invite.email is not None else ""
-    return render(request, "auth/register.html", {"email": email, "next_path": _kept_next(next_)})
+    return _sign_in_or_up_page(request, "auth/register.html", {"email": email}, next_)
 
 
 @router.post("/register")
@@ -144,14 +159,14 @@ async def register(
             raise ValidationFailed(INVITE_OTHER_EMAIL)
         user = await register_user(db, email, password)
     except AppError as exc:
-        context = {"email": email, "error": exc.message, "next_path": _kept_next(next_)}
-        return render(request, "auth/register.html", context, status_code=400)
+        context = {"email": email, "error": exc.message}
+        return _sign_in_or_up_page(request, "auth/register.html", context, next_, 400)
     return await _signed_in_redirect(request, db, user, safe_next(next_))
 
 
 @router.get("/login")
 async def login_page(request: Request, next_: NextParam = None) -> Response:
-    return render(request, "auth/login.html", {"email": "", "next_path": _kept_next(next_)})
+    return _sign_in_or_up_page(request, "auth/login.html", {"email": ""}, next_)
 
 
 @router.post("/login", dependencies=[Depends(rate_limit("login", 20, 300))])
@@ -169,8 +184,8 @@ async def login(
     try:
         user = await authenticate(db, email, password)
     except AppError as exc:
-        context = {"email": email, "error": exc.message, "next_path": _kept_next(next_)}
-        return render(request, "auth/login.html", context, status_code=400)
+        context = {"email": email, "error": exc.message}
+        return _sign_in_or_up_page(request, "auth/login.html", context, next_, 400)
     if previous is not None and previous.mfa_pending:
         await revoke_session(db, previous.id)
         await commit_and_publish(db, *sessions_revoked(previous.user_id, [previous.id]))

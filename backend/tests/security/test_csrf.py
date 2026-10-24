@@ -1,12 +1,16 @@
 import json
 
 import httpx
+import pytest
+from factories import DEFAULT_PASSWORD
 from fastapi import FastAPI
+from helpers import FIELD_CSRF, META_CSRF
 from starlette.datastructures import FormData
 
 from easytodo.main import create_app
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_FIELD, CSRF_HEADER, verify_csrf
 from easytodo.security.ratelimit import RateLimiter
+from easytodo.security.tokens import mask_token, new_token, unmask_token
 
 
 async def _token(c: httpx.AsyncClient) -> str:
@@ -277,3 +281,73 @@ async def test_a_request_with_the_header_does_not_read_the_form(csrf_app_client,
 
     assert r.status_code == 200
     assert closed == []
+
+
+async def test_pages_carry_a_fresh_mask_of_the_csrf_token(client):
+    pages = [(await client.get("/login")).text for _ in range(2)]
+    token, masked = client.cookies[CSRF_COOKIE], [META_CSRF.search(p)[1] for p in pages]
+
+    assert token not in "".join(pages) and masked[0] != masked[1]  # BREACH: nothing constant
+    assert unmask_token(masked[0]) == unmask_token(masked[1]) == token
+    # The forms of a page carry the page's own mask, as the meta tag for htmx does.
+    assert [FIELD_CSRF.search(p)[1] for p in pages] == masked
+
+    wrong_password = {"email": "nobody@example.com", "password": DEFAULT_PASSWORD}
+    r = await client.post("/login", data=wrong_password | {CSRF_FIELD: masked[0]})
+    assert r.status_code == 400  # the mask passed the check; the sign-in did not
+    r = await client.post("/login", data=wrong_password | {CSRF_FIELD: mask_token(new_token())})
+    assert r.status_code == 403
+
+
+async def test_masked_token_passes_as_header_and_field(csrf_app_client):
+    token = await _token(csrf_app_client)
+    assert len(mask_token(token)) == 115
+    assert mask_token(token) != mask_token(token)
+
+    for _ in range(2):  # whichever mask: htmx sends the page's meta tag as the header
+        r = await csrf_app_client.post("/submit", headers={CSRF_HEADER: mask_token(token)})
+        assert r.status_code == 200
+        r = await csrf_app_client.post("/submit", data={CSRF_FIELD: mask_token(token)})
+        assert r.status_code == 200
+        r = await csrf_app_client.post(
+            "/submit", files={CSRF_FIELD: (None, mask_token(token)), "name": (None, "Milk")}
+        )
+        assert r.status_code == 200
+    # The raw token still passes (tests, scripts/bench.py, curl).
+    assert (await csrf_app_client.post("/submit", headers={CSRF_HEADER: token})).status_code == 200
+
+    for malformed in ("", "x", "!!!", "x" * 115, "zażółć"):
+        assert unmask_token(malformed) is None, malformed
+
+
+async def test_a_mask_of_another_token_or_a_damaged_mask_is_403(csrf_app_client):
+    token = await _token(csrf_app_client)
+    mask = mask_token(token)
+    other_first_letter = ("B" if mask[0] == "A" else "A") + mask[1:]
+    damaged = ("", "x", "!!!", "zażółć", mask[:-1], mask + "A", other_first_letter, "x" * 115)
+
+    for submitted in (mask_token(new_token()), mask_token(token[:-1]), *damaged):
+        if submitted.isascii():  # a header value is ASCII
+            r = await csrf_app_client.post("/submit", headers={CSRF_HEADER: submitted})
+            assert r.status_code == 403, submitted
+        r = await csrf_app_client.post("/submit", data={CSRF_FIELD: submitted})
+        assert r.status_code == 403, submitted
+
+
+def test_a_mask_unmasks_to_its_token_and_nothing_else():
+    token = new_token()
+    mask = mask_token(token)
+
+    assert unmask_token(mask) == token
+    assert set(mask) <= set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+    assert unmask_token(mask_token("")) is None
+    for text in ("a", "tok", "x" * 100):
+        assert unmask_token(mask_token(text)) == text
+    # Well-formed base64url that does not hold a token: an odd number of bytes, and bytes that
+    # are not ASCII (a pad of 0 and 0xff after it).
+    assert unmask_token("AAAA") is None and unmask_token("AP8") is None
+
+
+@pytest.mark.parametrize("junk", ["=", "AA==", "AAAA====", " AAAA", "AAAA\n", "A\x00AA", "٣٣٣٣"])
+def test_unmask_never_raises(junk):
+    assert unmask_token(junk) is None

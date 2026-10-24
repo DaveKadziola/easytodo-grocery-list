@@ -25,6 +25,7 @@ from easytodo.content.prefs_routes import router as sort_router
 from easytodo.content.routes import router as content_router
 from easytodo.db import create_engine
 from easytodo.errors import install_error_handlers
+from easytodo.log_filters import install_log_filters
 from easytodo.mail.mailer import get_mailer
 from easytodo.maintenance import PurgeTask
 from easytodo.middleware import (
@@ -69,6 +70,7 @@ def _freeze_startup_heap() -> None:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     """App factory: ``uvicorn --factory easytodo.main:create_app``."""
+    install_log_filters()  # first: uvicorn has set its logging up already, in every worker
     settings = settings or get_settings()
 
     @asynccontextmanager
@@ -81,7 +83,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # This worker's board sockets, and the LISTEN connection that feeds them every event.
         app.state.hub = hub = Hub()
         listener = EventListener(
-            listener_dsn(settings.database_url),
+            listener_dsn(settings.database_url.get_secret_value()),
             on_event=hub.dispatch,
             on_reconnect=hub.reconnect_all,
         )

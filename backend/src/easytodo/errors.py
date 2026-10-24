@@ -5,18 +5,25 @@ HTMX requests get an empty body with ``HX-Reswap: none`` and an ``HX-Trigger`` t
 ``categoryNameTaken`` with the free name to offer for ``NameTaken``); other
 requests get the error page, or a redirect to the login page for ``NotAuthenticated`` (and to
 the location of a ``RedirectRequired``: the password form, or the second sign-in step).
-Starlette's errors (unknown page, wrong method) and HTTPExceptions get the same treatment.
+Starlette's errors (unknown page, wrong method) and HTTPExceptions get the same treatment, and so
+does an error nobody handled (a 500, which says nothing about what went wrong).
 """
 
 import json
+import logging
 from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from easytodo.security.headers import security_headers
 from easytodo.web import is_htmx, render
+
+logger = logging.getLogger(__name__)
+
+SERVER_ERROR = "Something went wrong. Try again."  # as app.js says it when an answer has no toast
 
 
 class AppError(Exception):
@@ -167,7 +174,34 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
     return response
 
 
+async def server_error_handler(request: Request, exc: Exception) -> Response:
+    """The answer to an error nobody handled: a 500 that says only ``SERVER_ERROR`` (the toast for
+    htmx, the error page otherwise), never what went wrong. Starlette still raises ``exc`` after
+    sending it, so uvicorn logs it.
+
+    It runs in Starlette's outermost middleware, outside the app's own, so it sets the security
+    headers itself. The error may be the database's: the page is made without a user (``None``,
+    not ``request.state.user``) and the handler never raises. Should the page fail to render, the
+    answer is the text alone."""
+    if is_htmx(request):
+        trigger = {"toast": {"level": "error", "message": SERVER_ERROR}}
+        response: Response = Response(
+            status_code=500, headers={"HX-Reswap": "none", "HX-Trigger": json.dumps(trigger)}
+        )
+    else:
+        context = {"status_code": 500, "message": SERVER_ERROR, "current_user": None}
+        try:
+            response = render(request, "errors/error.html", context, status_code=500)
+        except Exception:
+            logger.exception("The error page could not be rendered")
+            response = PlainTextResponse(SERVER_ERROR, status_code=500)
+    for name, value in security_headers(request.app.state.settings).items():
+        response.headers.setdefault(name, value)
+    return response
+
+
 def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppError, app_error_handler)
     app.add_exception_handler(RequestValidationError, request_validation_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+    app.add_exception_handler(Exception, server_error_handler)

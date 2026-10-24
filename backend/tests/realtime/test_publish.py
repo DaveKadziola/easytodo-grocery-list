@@ -129,7 +129,7 @@ async def test_large_item_id_list_is_split_too(db, listener_probe):
 
 async def test_events_go_out_on_the_notify_channel(db, settings, monkeypatch):
     monkeypatch.setattr(events, "NOTIFY_CHANNEL", "board_events_probe")
-    connection = await asyncpg.connect(listener_dsn(settings.database_url))
+    connection = await asyncpg.connect(listener_dsn(settings.database_url.get_secret_value()))
     payloads: asyncio.Queue[str] = asyncio.Queue()
     try:
         await connection.add_listener(
@@ -154,7 +154,9 @@ async def test_listener_reconnect_triggers_resync(db, settings):
     async def on_reconnect() -> None:
         reconnected.set()
 
-    listener = EventListener(listener_dsn(settings.database_url), on_event, on_reconnect)
+    listener = EventListener(
+        listener_dsn(settings.database_url.get_secret_value()), on_event, on_reconnect
+    )
     await listener.start()
     try:
         event = BoardEvent(EventType.CATEGORY_CHANGED, board_id=3, category_ids=(4,))
@@ -193,7 +195,9 @@ async def test_listener_notices_a_connection_that_no_longer_answers(db, settings
     async def on_reconnect() -> None:
         reconnected.set()
 
-    listener = EventListener(listener_dsn(settings.database_url), on_event, on_reconnect)
+    listener = EventListener(
+        listener_dsn(settings.database_url.get_secret_value()), on_event, on_reconnect
+    )
     await listener.start()
     try:
 
@@ -224,7 +228,9 @@ async def test_listener_keeps_going_after_an_unexpected_error(db, settings, capl
             failures.append(True)
             raise RuntimeError("boom")
 
-    listener = EventListener(listener_dsn(settings.database_url), on_event, on_reconnect)
+    listener = EventListener(
+        listener_dsn(settings.database_url.get_secret_value()), on_event, on_reconnect
+    )
     await listener.start()
     try:
         await db.execute(

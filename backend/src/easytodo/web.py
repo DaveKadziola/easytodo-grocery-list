@@ -14,6 +14,7 @@ from jinja2 import Environment, FileSystemLoader
 from easytodo.boards.roles import Action, can
 from easytodo.config import Settings
 from easytodo.display import avatar_color, display_name, initials, user_display_name
+from easytodo.security.tokens import mask_token
 
 FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend"
 STATIC_DIR = FRONTEND_DIR / "static"
@@ -80,9 +81,13 @@ def render(
     request: Request, name: str, context: dict[str, Any], status_code: int = 200
 ) -> HTMLResponse:
     """Render ``name`` with ``csrf_token``, ``current_user`` and ``settings`` added to
-    ``context`` (keys given in ``context`` win)."""
+    ``context`` (keys given in ``context`` win).
+
+    ``csrf_token`` is a new mask of the token on every call (see ``mask_token``), shared by the
+    page's meta tag and its forms; the token itself is never in a page."""
+    csrf_token = getattr(request.state, "csrf_token", None)
     defaults = {
-        "csrf_token": getattr(request.state, "csrf_token", None),
+        "csrf_token": None if csrf_token is None else mask_token(csrf_token),
         "current_user": getattr(request.state, "user", None),
         "settings": request.app.state.settings,
     }

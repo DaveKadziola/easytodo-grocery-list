@@ -66,7 +66,9 @@ def seed(live_server: LiveServer) -> Seed:  # noqa: F811
 
     def run(make: Callable[[AsyncSession], Awaitable[Any]]) -> Any:
         async def main() -> Any:
-            engine = create_async_engine(live_server.settings.database_url, poolclass=NullPool)
+            engine = create_async_engine(
+                live_server.settings.database_url.get_secret_value(), poolclass=NullPool
+            )
             try:
                 async with AsyncSession(engine, expire_on_commit=False) as db:
                     return await make(db)

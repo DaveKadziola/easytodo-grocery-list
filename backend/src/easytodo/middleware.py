@@ -12,20 +12,18 @@ from easytodo.config import Settings
 from easytodo.errors import app_error_handler
 from easytodo.realtime.events import current_origin
 from easytodo.security.csrf import CSRF_COOKIE
+from easytodo.security.headers import security_headers
 from easytodo.security.tokens import new_token
 
 CLIENT_ID_HEADER = "X-Client-Id"  # sent by static/js/app.js on every htmx request
 CLIENT_ID_MAX_LENGTH = 64
 
-CONTENT_SECURITY_POLICY = (
-    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
-    "connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; "
-    "form-action 'self'; frame-ancestors 'none'"
-)
-
 
 class CsrfCookieMiddleware:
-    """Puts the CSRF token in ``request.state.csrf_token``, issuing the cookie when it is missing."""
+    """Puts the CSRF token in ``request.state.csrf_token``, issuing the cookie when it is missing.
+
+    The token goes into a page only through ``web.render``, which masks it: never read
+    ``request.state.csrf_token`` into a response (or a template) any other way."""
 
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
         self.app = app
@@ -84,20 +82,17 @@ class ClientIdMiddleware:
 
 
 class SecurityHeadersMiddleware:
-    """Sets the security headers (HSTS only when the public URL is https) on every response. The
-    Content-Security-Policy is a default: a response that has one of its own (a file shown on its
-    own, under the stricter policy of ``attachments.routes``) keeps it."""
+    """Sets the security headers (``security_headers``: HSTS only when the public URL is https) on
+    every response. The Content-Security-Policy is a default: a response that has one of its own
+    (a file shown on its own, under the stricter policy of ``attachments.routes``) keeps it.
+
+    An unhandled error is answered outside this middleware (see ``errors.server_error_handler``),
+    which sets the same headers itself."""
 
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
         self.app = app
-        self.headers = {
-            "X-Content-Type-Options": "nosniff",
-            "Referrer-Policy": "same-origin",
-            "X-Frame-Options": "DENY",
-            "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-        }
-        if settings.cookie_secure:
-            self.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        self.headers = security_headers(settings)
+        self.default_policy = self.headers.pop("Content-Security-Policy")
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -107,7 +102,7 @@ class SecurityHeadersMiddleware:
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
-                headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+                headers.setdefault("Content-Security-Policy", self.default_policy)
                 for name, value in self.headers.items():
                     headers[name] = value
             await send(message)

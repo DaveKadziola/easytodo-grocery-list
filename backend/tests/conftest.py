@@ -118,7 +118,7 @@ def store(tmp_path: Path) -> AttachmentStore:
 def cli_env(monkeypatch: pytest.MonkeyPatch, settings: Settings, tmp_path: Path) -> Iterator[None]:
     """The environment the CLI reads its settings from, pointing at the test database and at the
     test's own directory for files (never ``backend/data/attachments``)."""
-    monkeypatch.setenv("EASYTODO_DATABASE_URL", settings.database_url)
+    monkeypatch.setenv("EASYTODO_DATABASE_URL", settings.database_url.get_secret_value())
     monkeypatch.setenv("EASYTODO_SECRET_KEY", settings.secret_key.get_secret_value())
     monkeypatch.setenv("EASYTODO_ATTACHMENTS_DIR", str(tmp_path))
     get_settings.cache_clear()

@@ -18,7 +18,7 @@ from easytodo.boards.invites import INVITE_TTL, create_email_invite, create_link
 from easytodo.mail.mailer import ConsoleMailer
 from easytodo.models import BoardInvite, BoardMember, BoardRole
 from easytodo.realtime.events import BoardEvent, EventType
-from easytodo.security.csrf import CSRF_COOKIE
+from easytodo.security.csrf import CSRF_COOKIE, CSRF_FIELD
 from easytodo.security.tokens import hash_token
 
 INVALID = "This invite is no longer valid."
@@ -516,6 +516,42 @@ async def test_registration_from_an_invite_link_returns_to_it(client, db, invite
     assert r.headers["location"] == next_path
     page = await client.get(next_path)
     assert page.status_code == 200 and "Groceries" in page.text
+
+
+async def test_pages_with_a_live_invite_link_are_never_cached(client_factory, db, board):
+    """The members page right after an invite (it shows the link, once), the invite's own page
+    (the link is in its form) and the sign-in and sign-up pages an invite link leads to (they
+    pass it on in their links): a cache must keep none of them."""
+    owner_client = await signed_in(client_factory, "owner@example.com")
+    r = await owner_client.post(f"/boards/{board.id}/invites", data={"role": "editor", "email": ""})
+    assert r.status_code == 201 and r.headers["cache-control"] == "no-store"
+    token = LINK.search(r.text)[1]
+    r = await invite_by_email(owner_client, board.id, "friend@example.com")  # console: link shown
+    assert "No email was sent" in r.text and r.headers["cache-control"] == "no-store"
+    r = await owner_client.get(f"/boards/{board.id}/members")  # the link is not on it any more
+    assert r.status_code == 200 and "cache-control" not in r.headers
+    assert f"/invite/{token}" not in r.text
+
+    await create_user(db, "bob@example.com")
+    bob = await signed_in(client_factory, "bob@example.com")
+    r = await bob.get(f"/invite/{token}")
+    assert r.status_code == 200 and "Join board" in r.text
+    assert r.headers["cache-control"] == "no-store"
+
+    visitor = await client_factory()
+    next_path = f"/invite/{token}"
+    for page in ("/login", "/register"):
+        r = await visitor.get(page, params={"next": next_path})
+        assert r.status_code == 200 and next_path in r.text
+        assert r.headers["cache-control"] == "no-store", page
+        assert "cache-control" not in (await visitor.get(page)).headers, page
+    # A refused sign-in or sign-up shows the page again, with the same links.
+    form = {"email": "not an address", "password": "x", CSRF_FIELD: visitor.cookies[CSRF_COOKIE]}
+    for page in ("/login", "/register"):
+        r = await visitor.post(page, params={"next": next_path}, data=form)
+        assert r.status_code == 400 and next_path in r.text
+        assert r.headers["cache-control"] == "no-store", page
+        assert "cache-control" not in (await visitor.post(page, data=form)).headers, page
 
 
 @pytest.mark.parametrize("next_path", ["https://evil.example", "//evil.example", "/\\evil.example"])

@@ -6,8 +6,10 @@ import re
 import struct
 
 import pytest
+from helpers import META_CSRF
 
 from easytodo.security.csrf import CSRF_COOKIE
+from easytodo.security.tokens import unmask_token
 from easytodo.web import FLASH_COOKIE, FRONTEND_DIR, static_url
 
 VENDOR_SCRIPTS = {
@@ -20,14 +22,17 @@ VENDOR_SCRIPTS = {
 async def test_base_layout(client):
     r = await client.get("/login")
     token = client.cookies[CSRF_COOKIE]
-    assert f'<meta name="csrf-token" content="{token}">' in r.text
+    [content] = META_CSRF.findall(r.text)
+    assert content != token and unmask_token(content) == token  # a mask of it, never the token
     # No "style" in attributesToSettle: htmx would copy a style="" (SortableJS leaves one on a
     # dragged item) onto the new element, which style-src 'self' refuses. No settle delay: htmx
-    # sets swapped-in controls up when it settles, and one with the focus must work at once.
+    # sets swapped-in controls up when it settles, and one with the focus must work at once. No
+    # history snapshots and no <script> run from a swapped-in fragment.
     assert (
         '<meta name="htmx-config" '
         """content='{"includeIndicatorStyles": false, "defaultSwapStyle": "outerHTML", """
-        """"defaultSettleDelay": 0, "attributesToSettle": ["class", "width", "height"]}'>"""
+        """"defaultSettleDelay": 0, "attributesToSettle": ["class", "width", "height"], """
+        """"historyCacheSize": 0, "allowScriptTags": false}'>"""
     ) in r.text
     scripts = re.findall(r"<script([^>]*)>(.*?)</script>", r.text, re.DOTALL)
     assert [attrs for attrs, _ in scripts] == [

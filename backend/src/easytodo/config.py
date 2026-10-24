@@ -49,7 +49,9 @@ class Settings(BaseSettings):
     # extra="ignore": the shared .env also holds compose-only keys (POSTGRES_PASSWORD, ...).
     model_config = SettingsConfigDict(env_prefix="EASYTODO_", env_file=".env", extra="ignore")
 
-    database_url: str  # postgresql+asyncpg://user:password@host:port/dbname
+    # postgresql+asyncpg://user:password@host:port/dbname. A SecretStr: it holds the database
+    # password, and a Settings is easy to print, log or hand to a template by mistake.
+    database_url: SecretStr
     secret_key: SecretStr = Field(min_length=32)
     public_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
     # More addresses the app is opened at (comma-separated in EASYTODO_EXTRA_ORIGINS), stored

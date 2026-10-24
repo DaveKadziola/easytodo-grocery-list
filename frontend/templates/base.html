@@ -13,8 +13,14 @@
       leaves on a dragged item onto the new element, which the CSP (style-src 'self') refuses.
       defaultSettleDelay 0: htmx wires up swapped-in content (its hx-* attributes) in the settle
       step, so with the default 20 ms delay a control that already has the focus back (a tick's
-      checkbox, "Add item" after an add) would for that long toggle or submit without htmx. #}
-  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "defaultSwapStyle": "outerHTML", "defaultSettleDelay": 0, "attributesToSettle": ["class", "width", "height"]}'>
+      checkbox, "Add item" after an add) would for that long toggle or submit without htmx.
+      historyCacheSize 0: htmx keeps a snapshot of the page in localStorage for each page it
+      pushes to the history (hx-push-url, hx-boost), and a snapshot would keep what the page showed
+      (an invite link) after the session ends. No page does that today; this keeps it so.
+      allowScriptTags false: htmx does not run a script tag in a swapped-in fragment (the CSP
+      refuses an inline one anyway). That assumes no fragment holds one: the e2e tests would show
+      a page that did. #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "defaultSwapStyle": "outerHTML", "defaultSettleDelay": 0, "attributesToSettle": ["class", "width", "height"], "historyCacheSize": 0, "allowScriptTags": false}'>
   <title>{% block title %}EasyToDo{% endblock %}</title>
   <link rel="icon" type="image/webp" href="/static/images/favicon.webp">
   <link rel="apple-touch-icon" href="/static/images/apple-touch-icon.png">

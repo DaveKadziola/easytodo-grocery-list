@@ -20,8 +20,8 @@ from easytodo.attachments.routes import FILE_CSP, PDF_CSP
 from easytodo.attachments.service import ATTACHMENT_GONE
 from easytodo.attachments.sniff import download_name
 from easytodo.content.service import ITEM_GONE
-from easytodo.middleware import CONTENT_SECURITY_POLICY
 from easytodo.models import Attachment, Board, Category, Item
+from easytodo.security.headers import CONTENT_SECURITY_POLICY
 
 PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=()"
 POLISH_NAME = "Łosoś & chips.txt"

@@ -22,7 +22,7 @@ type SignIn = Callable[[LiveServer, str], Awaitable[httpx.AsyncClient]]
 @pytest.fixture
 async def listener_probe(settings: Settings) -> AsyncIterator[asyncio.Queue[str]]:
     """Every payload notified on the board events channel from now on, in order."""
-    connection = await asyncpg.connect(listener_dsn(settings.database_url))
+    connection = await asyncpg.connect(listener_dsn(settings.database_url.get_secret_value()))
     payloads: asyncio.Queue[str] = asyncio.Queue()
     await connection.add_listener(
         NOTIFY_CHANNEL, lambda _connection, _pid, _channel, payload: payloads.put_nowait(payload)

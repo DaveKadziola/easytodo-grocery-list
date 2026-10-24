@@ -5,7 +5,7 @@ import httpx
 import pytest
 from argon2 import PasswordHasher
 from factories import DEFAULT_PASSWORD, create_user
-from helpers import count_queries, login
+from helpers import count_queries, login, without_csrf_mask
 from sqlalchemy import func, select, update
 
 from easytodo.auth import service
@@ -103,8 +103,10 @@ async def test_wrong_password_and_unknown_email_same_message(client, db):
         assert r.status_code == 400
         assert "Invalid email or password." in r.text
         assert "set-cookie" not in r.headers
-    # Apart from the echoed address the two pages are identical: nothing tells them apart.
-    assert wrong.text.replace("dave@", "X@") == unknown.text.replace("eve@", "X@")
+    # Apart from the echoed address (and the CSRF mask, new on every render) the two pages are
+    # identical: nothing tells them apart.
+    wrong_page, unknown_page = without_csrf_mask(wrong.text), without_csrf_mask(unknown.text)
+    assert wrong_page.replace("dave@", "X@") == unknown_page.replace("eve@", "X@")
 
 
 @pytest.mark.parametrize("email", ["eve@example.com", "not an email"])

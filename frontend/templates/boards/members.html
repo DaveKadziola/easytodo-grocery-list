@@ -8,6 +8,8 @@
 {% block title %}Invite and members · {{ board.name }} · EasyToDo{% endblock %}
 {% block content %}
 {% set manage = can(role, Action.MANAGE_MEMBERS) %}
+{#- Invite links (no address) work for anyone who has one: removing a member does not stop them rejoining with one. #}
+{% set open_links = invites|selectattr("email", "none")|list %}
 <div id="sharing" hx-target="#sharing" hx-select="#sharing" class="mx-auto w-full max-w-2xl space-y-6">
   <div>
     <a href="/boards" class="link inline-flex min-h-11 items-center text-sm">Back to boards</a>
@@ -69,7 +71,7 @@
             <option value="{{ value }}"{% if m.role == value %} selected{% endif %}>{{ value|capitalize }}</option>
             {% endfor %}
           </select>
-          <button type="button" class="btn-danger" hx-delete="/boards/{{ board.id }}/members/{{ m.user_id }}" hx-confirm="Remove {{ m.email }} from this board?">Remove</button>
+          <button type="button" class="btn-danger" hx-delete="/boards/{{ board.id }}/members/{{ m.user_id }}" hx-confirm="Remove {{ m.email }} from this board?{% if open_links %} The invite links below still work, so they could rejoin with one. Revoke a link to stop that.{% endif %}">Remove</button>
         </div>
         {% else %}
         <span class="rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-xs font-medium text-slate-700 dark:text-slate-300">{{ m.role|capitalize }}</span>

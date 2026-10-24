@@ -20,6 +20,17 @@ from easytodo.web import FLASH_COOKIE
 NASTY = 'O\'Reilly <b>"x"</b> <script>alert(1)</script>'
 NASTY_ESCAPED = "O&#39;Reilly &lt;b&gt;&#34;x&#34;&lt;/b&gt; &lt;script&gt;alert(1)&lt;/script&gt;"
 
+# The sentence the "Remove" confirmation of a member gets while the board has an invite link (a
+# link works for anyone who has it, so the person removed could come back with one).
+LINKS_STILL_WORK = (
+    "The invite links below still work, so they could rejoin with one. Revoke a link to stop that."
+)
+
+# The CSRF token as a page carries it: masked afresh on every render, so no two pages (or renders
+# of one page) have the same text. In the meta tag, and as the hidden field of every form.
+META_CSRF = re.compile(r'<meta name="csrf-token" content="([^"]*)">')
+FIELD_CSRF = re.compile(r'<input type="hidden" name="csrf_token" value="([^"]*)">')
+
 # Names typed into an hx-prompt to confirm a permanent delete, each with the headers htmx sends
 # it in (Review Focus 3): ``(name, headers)``, for ``pytest.mark.parametrize``.
 TYPED_NAMES = [
@@ -51,6 +62,13 @@ async def signed_in(client_factory, email: str) -> httpx.AsyncClient:
 def toast_message(response: httpx.Response) -> str:
     """The toast of an htmx request's response (its ``HX-Trigger`` header)."""
     return json.loads(response.headers["hx-trigger"])["toast"]["message"]
+
+
+def without_csrf_mask(html: str) -> str:
+    """``html`` with each CSRF mask replaced by a placeholder, to compare whole pages that differ
+    in nothing else (every render has a mask of its own)."""
+    html = META_CSRF.sub('<meta name="csrf-token" content="[masked]">', html)
+    return FIELD_CSRF.sub('<input type="hidden" name="csrf_token" value="[masked]">', html)
 
 
 def text_of(html: str) -> str:

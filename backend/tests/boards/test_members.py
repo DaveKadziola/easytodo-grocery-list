@@ -4,10 +4,11 @@ import re
 
 import pytest
 from factories import create_board, create_user
-from helpers import signed_in, toast_message
+from helpers import LINKS_STILL_WORK, signed_in, toast_message
 from sqlalchemy import select
 
-from easytodo.boards.invites import create_link_invite
+from easytodo.boards.invites import create_email_invite, create_link_invite
+from easytodo.mail.mailer import ConsoleMailer
 from easytodo.models import Board, BoardInvite, BoardMember, BoardRole
 from easytodo.realtime.events import BoardEvent, EventType
 from easytodo.security.csrf import CSRF_HEADER
@@ -134,6 +135,31 @@ async def test_removed_member_loses_access(client_factory, db, team, sharing_eve
         r = await eve_client.get(path)
         assert r.status_code == 404
         assert "Board not found." in r.text
+
+
+async def test_remove_warns_that_invite_links_still_work(client_factory, db, team, settings):
+    """An invite link works for anyone who has it, the person removed included: say so where the
+    owner confirms the removal. An e-mail invite is for one address and is not mentioned."""
+    board, owner, *_ = team
+    path = f"/boards/{board.id}/members"
+    owner_client = await signed_in(client_factory, "owner@example.com")
+    plain = 'hx-confirm="Remove eve@example.com from this board?"'
+    warned = f'hx-confirm="Remove eve@example.com from this board? {LINKS_STILL_WORK}"'
+    assert plain in (await owner_client.get(path)).text
+
+    await create_email_invite(
+        db, board.id, owner, "friend@example.com", BoardRole.EDITOR, ConsoleMailer(), settings
+    )
+    page = (await owner_client.get(path)).text
+    assert plain in page and LINKS_STILL_WORK not in page
+
+    _, link = await create_link_invite(db, board.id, owner, BoardRole.EDITOR)
+    page = (await owner_client.get(path)).text
+    assert warned in page and plain not in page
+    assert page.count(LINKS_STILL_WORK) == 2  # every member who can be removed: eve and frank
+
+    await owner_client.delete(f"/boards/{board.id}/invites/{link.id}")
+    assert plain in (await owner_client.get(path)).text  # a revoked link rejoins nobody
 
 
 async def test_member_leaves_board(client_factory, db, team, sharing_events):

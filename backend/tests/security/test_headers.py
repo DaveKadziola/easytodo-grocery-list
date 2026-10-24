@@ -1,4 +1,11 @@
+import httpx
 import pytest
+from helpers import toast_message
+from pydantic import AnyHttpUrl
+
+from easytodo.auth.sessions import SESSION_COOKIE
+from easytodo.errors import SERVER_ERROR
+from easytodo.main import create_app
 
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -47,3 +54,61 @@ async def test_https_public_url_adds_hsts_and_secure_csrf_cookie(client_factory)
 @pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
 async def test_api_docs_are_disabled(client, path):  # Swagger UI needs a CDN, which the CSP blocks
     assert (await client.get(path)).status_code == 404
+
+
+def app_that_fails(settings):
+    """An app (https, so with HSTS) whose ``/boom`` fails with an error nobody handles, and a
+    client for it that gets the 500 the server sends rather than the exception."""
+    app = create_app(settings.model_copy(update={"public_url": AnyHttpUrl("https://testserver")}))
+
+    @app.get("/boom")
+    async def boom() -> None:
+        raise RuntimeError("secret detail")
+
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    return httpx.AsyncClient(transport=transport, base_url="https://testserver")
+
+
+async def test_unhandled_error_gets_the_error_page_and_the_security_headers(settings):
+    async with app_that_fails(settings) as c:
+        page = await c.get("/boom")
+        hx = await c.get("/boom", headers={"HX-Request": "true"})
+
+    for r in (page, hx):
+        assert r.status_code == 500 and "secret detail" not in r.text
+        assert {name: r.headers.get(name) for name in HEADERS} == HEADERS
+        assert "strict-transport-security" in r.headers
+    assert page.headers["content-type"].startswith("text/html") and SERVER_ERROR in page.text
+    assert hx.headers["hx-reswap"] == "none" and toast_message(hx) == SERVER_ERROR
+
+
+async def test_an_error_page_that_cannot_be_rendered_is_plain_text_with_the_headers(
+    settings, monkeypatch
+):
+    """The template needs data that the failure may have made unreadable: then not even the page
+    is shown, but the answer is still a 500 that names no detail, with the same headers."""
+
+    def cannot_render(*args, **kwargs):
+        raise RuntimeError("the page needs the database")
+
+    monkeypatch.setattr("easytodo.errors.render", cannot_render)
+    async with app_that_fails(settings) as c:
+        r = await c.get("/boom")
+
+    assert r.status_code == 500 and r.text == SERVER_ERROR
+    assert r.headers["content-type"].startswith("text/plain")
+    assert {name: r.headers.get(name) for name in HEADERS} == HEADERS
+    assert "strict-transport-security" in r.headers
+
+
+async def test_a_database_failure_still_gets_the_error_page(client_factory):
+    """Looking up the session is what fails: the page is made without the user, so without the
+    database."""
+    c = await client_factory(database_url="postgresql+asyncpg://easytodo:easytodo@127.0.0.1:1/x")
+    c._transport.raise_app_exceptions = False  # the server's 500, not the exception
+    c.cookies.set(SESSION_COOKIE, "x" * 43)
+
+    r = await c.get("/boards")
+
+    assert r.status_code == 500 and SERVER_ERROR in r.text
+    assert {name: r.headers.get(name) for name in HEADERS} == HEADERS
