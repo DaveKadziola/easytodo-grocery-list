@@ -17,6 +17,11 @@ def test_e2e_fonts_conf_is_well_formed_and_prefers_inter_for_the_pages_font_stac
 
     assert root.tag == "fontconfig"
     assert [include.text for include in root.findall("include")] == ["/etc/fonts/fonts.conf"]
+    # The aliases must come after the include of the system's configuration: with the include
+    # last, fontconfig resolves the families to DejaVu Sans.
+    children = [child.tag for child in root]
+    assert children.index("include") < children.index("alias"), "<include> must come first"
+    assert children.index("include") == 0 and set(children[1:]) == {"alias"}
     preferred = {
         alias.findtext("family"): (
             alias.get("binding"),

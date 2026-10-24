@@ -166,7 +166,7 @@ async def test_listener_reconnect_triggers_resync(db, settings):
         terminated = await db.scalar(
             text(
                 "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity"
-                " WHERE application_name = :name"
+                " WHERE application_name = :name AND datname = current_database()"
             ),
             {"name": LISTENER_APPLICATION_NAME},
         )
@@ -236,7 +236,7 @@ async def test_listener_keeps_going_after_an_unexpected_error(db, settings, capl
         await db.execute(
             text(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
-                " WHERE application_name = :name"
+                " WHERE application_name = :name AND datname = current_database()"
             ),
             {"name": LISTENER_APPLICATION_NAME},
         )

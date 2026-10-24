@@ -5,8 +5,8 @@ boards can be shared, and a change made on one phone shows up on every other ope
 moment, without reloading. It runs on your own server or home computer with docker compose, and
 works on a home network without internet access.
 
-This is EasyToDo v2.1, the second release of the v2 rewrite of the original single-list Flask
-app as a multi-user FastAPI + HTMX app. Coming from v1? See
+This is EasyToDo v2.1, the first feature release after v2.0 of the v2 rewrite of the original
+single-list Flask app as a multi-user FastAPI + HTMX app. Coming from v1? See
 [docs/migration-from-v1.md](docs/migration-from-v1.md). Updating from v2.0? See
 [What's new in v2.1](#whats-new-in-v21) and [Upgrading from v2.0](#upgrading-from-v20).
 
@@ -230,8 +230,9 @@ browsers, or a normal and a private window, each signed in as someone else.
    anyone who has the link create an account until it expires (7 days) or is revoked, so revoke
    links you no longer need.
 2. **Two-factor authentication.** Account → "Set up two-factor authentication". Scan the QR code
-   with an authenticator app (or type the key shown under it), enter the 6-digit code, and keep
-   the recovery codes. Sign out and in again: after the password the app asks for a code. A
+   with an authenticator app (or type the key shown under it), enter your "Current password" and
+   the 6-digit "Code from the app", choose "Turn on two-factor authentication", and keep the
+   recovery codes. Sign out and in again: after the password the app asks for a code. A
    recovery code works instead, once.
 3. **Password reset.** Sign out → "Forgot password?" → enter the email. With the default
    `EASYTODO_MAIL_BACKEND=console` nothing is sent: the mail, link included, is written to the
@@ -252,13 +253,15 @@ browsers, or a normal and a private window, each signed in as someone else.
    role to editor on the "Invite and members" page and he can edit. As Bob, choose ⋮ on the
    board in his list → "Leave board"; invite him again, and then remove him from the "Invite and
    members" page.
-5. **Real time with two browsers.** Open the same board in both browsers; each header shows
-   "Live". Add, tick, rename and drag items in one: the other follows without reloading. Then
-   take one of them offline (airplane mode on a phone, or developer tools → Network → Offline),
-   change something in the other, and go back online: the first one catches up by itself, without
-   a reload (meanwhile its header may show "Reconnecting…"). On an iPhone or iPad, check the
-   same in Safari: the board shows "Live" (the green dot), and a change made on another device
-   appears without reloading.
+5. **Real time with two browsers.** Bob is off the board after step 4, so use the owner on a
+   second device (a private window signed in as the owner), or invite Bob again first (step 4)
+   and open the board as Bob. Open the same board in both browsers; each header shows "Live".
+   Add, tick, rename and drag items in one: the other follows without reloading. Then take one of
+   them offline (airplane mode on a phone, or developer tools → Network → Offline), change
+   something in the other, and go back online: the first one catches up by itself, without a
+   reload (meanwhile its header may show "Reconnecting…"). On an iPhone or iPad, check the same
+   in Safari: the board shows "Live" (the green dot), and a change made on another device appears
+   without reloading.
 6. **Admin panel.** As the admin: "Admin" in the header shows the statistics, "Manage users" the
    accounts. Create an account (its temporary password is shown once, and it must choose a new one
    at its first sign-in), send a password reset (link in the log, as in step 3), reset 2FA,
@@ -275,10 +278,10 @@ browsers, or a normal and a private window, each signed in as someone else.
    phone cannot connect, allow incoming TCP port 8000 in the computer's firewall. The
    browser's "Add to Home Screen" installs it like an app.
 8. **Recovery codes as a file.** On the recovery codes screen (the end of step 2, or Account →
-   Two-factor authentication → "Get new recovery codes") choose "Save as .txt": the browser saves
-   `easytodo-recovery-codes.txt`, with the account's email, the date and the codes. "Copy" puts
-   the same text on the clipboard; paste it somewhere to see it. On a phone: the file ends up in
-   the browser's downloads (on an iPhone, in Files).
+   Two-factor authentication → your "Current password" → "Get new recovery codes") choose "Save
+   as .txt": the browser saves `easytodo-recovery-codes.txt`, with the account's email, the date
+   and the codes. "Copy" puts the same text on the clipboard; paste it somewhere to see it. On a
+   phone: the file ends up in the browser's downloads (on an iPhone, in Files).
 9. **The ⋮ menu on a board.** As the owner, open the board list. ⋮ on a board shows Rename,
    Invite and Archive; open a board: its page has no buttons for managing the board. Share it
    with Bob again, as an editor (step 4); this is the board of steps 12 to 18. As Bob, ⋮ on
@@ -317,11 +320,11 @@ browsers, or a normal and a private window, each signed in as someone else.
 14. **Notifications.** Bob is off the board since step 13. As the owner, watch the bell in the
     header while Bob joins it again by an invite link (a viewer, step 4): its counter goes up
     without reloading, and the panel says that Bob joined. Bob leaves the board: another
-    notification. Invite him once more and, as the owner, change his role to editor: the bell
-    of Bob's browser shows that. Archive the board: Bob's bell shows it, and it is gone from his
-    list. Restore it from "Archived" (step 10) and Bob has it again, still as an editor.
-    Opening the panel reads everything: the counter goes back to zero, on the user's other
-    devices too.
+    notification. Invite him once more, again as a viewer, and then, as the owner, change his
+    role to editor: the bell of Bob's browser shows that. Archive the board: Bob's bell shows
+    it, and it is gone from his list. Restore it from "Archived" (step 10) and Bob has it
+    again, still as an editor. Opening the panel reads everything: the counter goes back to
+    zero, on the user's other devices too.
 15. **"New category".** On a phone: open a board. The bar at the bottom has "Boards" and "New
     category". Tap "New category": a dialog asks for the name and offers "At the bottom"
     (chosen) and "On top". Type a name, choose "On top" and "Add category": the category is the
@@ -340,10 +343,11 @@ browsers, or a normal and a private window, each signed in as someone else.
     The item's tile shows a paperclip with the number of files. These must be refused with a message
     and leave nothing behind: a file of 11 MB ("Files can be at most 10 MB."), an `.exe` renamed to
     `photo.png` ("Only images, PDF, .txt and .md files can be attached."), and a `.txt` file that is
-    not UTF-8 text. Make Bob a viewer on the "Invite and members" page: as Bob, the files can be
-    opened and downloaded, but there is no "Add a file" and no ✕. Run `docker compose down` and
-    `docker compose up -d`: the files are still there. On a phone: "Add a file" offers the camera,
-    so take a photo with it; on an iPhone, a photo kept in HEIC works too, and shows as a picture.
+    not UTF-8 text ("Text files must be saved as UTF-8."). Make Bob a viewer on the "Invite and
+    members" page: as Bob, the files can be opened and downloaded, but there is no "Add a file" and
+    no ✕. Run `docker compose down` and `docker compose up -d`: the files are still there. On a
+    phone: "Add a file" offers the camera, so take a photo with it; on an iPhone, a photo kept in
+    HEIC works too, and shows as a picture.
 18. **Checklists.** Open an item → "Checklist" → "Add entry" and add three entries. Tick one, edit
     another (Enter saves it), delete the third with ✕, then add a few more and drag one by its
     handle ⠿, or focus the handle and press ↑ or ↓. The item's tile shows "1/3" or so. Tick every
@@ -546,10 +550,13 @@ make run              # http://localhost:8000, restarts on code changes
   UTF8 database has, and the tests of that order fail on a `SQL_ASCII` one (`createdb -E UTF8
   -T template0 ...` makes a UTF8 database). The app itself falls back to the database's own order
   and logs a warning when it starts on a database without that collation.
-- The browser tests render every page in the font Inter, whatever your system's default is
-  (`backend/tests/e2e/fonts.conf`), because where a word wraps depends on the font. Install it
-  first: `sudo apt-get install fonts-inter` (Debian, Ubuntu; CI does the same) or `brew install
-  --cask font-inter` (macOS); without it the suite stops and says so.
+- The browser tests render every page in the font Inter, because where a word wraps depends on
+  the font. On Linux, `backend/tests/e2e/fonts.conf` makes Chromium use Inter whatever your
+  system's default is: install it first with `sudo apt-get install fonts-inter` (Debian, Ubuntu;
+  CI does the same). On macOS, Chromium does not use fontconfig, so nothing is pinned: the suite
+  only requires Inter to be installed (`brew install --cask font-inter`) and renders the pages in
+  the system's own font, so a layout test can behave differently there than in CI. Without Inter
+  the suite stops and says so.
 
 ```sh
 make test             # tests, without the browser tests

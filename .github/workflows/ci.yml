@@ -75,7 +75,7 @@ jobs:
       # The pages have no web font, and the e2e tests pin the system's to Inter (tests/e2e/fonts.conf):
       # the layout tests were measured with it, and the runner has DejaVu Sans only. Without the
       # package the suite stops and says so.
-      - run: sudo apt-get install -y --no-install-recommends fonts-inter
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-inter
       - run: uv run pytest -m e2e
 
   docker:

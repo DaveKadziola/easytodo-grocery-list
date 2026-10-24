@@ -1,5 +1,7 @@
 import asyncio
 import gc
+import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs
@@ -42,6 +44,8 @@ from easytodo.realtime.routes import router as realtime_router
 from easytodo.security.csrf import verify_csrf
 from easytodo.security.ratelimit import RateLimiter
 from easytodo.web import STATIC_DIR
+
+logger = logging.getLogger(__name__)
 
 IMMUTABLE = "public, max-age=31536000, immutable"
 # How long /healthz waits for the database, in seconds, before it answers 503 (asyncpg would wait
@@ -88,6 +92,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         use_name_collation(await detect_name_collation(engine))
         app.state.mailer = get_mailer(settings)
         app.state.attachment_store = AttachmentStore(settings.attachments_dir)
+        if not app.state.attachment_store.writable():
+            # A bind mount of a host directory that belongs to somebody else (docs/deployment.md).
+            logger.error(
+                "The attachments directory %s is not writable by this process (user id %d): "
+                "every upload will fail. Make it writable by that user, for a host directory "
+                "mounted into the container `chown -R 10001:10001 <dir>` on the host.",
+                settings.attachments_dir.absolute(),
+                os.geteuid(),
+            )
         # This worker's board sockets, and the LISTEN connection that feeds them every event.
         app.state.hub = hub = Hub()
         listener = EventListener(

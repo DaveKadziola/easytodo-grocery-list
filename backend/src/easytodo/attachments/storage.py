@@ -29,6 +29,15 @@ class AttachmentStore:
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
 
+    def writable(self) -> bool:
+        """Whether this process can write in the directory: the files are written below it, and
+        the directory is made on the first upload if it is not there, so then it is the nearest
+        directory that is there that has to be writable."""
+        nearest = self.root.absolute()
+        while not nearest.exists() and nearest != nearest.parent:
+            nearest = nearest.parent
+        return os.access(nearest, os.W_OK)
+
     def path(self, key: str) -> Path:
         return self.root / key[:2] / key
 
