@@ -5,6 +5,7 @@
 set -eu
 
 if ! python - <<'PY'
+import os
 import sys
 
 from pydantic import ValidationError
@@ -12,12 +13,28 @@ from pydantic import ValidationError
 from easytodo.config import Settings
 
 try:
-    Settings()
+    settings = Settings()
 except ValidationError as exc:
     for error in exc.errors(include_url=False, include_input=False):  # no secret in the log
         name = "EASYTODO_" + "_".join(str(part) for part in error["loc"]).upper()
         print(f"entrypoint: {name}: {error['msg']}", file=sys.stderr)
     sys.exit(1)
+
+# Trusting X-Forwarded-For from everyone ("*" as the whole value, as uvicorn reads it, or a list
+# with 0.0.0.0/0 or ::/0, which uvicorn takes for every IPv4 or IPv6 address) is safe only when
+# nobody but the reverse proxy can connect: a warning, not a refusal (nothing here is a secret).
+allowed = settings.forwarded_allow_ips
+trusts_everyone = allowed == "*" or bool(
+    {"0.0.0.0/0", "::/0"} & {item.strip() for item in allowed.split(",")}
+)
+if trusts_everyone and os.environ.get("EASYTODO_BIND", "").strip() != "127.0.0.1":
+    print(
+        f"entrypoint: warning: EASYTODO_FORWARDED_ALLOW_IPS={allowed} trusts X-Forwarded-For from"
+        " anyone who can connect, but EASYTODO_BIND is not 127.0.0.1, so anyone on the network"
+        " can dodge the per-IP rate limits; set EASYTODO_BIND=127.0.0.1 in .env"
+        " (docs/deployment.md)",
+        file=sys.stderr,
+    )
 PY
 then
     echo "entrypoint: the settings in .env are not valid (see above); fix them, then run" \

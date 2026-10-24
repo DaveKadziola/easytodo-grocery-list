@@ -5,6 +5,8 @@
 # so a swapped release asset fails the build instead of running. Bumping a version means
 # bumping its hashes (the release's sha256sums.txt / *.sha256 files) and, for Tailwind, the
 # Makefile pins as well. Supported platforms: linux/amd64 and linux/arm64.
+# The Tailwind version and the linux sha256 pins are also in the Makefile
+# (backend/tests/test_deploy_files.py checks that they match).
 ARG TAILWIND_VERSION=4.1.13
 ARG TAILWIND_SHA256_AMD64=b9ed9f8f640d3323711f9f68608aa266dff3adbc42e867c38ea2d009b973be11
 ARG TAILWIND_SHA256_ARM64=c90529475a398adbf3315898721c0f9fe85f434a2b3ea3eafada68867641819a

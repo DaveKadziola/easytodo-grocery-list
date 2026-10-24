@@ -1,3 +1,4 @@
+import asyncio
 import gc
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -43,6 +44,9 @@ from easytodo.security.ratelimit import RateLimiter
 from easytodo.web import STATIC_DIR
 
 IMMUTABLE = "public, max-age=31536000, immutable"
+# How long /healthz waits for the database, in seconds: less than the 3 s of the Dockerfile's probe,
+# which would otherwise give up first (asyncpg would wait up to 60 s to connect).
+HEALTHZ_TIMEOUT_S = 2.0
 # Already compressed, like the pictures GZipMiddleware leaves alone: a PDF and a HEIC photo.
 NOT_WORTH_COMPRESSING = (*DEFAULT_EXCLUDED_CONTENT_TYPES, "application/pdf", "image/heic")
 
@@ -134,9 +138,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/healthz")
     async def healthz(request: Request) -> JSONResponse:
         try:
-            async with request.app.state.engine.connect() as conn:
-                await conn.execute(text("SELECT 1"))
-        except (SQLAlchemyError, OSError):
+            async with asyncio.timeout(HEALTHZ_TIMEOUT_S):  # read here, so a test can change it
+                async with request.app.state.engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+        except (SQLAlchemyError, OSError, TimeoutError):
             return JSONResponse({"status": "degraded", "db": "error"}, status_code=503)
         return JSONResponse({"status": "ok", "db": "ok"})
 
