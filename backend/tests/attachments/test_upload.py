@@ -7,6 +7,8 @@ import errno
 import io
 import json
 import re
+import threading
+import time
 import warnings
 
 import httpx
@@ -33,6 +35,8 @@ from easytodo.attachments.service import (
     BROKEN_IMAGE,
     NO_FILE,
     NOT_ALLOWED,
+    NOT_UTF8,
+    PIXEL_BUDGETS,
     STORAGE_FULL,
     TOO_MANY,
     _attachment_lookup,
@@ -383,10 +387,18 @@ def refused(how, filename, content, status, message, id):
         ),
         refused("declared", "logo.svg", b"<svg><script/></svg>", 422, NOT_ALLOWED, "svg"),
         refused("declared", "page.html", b"<script>x</script>", 422, NOT_ALLOWED, "html"),
-        refused("declared", "list.txt", "Zurück".encode("latin-1"), 422, NOT_ALLOWED, "latin-1"),
+        refused("declared", "list.txt", "Zurück".encode("latin-1"), 422, NOT_UTF8, "latin-1"),
+        refused(
+            "declared",
+            "lista.txt",
+            "Masło, jabłka, żółty ser".encode("cp1250"),
+            422,
+            NOT_UTF8,
+            "cp1250 with Polish letters",
+        ),
         refused("declared", "list.txt", b"Buy\x00milk", 422, NOT_ALLOWED, "text with a NUL"),
-        refused("declared", "list.md", b"ok\n\xff", 422, NOT_ALLOWED, "markdown, bad UTF-8"),
-        refused("declared", "list.txt", b"\xff\xfeB\x00u\x00", 422, NOT_ALLOWED, "utf-16 text"),
+        refused("declared", "list.md", b"ok\n\xff", 422, NOT_UTF8, "markdown, bad UTF-8"),
+        refused("declared", "list.txt", b"\xff\xfeB\x00u\x00", 422, NOT_UTF8, "utf-16 text"),
         refused(
             "declared", "half.png", samples.png((200, 200))[:60], 422, BROKEN_IMAGE, "half png"
         ),
@@ -486,6 +498,98 @@ async def test_an_image_far_over_the_pixel_limit_is_refused(editor_client, item,
 
     assert r.status_code == 422 and toast_message(r) == BROKEN_IMAGE
     assert nothing_left(await attachment_rows(db), store)
+
+
+FORMATS = {  # Pillow's name of the format: a sample of 12 x 12 = 144 pixels
+    "WEBP": ("big.webp", samples.webp),
+    "PNG": ("big.png", samples.png),
+    "GIF": ("big.gif", samples.gif),
+    "HEIF": ("IMG_1.heic", samples.heic),
+}
+
+
+def test_the_budgets_are_the_ones_the_memory_notes_assume():
+    """deployment.md ("Memory for photos") is worked out from these: 48 MP phone photos fit."""
+    assert PIXEL_BUDGETS == {
+        "WEBP": 20_000_000,
+        "PNG": 36_000_000,
+        "GIF": 36_000_000,
+        "HEIF": 50_000_000,
+    }
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+async def test_a_picture_over_the_budget_of_its_format_is_refused_before_it_is_decoded(
+    editor_client, item, db, store, monkeypatch, fmt
+):
+    name, make = FORMATS[fmt]
+    content = make((12, 12))
+    monkeypatch.setitem(PIXEL_BUDGETS, fmt, 100)  # the picture has 144 pixels
+    loaded = []
+    real_load = Image.Image.load
+    monkeypatch.setattr(
+        Image.Image, "load", lambda self, *a, **kw: loaded.append(self) or real_load(self, *a, **kw)
+    )
+
+    r = await editor_client.post(
+        f"/items/{item.id}/attachments", files={"file": (name, content)}, headers=HX
+    )
+
+    assert r.status_code == 422 and toast_message(r) == BROKEN_IMAGE
+    assert nothing_left(await attachment_rows(db), store)
+    assert loaded == []  # nothing was loaded, nothing thumbnailed: the header was enough
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+async def test_a_picture_with_exactly_the_budget_is_accepted(
+    editor_client, item, db, store, monkeypatch, fmt
+):
+    name, make = FORMATS[fmt]
+    monkeypatch.setitem(PIXEL_BUDGETS, fmt, 144)
+
+    assert await upload(editor_client, item.id, name, make((12, 12)))
+    assert len(await attachment_rows(db)) == 1
+
+
+async def test_a_jpeg_has_no_budget_but_the_pillow_limit(
+    editor_client, item, db, store, monkeypatch
+):
+    """A JPEG is decoded at a fraction of its size (``draft``): the limit of Pillow is enough."""
+    for fmt in PIXEL_BUDGETS:
+        monkeypatch.setitem(PIXEL_BUDGETS, fmt, 1)
+
+    assert await upload(editor_client, item.id, "photo.jpg", samples.jpeg((12, 12)), "image/jpeg")
+
+
+async def test_pictures_are_decoded_one_at_a_time(editor_client, item, db, store, monkeypatch):
+    """Two uploads at the same time (to two tasks: one task's uploads wait for its row anyway)
+    are decoded one after the other, so the peaks do not add up."""
+    other = await create_item(db, await db.get_one(Category, item.category_id), "Bread")
+    running = peak = 0
+    guard = threading.Lock()
+    real = attachments._make_images
+
+    def watched(*args):
+        nonlocal running, peak
+        with guard:
+            running += 1
+            peak = max(peak, running)
+        try:
+            time.sleep(0.3)  # long enough for the other upload to arrive
+            return real(*args)
+        finally:
+            with guard:
+                running -= 1
+
+    monkeypatch.setattr(attachments, "_make_images", watched)
+
+    await asyncio.gather(
+        upload(editor_client, item.id, "a.png", samples.png(), "image/png"),
+        upload(editor_client, other.id, "b.png", samples.png(), "image/png"),
+    )
+
+    assert peak == 1
+    assert len(await attachment_rows(db)) == 2
 
 
 @pytest.mark.parametrize("heic", [False, True], ids=["thumbnail", "heic preview"])

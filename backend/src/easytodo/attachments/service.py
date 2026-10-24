@@ -18,6 +18,8 @@ import secrets
 import threading
 import unicodedata
 import warnings
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from functools import cache
 from pathlib import Path
 from typing import BinaryIO
@@ -53,6 +55,7 @@ TOO_LARGE = "Files can be at most {mb} MB."
 TOO_MANY = "A task can have at most {n} attachments."
 STORAGE_FULL = "Attachment storage is full."
 NOT_ALLOWED = "Only images, PDF, .txt and .md files can be attached."
+NOT_UTF8 = "Text files must be saved as UTF-8."
 BROKEN_IMAGE = "This image could not be read."
 NO_FILE = "Choose a file to attach."
 ATTACHMENT_GONE = "This attachment no longer exists."
@@ -60,6 +63,25 @@ ATTACHMENT_GONE = "This attachment no longer exists."
 FILENAME_MAX_LENGTH = 255  # attachments.filename is String(255)
 THUMB_SIZE = (480, 480)  # the tile in the item's details
 PREVIEW_SIZE = (2048, 2048)  # a HEIC photo, as a JPEG that browsers can show
+# How many pixels a picture may have, by Pillow's name of its format, checked from the header
+# before anything is decoded (the same refusal as the pixel limit of Pillow itself). Decoding
+# holds the whole picture, and the peak depends on the format, not on the file: a WebP of 38 bytes
+# with 9449 x 9449 pixels took 1.3 GB, a 64 MP panorama HEIC killed a 512 MiB container. 48 MP
+# phone photos fit. A JPEG has no budget: it is decoded at a fraction of its size (``draft``), so
+# the limit of Pillow is enough. docs/deployment.md ("Memory for photos") has the peaks.
+WEBP_MAX_PIXELS = 20_000_000
+PNG_MAX_PIXELS = 36_000_000
+GIF_MAX_PIXELS = 36_000_000
+HEIF_MAX_PIXELS = 50_000_000
+PIXEL_BUDGETS = {
+    "WEBP": WEBP_MAX_PIXELS,
+    "PNG": PNG_MAX_PIXELS,
+    "GIF": GIF_MAX_PIXELS,
+    "HEIF": HEIF_MAX_PIXELS,
+}
+# A Markdown file is rendered up to this size (in bytes); a larger one is shown as plain text.
+# Rendering takes longer than the file grows: 1 MB of "[" took half a minute.
+MARKDOWN_RENDER_LIMIT = 256 * 1024
 _MEGABYTE = 1024 * 1024
 _CHUNK = 1024 * 1024
 
@@ -136,16 +158,41 @@ def clean_filename(name: str) -> str:
     return name or "file"
 
 
-def _is_utf8_text(source: BinaryIO) -> bool:
-    """Whether the rest of ``source`` is UTF-8 without a NUL character (what a text file is)."""
+def _text_problem(source: BinaryIO) -> str | None:
+    """Why the rest of ``source`` is not a text file, or None if it is one: ``NOT_UTF8`` for what
+    UTF-8 cannot read (a file saved in cp1250 or UTF-16, say), ``NOT_ALLOWED`` for a NUL
+    character, which no text has."""
     decoder = codecs.getincrementaldecoder("utf-8")()
     try:
         while chunk := source.read(_CHUNK):
             if "\x00" in decoder.decode(chunk):
-                return False
-        return "\x00" not in decoder.decode(b"", final=True)
+                return NOT_ALLOWED
+        return NOT_ALLOWED if "\x00" in decoder.decode(b"", final=True) else None
     except UnicodeDecodeError:
-        return False
+        return NOT_UTF8
+
+
+# One thread each for decoding pictures and for rendering Markdown, the way argon2 has its own
+# (``security.passwords``): not ``asyncio.to_thread``, whose executor has up to 32 threads that
+# other work waits for. Decoding one picture takes up to several hundred MB, so there is one at a
+# time per worker; a render can take seconds of CPU, so two cannot hold more than one thread.
+_pools: dict[str, ThreadPoolExecutor] = {}
+_pools_lock = threading.Lock()
+
+
+def _pool(name: str) -> ThreadPoolExecutor:
+    """The single thread called ``name``, started on first use, not at import. One for the whole
+    process, however many apps it runs (the tests start one per test), so it is never shut down:
+    its idle thread ends with the interpreter."""
+    with _pools_lock:
+        if name not in _pools:
+            _pools[name] = ThreadPoolExecutor(max_workers=1, thread_name_prefix=name)
+        return _pools[name]
+
+
+async def run_in_pool[T](name: str, function: Callable[..., T], *args: object) -> T:
+    """``function(*args)`` on the thread ``name`` (see ``_pool``)."""
+    return await asyncio.get_running_loop().run_in_executor(_pool(name), function, *args)
 
 
 # ``warnings.catch_warnings`` changes the warning filters of the whole process: two threads in it
@@ -161,12 +208,25 @@ def _open(path: Path) -> Image.Image:
         return Image.open(path)
 
 
+def _check_budget(picture: Image.Image) -> None:
+    """``Image.DecompressionBombError`` for a picture with more pixels than its format's budget
+    (``PIXEL_BUDGETS``). The size is in the header: nothing has been decoded yet."""
+    budget = PIXEL_BUDGETS.get(picture.format or "")
+    pixels = picture.width * picture.height
+    if budget is not None and pixels > budget:
+        raise Image.DecompressionBombError(
+            f"{picture.format} picture of {picture.width} x {picture.height} = {pixels} pixels "
+            f"(at most {budget})"
+        )
+
+
 def _decode_images(path: Path, heic: bool) -> tuple[Image.Image | None, Image.Image]:
     """The JPEG preview of a HEIC photo (None for any other picture) and the thumbnail of the
     picture stored at ``path``, in memory. ``ValidationFailed(BROKEN_IMAGE)`` for anything Pillow
     cannot read (reading and turning only: writing the result is not this)."""
     try:
         with _open(path) as probe:
+            _check_budget(probe)
             probe.verify()  # the file's structure; it cannot be used afterwards
         with _open(path) as picture:
             if heic:
@@ -219,8 +279,9 @@ async def add_attachment(
     """Attach the uploaded file to the item. In this order: ``Forbidden``/``NotFound`` for the
     item, ``ValidationFailed`` without a file, ``PayloadTooLarge`` above the size limit, a
     ``Conflict`` when the item has its fill of files or the instance its quota, and
-    ``ValidationFailed`` for a type that may not be attached (a text file must be UTF-8) or an
-    image Pillow cannot read. Only then is anything written."""
+    ``ValidationFailed`` for a type that may not be attached, a text file that is not UTF-8 or an
+    image Pillow cannot read or that has more pixels than its format's budget. Only then is
+    anything written."""
     # The lock on the item (FOR NO KEY UPDATE, as every change to it takes) serializes the files
     # added at the same time, so that each counts the others. A tick or a rename of the same
     # item waits for it while the file is written and thumbnailed (accepted).
@@ -241,8 +302,8 @@ async def add_attachment(
     if detected is None:
         raise ValidationFailed(NOT_ALLOWED)
     if detected.kind in ("text", "markdown"):
-        if not await asyncio.to_thread(_is_utf8_text, upload.file):
-            raise ValidationFailed(NOT_ALLOWED)
+        if problem := await asyncio.to_thread(_text_problem, upload.file):
+            raise ValidationFailed(problem)
         await upload.seek(0)
 
     key = secrets.token_hex(16)
@@ -258,7 +319,7 @@ async def add_attachment(
     try:
         await store.save(key, upload.file)
         if detected.kind == "image":
-            await asyncio.to_thread(_make_images, store, key, detected.content_type == HEIC)
+            await run_in_pool("images", _make_images, store, key, detected.content_type == HEIC)
         db.add(attachment)
         await commit_and_publish(db, _item_changed(item))
     except BaseException:

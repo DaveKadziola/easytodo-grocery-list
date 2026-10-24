@@ -3,6 +3,7 @@ Focus 3 and 5), the thumbnail and the preview, Markdown rendered without HTML or
 files of an item that is gone."""
 
 import re
+import threading
 from datetime import UTC, datetime
 from urllib.parse import quote
 
@@ -16,8 +17,9 @@ from test_statement_budget import statements_of
 from attachments import samples
 from attachments.samples import HX, upload
 from attachments.test_upload import files_in
+from easytodo.attachments import routes
 from easytodo.attachments.routes import FILE_CSP, PDF_CSP
-from easytodo.attachments.service import ATTACHMENT_GONE
+from easytodo.attachments.service import ATTACHMENT_GONE, MARKDOWN_RENDER_LIMIT
 from easytodo.attachments.sniff import download_name
 from easytodo.content.service import ITEM_GONE
 from easytodo.models import Attachment, Board, Category, Item
@@ -172,7 +174,8 @@ async def test_a_revalidated_file_is_a_304_that_keeps_the_policy_of_the_file(
 async def test_the_name_is_only_ever_sent_percent_encoded(viewer_client, item, db, store, name):
     attachment = await stored(db, item, store, name)  # (a name no upload could have: worse)
 
-    for query, sent in (("", name), ("?download=1", download_name(name, "text/plain"))):
+    sent = download_name(name, "text/plain")
+    for query in ("", "?download=1"):
         r = await viewer_client.get(f"/attachments/{attachment.id}/file{query}")
 
         disposition = r.headers["content-disposition"]
@@ -228,9 +231,9 @@ async def test_a_download_is_saved_with_an_extension_that_fits_what_the_file_is(
     assert download.headers["content-disposition"] == (
         f"attachment; filename*=utf-8''{quote(saved_as, safe='')}"
     )
-    # Shown in the browser (and in the list) it keeps the name it was given.
+    # Shown in the browser it has the same name: a PDF called "invoice.html" is not offered as HTML.
     assert shown.headers["content-disposition"] == (
-        f"inline; filename*=utf-8''{quote(filename, safe='')}"
+        f"inline; filename*=utf-8''{quote(saved_as, safe='')}"
     )
 
 
@@ -411,6 +414,68 @@ async def test_no_link_in_markdown_runs_script(
     for href in re.findall(r'href="([^"]*)"', part):
         assert scheme_a_browser_reads(href) in {None, "http", "https", "mailto"}, href
     assert "<script" not in part and "<img" not in part
+
+
+async def test_a_markdown_file_over_the_limit_is_shown_as_plain_text(
+    viewer_client, item, db, store
+):
+    """Rendering takes longer than the file grows (1 MB of "[" took half a minute): above 256 KB
+    the text is shown as a .txt is, in a <pre>, and nothing is rendered."""
+    assert MARKDOWN_RENDER_LIMIT == 256 * 1024
+    big = ("# Heading\n\nsome *emphasis*\n\n" * 12000).encode()  # 300 KB
+    assert 300_000 < len(big)
+    small = b"# Heading\n\nsome *emphasis*\n"
+    over = await stored(
+        db, item, store, "big.md", big, kind="markdown", content_type="text/markdown"
+    )
+    under = await stored(
+        db, item, store, "small.md", small, kind="markdown", content_type="text/markdown"
+    )
+
+    shown_as_text = await viewer_client.get(f"/attachments/{over.id}")
+    rendered = await viewer_client.get(f"/attachments/{under.id}")
+
+    assert shown_as_text.status_code == 200
+    assert 'class="markdown card"' not in shown_as_text.text
+    assert "<h1>" not in shown_as_text.text and "<em>" not in shown_as_text.text
+    assert re.search(r"<pre[^>]*>\n# Heading\n\nsome \*emphasis\*\n", shown_as_text.text)
+    assert "<h1>Heading</h1>" in markdown_div(rendered.text)
+    assert "<em>emphasis</em>" in markdown_div(rendered.text)
+
+
+async def test_a_markdown_file_of_exactly_the_limit_is_still_rendered(
+    viewer_client, item, db, store
+):
+    text = "# Heading\n" + "x" * (MARKDOWN_RENDER_LIMIT - len("# Heading\n"))
+    attachment = await stored(
+        db, item, store, "edge.md", text.encode(), kind="markdown", content_type="text/markdown"
+    )
+
+    r = await viewer_client.get(f"/attachments/{attachment.id}")
+
+    assert "<h1>Heading</h1>" in markdown_div(r.text)
+
+
+async def test_markdown_is_rendered_on_a_thread_of_its_own(
+    viewer_client, item, db, store, monkeypatch
+):
+    """Not on the default pool, whose threads other work waits for (a slow render holds one)."""
+    attachment = await stored(
+        db, item, store, "plan.md", b"# Plan\n", kind="markdown", content_type="text/markdown"
+    )
+    threads = []
+    real = routes.render_markdown
+
+    def spy(text):
+        threads.append(threading.current_thread().name)
+        return real(text)
+
+    monkeypatch.setattr(routes, "render_markdown", spy)
+
+    r = await viewer_client.get(f"/attachments/{attachment.id}")
+
+    assert "<h1>Plan</h1>" in markdown_div(r.text)
+    assert len(threads) == 1 and threads[0].startswith("markdown")
 
 
 async def test_markdown_is_served_as_plain_text_too(viewer_client, item, db, store):

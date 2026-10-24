@@ -18,11 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.attachments.service import (
     ATTACHMENT_GONE,
+    MARKDOWN_RENDER_LIMIT,
     add_attachment,
     delete_attachment,
     load_attachment,
     read_text,
     render_markdown,
+    run_in_pool,
 )
 from easytodo.attachments.sniff import HEIC, download_name
 from easytodo.attachments.storage import AttachmentStore
@@ -155,9 +157,9 @@ async def view_attachment(
     if attachment.kind in ("text", "markdown"):
         try:
             text = await asyncio.to_thread(read_text, store, attachment)
-            if attachment.kind == "markdown":
-                context["markdown"] = await asyncio.to_thread(render_markdown, text)
-            else:
+            if attachment.kind == "markdown" and attachment.size_bytes <= MARKDOWN_RENDER_LIMIT:
+                context["markdown"] = await run_in_pool("markdown", render_markdown, text)
+            else:  # a text, or a Markdown file too large to render: shown as it is
                 context["text"] = text
         except FileNotFoundError:
             raise NotFound(ATTACHMENT_GONE) from None
@@ -186,9 +188,7 @@ async def attachment_file(
         _store(request).path(attachment.storage_key),
         media_type,
         csp,
-        filename=download_name(attachment.filename, attachment.content_type)
-        if download
-        else attachment.filename,
+        filename=download_name(attachment.filename, attachment.content_type),
         download=download,
     )
 
