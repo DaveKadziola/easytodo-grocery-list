@@ -248,11 +248,18 @@ async def set_status(db: AsyncSession, admin: User, user_id: int, status: UserSt
     gone for good, and a new one has to be asked for."""
     user = await get_user(db, user_id)
     revoked: list[int] = []
-    if status == UserStatus.DISABLED:
+    disabling = status == UserStatus.DISABLED
+    if disabling:
         await _keep_an_active_admin(db, user)
-    user.status = status
-    await db.flush()  # the account's row is locked first, as in ``revoke_all_sessions``
-    if status == UserStatus.DISABLED:
+    # The account's row is locked first, as in ``revoke_all_sessions``: by the UPDATE of the status
+    # (flushed now, no statement added), or, if the status stays, by a SELECT (a flush of nothing
+    # locks nothing, and a disabled account can still have sessions and links to end).
+    if user.status != status:
+        user.status = status
+        await db.flush()
+    elif disabling:
+        await db.execute(select(User.id).where(User.id == user.id).with_for_update(key_share=True))
+    if disabling:
         revoked = await revoke_all_sessions(db, user.id)
         await invalidate_reset_tokens(db, user.id)
     await commit_and_publish(db, *sessions_revoked(user.id, revoked))

@@ -2,7 +2,7 @@
 
 import io
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,10 +17,12 @@ from easytodo.models import (
     Item,
     Notification,
     NotificationKind,
+    PasswordResetToken,
     User,
     UserStatus,
 )
 from easytodo.security.passwords import hash_password
+from easytodo.security.tokens import hash_token, new_token
 
 DEFAULT_PASSWORD = "correct-horse-battery-staple"
 
@@ -46,6 +48,21 @@ async def create_user(
     db.add(user)
     await db.commit()
     return user
+
+
+async def create_reset_token(db: AsyncSession, user: User) -> str:
+    """An unused password-reset link of ``user``, valid for an hour; returns the raw token, the
+    last part of the link."""
+    raw_token = new_token()
+    db.add(
+        PasswordResetToken(
+            user_id=user.id,
+            token_hash=hash_token(raw_token),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    await db.commit()
+    return raw_token
 
 
 async def create_board(

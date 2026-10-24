@@ -67,7 +67,15 @@ async def request_password_reset(
         email = normalize_email(email)
     except ValidationFailed:
         return  # no account has an invalid address
-    user = await db.scalar(select(User).where(User.email == email))
+    # Locked FOR NO KEY UPDATE, as in ``revoke_all_sessions``: this writes several token rows, and
+    # a reset, a change or a disable that holds the account's row would otherwise wait for rows
+    # this holds. (Fresh, whatever the caller has loaded: the account may have changed meanwhile.)
+    user = await db.scalar(
+        select(User)
+        .where(User.email == email)
+        .with_for_update(key_share=True)
+        .execution_options(populate_existing=True)
+    )
     if user is None or user.status == UserStatus.DISABLED:
         return
     if limiter is not None and not limiter.hit(
@@ -136,8 +144,11 @@ async def reset_password(db: AsyncSession, raw_token: str, new_password: str) ->
     new_hash = await hash_password_async(new_password)  # before any row is locked
     # The account's row first, as in ``revoke_all_sessions`` (FOR NO KEY UPDATE): an admin
     # disabling the account locks it first too, and would otherwise wait for the token row below
-    # while this waits for the account's.
-    user = await db.get(User, token.user_id, with_for_update={"key_share": True})
+    # while this waits for the account's. Read afresh (``populate_existing``), so that a caller
+    # that has the account loaded does not set a lockout it holds stale back to what it was.
+    user = await db.get(
+        User, token.user_id, with_for_update={"key_share": True}, populate_existing=True
+    )
     if user is None:  # deleted meanwhile
         raise NotFound(INVALID_RESET_LINK)
     # Conditional, so two concurrent resets cannot both use it.

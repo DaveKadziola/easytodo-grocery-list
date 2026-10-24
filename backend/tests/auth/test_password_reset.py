@@ -11,16 +11,18 @@ from urllib.parse import unquote
 import httpx
 import pyotp
 import pytest
-from factories import DEFAULT_PASSWORD, create_board, create_user
+from factories import DEFAULT_PASSWORD, create_board, create_reset_token, create_user
 from helpers import login
 from markupsafe import escape
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
 from easytodo.auth import reset
 from easytodo.auth.reset import RESET_TTL
 from easytodo.auth.sessions import SESSION_COOKIE
+from easytodo.errors import NotFound
 from easytodo.models import PasswordResetToken, RecoveryCode, User, UserSession, UserStatus
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
 from easytodo.security.passwords import verify_password
@@ -254,6 +256,46 @@ async def test_reset_clears_lockout(client, db, mail_outbox):
     user = await dave(db)
     assert (user.failed_login_count, user.locked_until) == (0, None)
     await login(client, EMAIL, NEW_PASSWORD)
+
+
+async def test_a_reset_reads_the_account_afresh(db, _db_engine):
+    # A caller that already has the account loaded (stale: no lockout yet) must not leave a
+    # lockout set meanwhile in place: setting 0 and None on a copy that says 0 and None would
+    # write nothing.
+    user = await create_user(db, EMAIL)
+    token = await create_reset_token(db, user)
+    async with AsyncSession(_db_engine) as other:
+        await other.execute(
+            update(User).values(
+                failed_login_count=7, locked_until=datetime.now(UTC) + timedelta(hours=1)
+            )
+        )
+        await other.commit()
+
+    await reset.reset_password(db, token, NEW_PASSWORD)
+
+    row = (await db.execute(select(User.failed_login_count, User.locked_until))).one()
+    assert tuple(row) == (0, None)
+
+
+async def test_a_user_deleted_during_the_reset_hash_is_a_dead_link(db, _db_engine, monkeypatch):
+    user = await create_user(db, EMAIL)
+    token = await create_reset_token(db, user)
+    real_hash = reset.hash_password_async
+
+    async def hash_then_delete_the_user(password: str) -> str:
+        new_hash = await real_hash(password)
+        async with AsyncSession(_db_engine) as other:
+            await other.execute(delete(User).where(User.id == user.id))
+            await other.commit()
+        return new_hash
+
+    monkeypatch.setattr(reset, "hash_password_async", hash_then_delete_the_user)
+
+    with pytest.raises(NotFound) as refused:
+        await reset.reset_password(db, token, NEW_PASSWORD)
+
+    assert refused.value.message == INVALID_LINK
 
 
 async def test_reset_clears_a_forced_password_change(client, db, mail_outbox):

@@ -8,19 +8,20 @@ a lock (``wait_until_a_query_waits_for_a_lock``), and lets the first go on. No s
 """
 
 import asyncio
-from datetime import UTC, datetime, timedelta
 
 import pytest
-from factories import DEFAULT_PASSWORD, create_user
-from helpers import signed_in, wait_until_a_query_waits_for_a_lock
+from factories import DEFAULT_PASSWORD, create_reset_token, create_user
+from helpers import count_queries, signed_in, wait_until_a_query_waits_for_a_lock
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easytodo.admin import service as admin_service
 from easytodo.auth import account_routes, reset
+from easytodo.auth.sessions import SESSION_COOKIE
 from easytodo.models import PasswordResetToken, User, UserSession, UserStatus
 from easytodo.security.passwords import verify_password
-from easytodo.security.tokens import hash_token, new_token
+from easytodo.security.tokens import hash_token
+from easytodo.web import FLASH_COOKIE
 
 EMAIL = "dave@example.com"
 NEW_PASSWORD = "an-even-better-passphrase"
@@ -168,15 +169,7 @@ async def test_a_disable_started_during_a_reset_waits_for_it(
     client_factory, db, _db_engine, monkeypatch, spawn
 ):
     admin, dave, _ = await admin_and_dave(db, client_factory)
-    token = new_token()
-    db.add(
-        PasswordResetToken(
-            user_id=dave.id,
-            token_hash=hash_token(token),
-            expires_at=datetime.now(UTC) + timedelta(hours=1),
-        )
-    )
-    await db.commit()
+    token = await create_reset_token(db, dave)
     # Before the reset's last writes: the account's row is locked by now, the token row is used.
     reached, go = pause(monkeypatch, reset, "invalidate_reset_tokens", before=True)
 
@@ -193,6 +186,59 @@ async def test_a_disable_started_during_a_reset_waits_for_it(
     assert await has_password(db, dave, NEW_PASSWORD)
 
 
+async def test_a_reset_link_request_during_a_reset_waits_for_it(
+    db, _db_engine, monkeypatch, spawn, settings
+):
+    # A request ends every unused link and adds one: with two unused links it writes several
+    # token rows, as the reset does, and the two would wait for each other's rows.
+    dave = await create_user(db, EMAIL)
+    await create_reset_token(db, dave)  # an older link, still unused
+    token = await create_reset_token(db, dave)
+    reached, go = pause(monkeypatch, reset, "invalidate_reset_tokens", before=True)
+    mailed: list[str] = []
+
+    class Mailer:
+        async def send(self, to: str, subject: str, body: str) -> None:
+            mailed.append(to)
+
+    async def do_reset():
+        async with AsyncSession(_db_engine, expire_on_commit=False) as other:
+            await reset.reset_password(other, token, NEW_PASSWORD)
+
+    async def do_request():
+        async with AsyncSession(_db_engine, expire_on_commit=False) as other:
+            await reset.request_password_reset(other, EMAIL, Mailer(), settings)
+
+    resetting = spawn(do_reset())
+    await asyncio.wait_for(reached.wait(), 5)
+
+    await run_blocked_by(db, go, resetting, spawn(do_request()))
+
+    assert mailed == [EMAIL]  # the request came last: its link is the one left
+    unused = select(func.count()).select_from(PasswordResetToken)
+    assert await db.scalar(unused.where(PasswordResetToken.used_at.is_(None))) == 1
+
+
+@pytest.mark.parametrize("already", [True, False], ids=["already-disabled", "active"])
+async def test_a_disable_locks_the_users_row_before_it_ends_sessions_and_links(db, already):
+    admin = await create_user(db, "admin@example.com", is_admin=True)
+    status = UserStatus.DISABLED if already else UserStatus.ACTIVE
+    dave = await create_user(db, EMAIL, status=status)
+
+    with count_queries(db) as statements:
+        await admin_service.set_status(db, admin, dave.id, UserStatus.DISABLED)
+
+    def first(*starts: str, containing: str = "\0") -> int:
+        found = (i for i, s in enumerate(statements) if s.startswith(starts) or containing in s)
+        return next(found, len(statements))  # past the end: there is none
+
+    lock = first("UPDATE users", containing="FOR NO KEY UPDATE")
+    assert lock < first("DELETE FROM user_sessions"), statements
+    # Re-disabling flushes nothing, so it locks with a SELECT; a disable that changes the status
+    # locks with that UPDATE and adds no statement.
+    assert any("FOR NO KEY UPDATE" in s for s in statements) is already, statements
+
+
 async def test_signing_out_the_other_devices_during_a_change_waits_for_it(
     client_factory, db, monkeypatch, spawn
 ):
@@ -200,6 +246,11 @@ async def test_signing_out_the_other_devices_during_a_change_waits_for_it(
     b = await signed_in(client_factory, EMAIL)
     await signed_in(client_factory, EMAIL)  # C
     a = await signed_in(client_factory, EMAIL)  # the last row: B's delete reaches it after C's
+    a_id = await db.scalar(
+        select(UserSession.id).where(
+            UserSession.token_hash == hash_token(a.cookies[SESSION_COOKIE])
+        )
+    )
     # After A's rotation, before its delete of the others: A holds its own row, B would take C's.
     reached, go = pause(monkeypatch, account_routes, "revoke_all_sessions", before=True)
     change = spawn(a.post("/account/password", data=CHANGE))
@@ -208,6 +259,11 @@ async def test_signing_out_the_other_devices_during_a_change_waits_for_it(
     revoke = spawn(b.post("/account/sessions/revoke-others"))
     r_change, r_revoke = await run_blocked_by(db, go, change, revoke)
 
+    # B's session went with A's change, so B has nothing to sign the others out of: it is told so,
+    # and A's new session, which B's delete would have taken, stays.
     assert r_change.status_code == 303 and r_change.headers["location"] == "/account"
-    assert r_revoke.status_code == 303 and r_revoke.headers["location"] == "/account"
-    assert await sessions_left(db) == []  # each took the other's, and A's change took C's
+    assert r_revoke.status_code == 303 and r_revoke.headers["location"] == "/login"
+    assert SESSION_COOKIE not in b.cookies
+    assert FLASH_COOKIE not in r_revoke.headers.get("set-cookie", "")
+    assert await sessions_left(db) == [a_id]
+    assert (await a.get("/account")).status_code == 200

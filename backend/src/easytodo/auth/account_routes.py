@@ -256,8 +256,20 @@ async def new_recovery_codes(
 @router.post("/sessions/revoke-others")
 async def revoke_other_sessions(request: Request, db: DbSession, user: CurrentUser) -> Response:
     # The account's users row first, as in ``revoke_all_sessions``: a password change deletes
-    # sessions too, and the two would otherwise wait for each other's rows.
-    await db.execute(select(User.id).where(User.id == user.id).with_for_update(key_share=True))
+    # sessions too, and the two would otherwise wait for each other's rows. This session's row is
+    # locked with it (users first), because a lock that waited re-checks only the rows it locks:
+    # one that is not locked would still be found after a password change had deleted it, and
+    # this would sign out the new session that change has just rotated.
+    alive = await db.scalar(
+        select(User.id)
+        .join(UserSession, UserSession.user_id == User.id)
+        .where(User.id == user.id, UserSession.id == request.state.session.id)
+        .with_for_update(key_share=True, of=[User, UserSession])
+    )
+    if alive is None:  # signed out meanwhile (by a password change, say): nothing to sign out of
+        response = RedirectResponse("/login", status_code=303)
+        clear_session_cookie(response)
+        return response
     revoked = await revoke_all_sessions(db, user.id, except_session_id=request.state.session.id)
     await commit_and_publish(db, *sessions_revoked(user.id, revoked))
     return RedirectResponse("/account", status_code=303)
