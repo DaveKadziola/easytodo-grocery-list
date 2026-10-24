@@ -56,6 +56,7 @@ docker compose exec app python -m easytodo.cli create-admin --email you@example.
 - The first `docker compose up` builds the image, which takes a few minutes. `--wait` returns once
   the app is up and has created its database tables.
 - `create-admin` asks for a password twice (10 to 256 characters).
+- For an existing account it only adds admin rights; a disabled account stays disabled until an admin enables it at `/admin/users`.
 
 Open <http://localhost:8000> and sign in with that email and password. To use the app from your
 phone, see "Phone on the home network" in the checklist below.

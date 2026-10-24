@@ -39,10 +39,13 @@ from easytodo.legacy_import import (
     import_legacy,
 )
 from easytodo.maintenance import PURGE_BUSY, PURGE_LOCK_TIMEOUT, purge
-from easytodo.models import User, UserSession
+from easytodo.models import User, UserSession, UserStatus
 from easytodo.security.passwords import hash_password, validate_password
 
 ACCOUNT_EXISTS = "An account with this email already exists."
+DISABLED_WARNING = (
+    "warning: {email} is disabled and cannot sign in until an admin enables it at /admin/users."
+)
 _LOCK_NOT_AVAILABLE = "55P03"  # the PostgreSQL SQLSTATE of a lock_timeout
 
 
@@ -119,13 +122,17 @@ async def _create_admin(email: str, *, password_stdin: bool) -> str:
     try:
         async with AsyncSession(engine) as db:
             user = await db.scalar(select(User).where(User.email == email))
+            # A disabled account stays as it is: enabling it is an admin's decision.
+            disabled = user is not None and user.status == UserStatus.DISABLED
             if user is not None and user.is_admin:
+                _warn_if_disabled(email, disabled)
                 return f"{email} is already an admin."
             if user is not None:
                 warning = await _promotion_warning(db, user, password_stdin=password_stdin)
                 user.is_admin = True
                 await db.commit()
                 print(warning, file=sys.stderr)
+                _warn_if_disabled(email, disabled)
                 return f"{email} is now an admin. Their password is unchanged."
             password = _read_password(from_stdin=password_stdin)
             validate_password(password)
@@ -137,6 +144,12 @@ async def _create_admin(email: str, *, password_stdin: bool) -> str:
             return f"Created the admin account {email}."
     finally:
         await engine.dispose()
+
+
+def _warn_if_disabled(email: str, disabled: bool) -> None:
+    """Tell the operator that a disabled account cannot sign in, admin or not."""
+    if disabled:
+        print(DISABLED_WARNING.format(email=email), file=sys.stderr)
 
 
 async def _purge() -> str:

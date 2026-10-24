@@ -39,6 +39,8 @@ from easytodo.models import (
     BoardRole,
     Category,
     Item,
+    Notification,
+    NotificationKind,
     RecoveryCode,
     User,
     UserSession,
@@ -80,6 +82,14 @@ async def fresh(db, user: User) -> User:
 
 async def session_ids(db, user: User) -> list[int]:
     return list(await db.scalars(select(UserSession.id).where(UserSession.user_id == user.id)))
+
+
+async def notifications(db) -> list[tuple[int, NotificationKind, str, int | None]]:
+    """Every notification there is, as (recipient id, kind, message, board id)."""
+    rows = await db.execute(
+        select(Notification.user_id, Notification.kind, Notification.message, Notification.board_id)
+    )
+    return [tuple(row) for row in rows]
 
 
 def test_routes_cover_every_admin_route():
@@ -374,13 +384,45 @@ async def test_delete_user_removes_owned_boards_and_sessions(
     assert await db.scalar(select(func.count()).select_from(Category)) == 0
     assert await db.scalar(select(func.count()).select_from(Item)) == 0
     assert list(await db.scalars(select(BoardMember.user_id))) == [admin.id]
+    # The admin owns the shared board and did this: nobody is told about it.
     assert admin_events == [
         BoardEvent(EventType.SESSIONS_REVOKED, user_id=dave.id, session_ids=tuple(sessions)),
         BoardEvent(EventType.BOARD_DELETED, board_id=owned.id),
+        BoardEvent(EventType.MEMBER_REMOVED, board_id=shared.id, user_id=dave.id),
     ]
+    assert await notifications(db) == []
     r = await device.get("/boards")
     assert r.status_code == 303
     assert r.headers["location"].startswith("/login")
+
+
+async def test_deleting_a_member_tells_the_owners_of_active_boards_only(db, admin, admin_events):
+    dave = await create_user(db, "dave@example.com")
+    olga = await create_user(db, "olga@example.com")
+    mia = await create_user(db, "mia@example.com")
+    dave_id, olga_id = dave.id, olga.id
+    # Created in another order than their owners: the events follow the boards' ids.
+    mias_archived = await create_board(
+        db, mia, "Mia's old", {dave: BoardRole.VIEWER}, archived_at=datetime.now(UTC)
+    )
+    olgas = await create_board(db, olga, "Olga's", {dave: BoardRole.EDITOR})
+    admins = await create_board(db, admin, "Family", {dave: BoardRole.EDITOR})
+    daves = await create_board(db, dave, "Dave's", {olga: BoardRole.EDITOR})
+    board_ids = (mias_archived.id, olgas.id, admins.id, daves.id)
+
+    await delete_user(db, admin, dave_id)
+
+    mias_archived_id, olgas_id, admins_id, daves_id = board_ids
+    assert admin_events == [  # no sessions to revoke here
+        BoardEvent(EventType.BOARD_DELETED, board_id=daves_id),  # a board of theirs: no membership
+        BoardEvent(EventType.MEMBER_REMOVED, board_id=mias_archived_id, user_id=dave_id),
+        BoardEvent(EventType.MEMBER_REMOVED, board_id=olgas_id, user_id=dave_id),
+        BoardEvent(EventType.MEMBER_REMOVED, board_id=admins_id, user_id=dave_id),
+        BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=olga_id),
+    ]
+    assert await notifications(db) == [  # not the owner of the archived board, nor the admin
+        (olga_id, NotificationKind.MEMBER_LEFT, "dave left “Olga's”.", olgas_id)
+    ]
 
 
 async def test_admin_cannot_delete_self_or_last_admin(admin_client, db, admin):
@@ -714,3 +756,25 @@ async def test_deleting_closes_the_users_sockets_and_those_on_their_boards(live_
 
             await _assert_closed_with(daves_ws, 4401)  # signed out
             await _assert_closed_with(olgas_ws, 4404)  # the board is gone
+
+
+async def test_deleting_a_member_reloads_their_boards_for_the_others(live_server, db):
+    await create_user(db, "admin@example.com", is_admin=True)
+    dave = await create_user(db, "dave@example.com")
+    olga = await create_user(db, "olga@example.com")
+    board = await create_board(db, olga, "Olga's", {dave: BoardRole.EDITOR})
+    async with _live_client(live_server) as admin, _live_client(live_server) as olgas_device:
+        await login(admin, "admin@example.com")
+        await login(olgas_device, "olga@example.com")
+        async with _open_socket(live_server, olgas_device, board.id) as ws:
+            await _assert_admitted(ws)
+
+            assert (await admin.delete(f"/admin/users/{dave.id}", headers=HX)).status_code == 200
+
+            message = json.loads(await asyncio.wait_for(ws.recv(), 1.0))
+            assert message == {"type": "board.updated", "board_id": board.id, "category_ids": []}
+            await _assert_admitted(ws)  # Olga's socket stays open, and gets nothing else
+
+    assert await notifications(db) == [
+        (olga.id, NotificationKind.MEMBER_LEFT, f"dave left “{board.name}”.", board.id)
+    ]

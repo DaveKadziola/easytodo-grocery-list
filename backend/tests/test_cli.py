@@ -13,7 +13,7 @@ from helpers import signed_in
 from sqlalchemy import func, select, update
 
 from easytodo.cli import main
-from easytodo.models import User, UserSession
+from easytodo.models import User, UserSession, UserStatus
 from easytodo.security.passwords import verify_password
 
 PASSWORD = "secret-password-1"
@@ -173,6 +173,23 @@ async def test_cli_create_admin_leaves_an_admin_as_is(db, monkeypatch, cli_env, 
     assert await create_admin("--email", "boss@example.com") == 0
 
     assert "boss@example.com is already an admin." in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("is_admin", [False, True])
+async def test_cli_warns_that_a_disabled_account_cannot_sign_in(
+    db, monkeypatch, cli_env, capsys, is_admin
+):
+    user = await create_user(db, "dave@example.com", is_admin=is_admin, status=UserStatus.DISABLED)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: pytest.fail("asked for a password"))
+
+    assert await create_admin("--email", "dave@example.com") == 0
+
+    assert capsys.readouterr().err.endswith(
+        "warning: dave@example.com is disabled and cannot sign in until an admin enables it "
+        "at /admin/users.\n"
+    )
+    await db.refresh(user)
+    assert user.is_admin and user.status == UserStatus.DISABLED  # the CLI does not enable it
 
 
 def test_cli_runs_as_a_module():

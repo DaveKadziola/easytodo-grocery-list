@@ -19,17 +19,21 @@ from easytodo.auth.service import DEFAULT_BOARD_NAME, normalize_email
 from easytodo.auth.sessions import revoke_all_sessions, sessions_revoked
 from easytodo.boards.permissions import is_possible_id
 from easytodo.boards.service import add_board
+from easytodo.display import user_display_name
 from easytodo.errors import Conflict, NotFound
 from easytodo.models import (
     Board,
     BoardMember,
+    BoardRole,
     Category,
     Item,
+    NotificationKind,
     RecoveryCode,
     User,
     UserSession,
     UserStatus,
 )
+from easytodo.notifications.service import notify
 from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
 from easytodo.security.passwords import hash_password_async
 
@@ -222,7 +226,9 @@ async def _keep_an_active_admin(db: AsyncSession, user: User) -> None:
 
 async def delete_user(db: AsyncSession, admin: User, user_id: int) -> None:
     """Delete the account; the boards it owns go with it (FK cascades), and its devices are
-    signed out."""
+    signed out. The boards of others it was a member of lose a member: the others' pages reload
+    them, and the owner of each that is not archived is told that the member left, as when they
+    leave themselves (an owner who is the admin doing this is not: they know)."""
     if user_id == admin.id:
         raise Conflict(CANNOT_DELETE_SELF)
     user = await get_user(db, user_id)
@@ -232,13 +238,40 @@ async def delete_user(db: AsyncSession, admin: User, user_id: int) -> None:
     # each other deadlock instead of getting ``LAST_ADMIN``).
     await db.execute(select(User.id).where(User.id == user.id).with_for_update(key_share=True))
     owned = list(await db.scalars(select(Board.id).where(Board.owner_id == user.id)))
+    # Their memberships on the boards of others, read before the cascade deletes them.
+    memberships = (
+        await db.execute(
+            select(BoardMember.board_id, Board.owner_id, Board.name, Board.archived_at)
+            .join(Board, Board.id == BoardMember.board_id)
+            .where(BoardMember.user_id == user.id, BoardMember.role != BoardRole.OWNER)
+            .order_by(BoardMember.board_id)
+        )
+    ).all()
+    name = user_display_name(user)
     # Deleted here rather than by the cascade, so their sockets are closed too.
     revoked = await revoke_all_sessions(db, user.id)
     await db.delete(user)
+    told: list[BoardEvent] = []
+    for board_id, owner_id, board_name, archived_at in memberships:
+        if archived_at is None and owner_id != admin.id:
+            told += notify(
+                db,
+                [owner_id],
+                NotificationKind.MEMBER_LEFT,
+                board_id=board_id,
+                actor=name,
+                board=board_name,
+            )
     await commit_and_publish(
         db,
         *sessions_revoked(user.id, revoked),
         *(BoardEvent(EventType.BOARD_DELETED, board_id=board_id) for board_id in owned),
+        # The others on these boards reload them; the deleted user's own sockets are closed.
+        *(
+            BoardEvent(EventType.MEMBER_REMOVED, board_id=board_id, user_id=user.id)
+            for board_id, *_ in memberships
+        ),
+        *told,
     )
 
 
