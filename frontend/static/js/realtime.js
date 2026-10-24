@@ -30,7 +30,8 @@
   // details of the open item.
   const pending = { board: false, changed: new Set(), deleted: new Set(), details: false };
   // A board reload due because one of this tab's own changes lost a race (a 404 "resync"): the
-  // user is waiting for it, so a focused field does not hold it.
+  // user is waiting for it, so a focused field does not hold it, neither when it is sent nor when
+  // its answer is to be swapped in (refreshUrgent).
   let boardUrgent = false;
   let reloadDue = false; // the user's role changed: reload the page at the next idle moment
   const pointersDown = new Set();
@@ -38,6 +39,7 @@
   let ownActivity = 0; // counts each start and end of one of them
   let refreshing = false; // an update's request is in flight: one at a time, so none overtakes another
   let refreshXhr = null; // that request
+  let refreshUrgent = false; // it is an urgent board reload: typing does not hold its swap either
   let refreshActivity = 0; // ownActivity when it was sent
   let answering = null; // the XHR whose answer htmx is handling right now
   let sendingRefresh = false; // set while htmx.ajax sends it (htmx:beforeSend comes synchronously)
@@ -178,15 +180,16 @@
       }
     }
     if (pending.board && !busy(content, { typing: !boardUrgent })) {
+      const urgent = boardUrgent;
       pending.board = false;
       boardUrgent = false;
       pending.changed.clear();
       pending.deleted.clear();
-      sendRefresh(() => board().refresh());
+      sendRefresh(() => board().refresh(), urgent);
     }
   }
 
-  function sendRefresh(send) {
+  function sendRefresh(send, urgent = false) {
     sendingRefresh = true;
     let sent;
     try {
@@ -195,11 +198,14 @@
       sendingRefresh = false;
     }
     refreshing = true;
+    refreshUrgent = urgent;
     refreshActivity = ownActivity;
     Promise.resolve(sent)
       .catch(() => {}) // a failed request shows its own error
       .then(() => {
+        // htmx settles the promise after htmx:beforeSwap, which reads refreshUrgent.
         refreshing = false;
+        refreshUrgent = false;
         refreshXhr = null;
         scheduleFlush();
       });
@@ -246,7 +252,8 @@
   // An update's answer is not swapped in when the user got busy meanwhile, or when one of this
   // tab's own requests started or ended while it was on its way (its snapshot may be older than
   // that change, whose own answer is already on the page): it is fetched again later. The same for
-  // the open item's details.
+  // the open item's details. An urgent board reload is not held by typing (the user is waiting for
+  // it), and when it is held after all, it comes back urgent.
   document.addEventListener("htmx:beforeSwap", (event) => {
     const { xhr, target, shouldSwap } = event.detail;
     if (xhr === detailsXhr && shouldSwap) {
@@ -257,10 +264,14 @@
       return;
     }
     if (xhr !== refreshXhr || !shouldSwap) return;
-    if (ownActivity === refreshActivity && !busy(target)) return;
+    if (ownActivity === refreshActivity && !busy(target, { typing: !refreshUrgent })) return;
     event.detail.shouldSwap = false;
-    if (target.matches(BOARD_CONTENT)) pending.board = true;
-    else pending.changed.add(Number(target.dataset.categoryId));
+    if (target.matches(BOARD_CONTENT)) {
+      pending.board = true;
+      if (refreshUrgent) boardUrgent = true;
+    } else {
+      pending.changed.add(Number(target.dataset.categoryId));
+    }
   });
 
   // The board's name comes with its content; the tab's title follows it.

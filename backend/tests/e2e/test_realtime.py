@@ -842,6 +842,28 @@ def test_update_finding_its_category_gone_does_not_reload_the_board_while_typing
     expect(category(page, "Dairy")).to_have_count(0)
 
 
+def test_failed_add_into_a_category_archived_elsewhere_reloads_the_board_while_typing(
+    signed_in_page, seed, user, open_board
+):
+    """The user is waiting for the reload that a failed save of their own asks for, so the text
+    they typed does not hold it back, neither when it is sent nor when its answer is swapped in."""
+    board_id = seed_two_categories(seed, user)
+    page = signed_in_page()
+    messages = received_messages(page)
+    open_board(page, board_id)
+    bakery_id = int(category(page, "Bakery").get_attribute("data-category-id"))
+    field = category(page, "Bakery").get_by_placeholder("Add item")
+    field.fill("Eggs")
+    seed(lambda db: service.archive_category(db, bakery_id, user))
+    wait_for_message(page, messages, "category.deleted")  # the typing holds the removal
+
+    field.press("Enter")  # answered 404 with a resync: an urgent reload, the field has focus
+
+    expect(page.locator("#toasts")).to_have_text("This category no longer exists.")
+    expect(category(page, "Bakery")).to_have_count(0, timeout=LIVE_UPDATE_MS)  # not at focusout
+    expect(category(page, "Dairy")).to_be_visible()
+
+
 def test_update_that_could_not_be_fetched_shows_no_error(two_logged_in_pages):
     a, b = two_logged_in_pages
     aborted = []

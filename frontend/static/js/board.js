@@ -351,17 +351,22 @@
   });
 
   // A tick (or untick) of an item shows at once, struck through or not, before the server has
-  // answered; the answer then replaces the category. If the request fails, it is undone (app.js
-  // says so). An entry of the checklist shows its own state, the checkbox, and nothing else.
+  // answered; the answer then replaces the category. If the request fails, it is undone (failed()
+  // below; app.js tells the user), unless a tap on the same checkbox is held back behind it: htmx
+  // sends that next, and its answer shows the state. An entry of the checklist shows its own
+  // state, the checkbox, and nothing else.
   function strike(checkbox) {
     checkbox.closest("[data-item-id]").classList.toggle("line-through", checkbox.checked);
   }
 
   // A tap on a checkbox whose last tap is still on its way (a quick double tap): htmx holds the
-  // new request back on that checkbox until the answer comes, but the answer replaces the
+  // new request back on that checkbox until the answer comes. If that answer fails, htmx sends
+  // the held request (failed() leaves the checkbox as tapped). But an answer may also replace the
   // category (or the details), checkbox and all, and htmx then drops what it held for an element
-  // that is gone. So the state its user wants is noted here and sent from the new checkbox once
-  // it is set up.
+  // that is gone. It need not be the answer to the tick: a request sent earlier (an item added,
+  // done items cleared) can come back first, with the state from before the tick was saved. So the
+  // state its user wants is noted here and always sent from the new checkbox once it is set up
+  // (a toggle that carries its state is idempotent).
   const ticking = new WeakSet(); // checkboxes whose request is on its way
   const heldTicks = new Map(); // checkbox id -> {from: checkbox tapped, checked: wanted state}
 
@@ -405,7 +410,7 @@
       const checkbox = document.getElementById(id);
       if (checkbox === from) continue; // not replaced: htmx still sends it from there
       heldTicks.delete(id);
-      if (!checkbox || !checkbox.matches(TICKS) || checkbox.checked === checked) continue;
+      if (!checkbox || !checkbox.matches(TICKS)) continue;
       checkbox.checked = checked;
       htmx.trigger(checkbox, "change");
     }
@@ -413,7 +418,8 @@
 
   function failed(event) {
     const checkbox = event.detail.elt;
-    if (checkbox.matches(TICKS) && checkbox.isConnected) {
+    const heldBehind = heldTicks.get(checkbox.id)?.from === checkbox; // htmx sends it right away
+    if (checkbox.matches(TICKS) && checkbox.isConnected && !heldBehind) {
       checkbox.checked = !checkbox.checked;
       if (checkbox.matches(TICK)) strike(checkbox);
     }

@@ -12,7 +12,7 @@ from urllib.parse import parse_qs
 import pytest
 from factories import create_board, create_category, create_item, create_user
 from helpers import NASTY
-from playwright.sync_api import Locator, Page, expect
+from playwright.sync_api import Locator, Page, Request, Route, expect
 from sqlalchemy import func, update
 
 from e2e import test_responsive
@@ -832,14 +832,20 @@ def test_tick_sends_the_state_its_user_wants(logged_in_page, seed, user, open_bo
 
 def test_untick_while_the_tick_is_on_its_way_is_sent(logged_in_page, seed, user, open_board):
     """A quick double tap: the second one lands before the first one's answer has replaced the
-    category. It still reaches the server, and the board ends up as its user left it."""
+    category. It still reaches the server (once), and the board ends up as its user left it."""
     page = logged_in_page
     board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
     open_board(page, board_id)
     milk = page.get_by_role("checkbox", name="Milk")
-    held = []
-    # The first answer waits for the second tap; anything after it goes through.
-    page.route(TOGGLED, lambda route: route.continue_() if held else held.append(route))
+    sent: list[Request] = []
+    held: list[Route] = []
+
+    def answer(route: Route) -> None:
+        sent.append(route.request)
+        # The first answer waits for the second tap; anything after it goes through.
+        route.continue_() if held else held.append(route)
+
+    page.route(TOGGLED, answer)
 
     with page.expect_request(TOGGLED) as ticked:
         milk.click()
@@ -855,6 +861,76 @@ def test_untick_while_the_tick_is_on_its_way_is_sent(logged_in_page, seed, user,
     expect(milk).not_to_be_checked()
     page.reload()
     expect(milk).not_to_be_checked()
+    assert len(sent) == 2  # the one htmx held for the replaced checkbox was not sent as well
+
+
+@pytest.mark.parametrize("failure", ["error", "no answer"])
+def test_untick_held_behind_a_failed_tick_is_sent(logged_in_page, seed, user, open_board, failure):
+    """A quick double tap whose first request fails: the second tap is still sent, with the state
+    its user left (unticked); the failed tick must not turn the checkbox back on first."""
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
+    open_board(page, board_id)
+    milk = page.get_by_role("checkbox", name="Milk")
+    sent: list[Request] = []
+    held: list[Route] = []
+
+    def answer(route: Route) -> None:
+        sent.append(route.request)
+        route.continue_() if held else held.append(route)  # the first waits, the rest go on
+
+    page.route(TOGGLED, answer)
+
+    milk.click()
+    while not held:
+        page.wait_for_timeout(10)
+    milk.click()  # waits in htmx's queue for the first answer
+    with page.expect_request(TOGGLED) as second:
+        if failure == "error":
+            held[0].fulfill(status=500, body="boom")
+        else:
+            held[0].abort()
+
+    assert parse_qs(second.value.post_data)["done"] == ["false"]
+    second.value.response()
+    expect(milk).not_to_be_checked()
+    page.reload()
+    expect(milk).not_to_be_checked()
+    assert len(sent) == 2
+
+
+def test_untick_held_while_another_answer_replaced_the_category_is_sent(
+    logged_in_page, seed, user, open_board
+):
+    """The category is replaced by the answer to something else (adding an item) before the tick
+    was saved: the new "Milk" is unticked, as the server still has it, yet its user unticked it."""
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"]})
+    open_board(page, board_id)
+    milk = page.get_by_role("checkbox", name="Milk")
+    held: list[Route] = []
+    page.route(TOGGLED, lambda route: held.append(route))  # every tick waits here, unanswered
+
+    milk.click()
+    while not held:
+        page.wait_for_timeout(10)
+    milk.click()
+    dairy = category(page, "Dairy")
+    dairy.get_by_placeholder("Add item").fill("Eggs")
+    with page.expect_request(TOGGLED, timeout=2000) as second:
+        dairy.get_by_role("button", name="Add", exact=True).click()
+
+    assert parse_qs(second.value.post_data)["done"] == ["false"]
+    for _ in range(100):  # the route may see the request a moment after the page reports it
+        if len(held) == 2:
+            break
+        page.wait_for_timeout(10)
+    for route in held:  # the server gets them in turn
+        with page.expect_response(TOGGLED):
+            route.continue_()
+    page.reload()
+    expect(milk).not_to_be_checked()
+    assert len(held) == 2  # what htmx queued for the replaced checkbox it dropped
 
 
 @pytest.mark.parametrize("failure", ["error", "no answer"])
