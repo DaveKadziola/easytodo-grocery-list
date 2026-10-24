@@ -22,7 +22,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 import easytodo.models  # noqa: F401  (registers every table on Base.metadata)
 from easytodo.attachments.storage import AttachmentStore
 from easytodo.config import Settings, get_settings
-from easytodo.db import Base
+from easytodo.db import Base, detect_name_collation, use_name_collation
 from easytodo.mail.mailer import SentMail
 from easytodo.main import create_app
 
@@ -58,6 +58,15 @@ async def _db_engine(_migrated_db: None) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     yield engine
     await engine.dispose()
+
+
+@pytest.fixture(scope="session")
+async def _name_collation(_db_engine: AsyncEngine) -> str | None:
+    """What the app finds out at start-up (the collation names are sorted in), for the tests that
+    call the services without an app: found the same way, and set for the rest of the session."""
+    collation = await detect_name_collation(_db_engine)
+    use_name_collation(collation)
+    return collation
 
 
 async def truncate_all_tables(engine: AsyncEngine) -> None:
@@ -222,6 +231,8 @@ async def https_client(_clean_db: None) -> AsyncIterator[httpx.AsyncClient]:
 
 
 @pytest.fixture
-async def db(_db_engine: AsyncEngine, _clean_db: None) -> AsyncIterator[AsyncSession]:
+async def db(
+    _db_engine: AsyncEngine, _clean_db: None, _name_collation: str | None
+) -> AsyncIterator[AsyncSession]:
     async with AsyncSession(_db_engine, expire_on_commit=False) as session:
         yield session

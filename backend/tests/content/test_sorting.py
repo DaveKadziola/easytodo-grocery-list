@@ -10,11 +10,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from factories import create_board, create_category, create_item, create_user
-from helpers import NASTY, NASTY_ESCAPED, wait_until_blocked_by
+from helpers import NASTY, NASTY_ESCAPED, require_polish_order, wait_until_blocked_by
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from content.test_board_markup import EDIT_CONTROLS, section
+from easytodo import db as database
 from easytodo.boards.service import SortChoice, get_board_view
 from easytodo.content import prefs, prefs_routes
 from easytodo.content.prefs import get_category_sort
@@ -106,6 +107,47 @@ async def test_default_order_is_unchanged(db, board, category):
     for view in await both_views(db, board, category, owner):
         assert names_in(view) == ["Apple", "apple", "cherry", "banana"]
         assert view.sort == SortChoice("name", False, True, False)
+
+
+POLISH_NAMES = ["Żurek", "Łosoś", "Masło", "Chleb", "Ćwikła", "Śmietana", "Ser"]
+POLISH_ORDER = ["Chleb", "Ćwikła", "Łosoś", "Masło", "Ser", "Śmietana", "Żurek"]
+# The database's own order (code points): every Polish letter comes after Z.
+PLAIN_ORDER = ["Chleb", "Masło", "Ser", "Ćwikła", "Łosoś", "Śmietana", "Żurek"]
+
+
+async def test_names_sort_in_polish_alphabetical_order(
+    db, board, category, editor_client, signed_in_client
+):
+    require_polish_order()
+    for name in POLISH_NAMES:
+        await create_item(db, category, name)
+    owner = await user_named(db, "owner@example.com")
+
+    for view in await both_views(db, board, category, owner):
+        assert names_in(view) == POLISH_ORDER
+    assert await names_on_page(editor_client, db, f"/categories/{category.id}") == POLISH_ORDER
+
+    # Name Z-A is the same order backwards, and a category's own order follows the same rule.
+    await set_account_default(db, "owner@example.com", "name", True)
+    owner = await user_named(db, "owner@example.com")
+    for view in await both_views(db, board, category, owner):
+        assert names_in(view) == POLISH_ORDER[::-1]
+    owner_client = await signed_in_client("owner@example.com")
+    assert await names_on_page(owner_client, db, f"/boards/{board.id}") == POLISH_ORDER[::-1]
+
+
+async def test_without_the_collation_names_sort_in_the_databases_own_order(
+    db, board, category, monkeypatch
+):
+    """The fallback: a database that cannot do it (not UTF8, no ICU) sorts as before. Never an
+    error."""
+    monkeypatch.setattr(database, "_name_collation", None)
+    for name in POLISH_NAMES:
+        await create_item(db, category, name)
+    owner = await user_named(db, "owner@example.com")
+
+    for view in await both_views(db, board, category, owner):
+        assert names_in(view) == PLAIN_ORDER
 
 
 @pytest.mark.parametrize(("field", "descending", "expected"), SORT_CASES)

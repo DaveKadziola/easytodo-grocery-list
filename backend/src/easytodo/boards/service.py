@@ -6,6 +6,7 @@ An archived board is gone for its members (``require_board`` and every list leav
 keeps its data, until its owner restores it or deletes it for good from the archive.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -32,6 +33,7 @@ from sqlalchemy.orm import aliased
 
 from easytodo.boards.permissions import Action, RowLock, is_possible_id, require_board
 from easytodo.content.validation import clean_name
+from easytodo.db import NAME_COLLATION, name_collation, sorted_by_name
 from easytodo.display import display_name, user_display_name
 from easytodo.errors import Conflict, Forbidden, NotFound, ValidationFailed
 from easytodo.models import (
@@ -60,6 +62,13 @@ CONFIRM_BOARD_NAME = "Type the board name to delete it permanently."
 _BOARD_ID = bindparam("board_id", type_=BigInteger)
 _CATEGORY_ID = bindparam("category_id", type_=BigInteger)
 _USER_ID = bindparam("user_id", type_=BigInteger)
+
+
+def _for_each_collation[S](build: Callable[[str | None], S]) -> dict[str | None, S]:
+    """``build(collation)`` for each collation that names can be sorted in: the text of the
+    statement holds it, so a statement built once is one for each (the app finds out at start-up
+    which it has: ``db.detect_name_collation``; a request reads ``db.name_collation()``)."""
+    return {collation: build(collation) for collation in (None, NAME_COLLATION)}
 
 
 @dataclass(frozen=True)
@@ -215,18 +224,28 @@ async def list_boards(db: AsyncSession, user: User) -> list[BoardSummary]:
         .join(BoardMember, BoardMember.board_id == Board.id)
         .join(owner, owner.id == Board.owner_id)
         .where(BoardMember.user_id == user.id, Board.archived_at.is_(None))
-        .order_by((Board.owner_id == user.id).desc(), func.lower(Board.name), Board.id)
+        .order_by(
+            (Board.owner_id == user.id).desc(),
+            sorted_by_name(Board.name, name_collation()),
+            Board.id,
+        )
     )
     return [BoardSummary(*row) for row in rows]
 
 
 # Built once, like the item statements below. The order of list_boards: change them together.
-_BOARD_CHOICES = (
-    select(Board.id, Board.name, BoardMember.role)
-    .join(BoardMember, BoardMember.board_id == Board.id)
-    .where(BoardMember.user_id == _USER_ID, Board.archived_at.is_(None))
-    .order_by((Board.owner_id == _USER_ID).desc(), func.lower(Board.name), Board.id)
-)
+def _board_choices(collation: str | None) -> Select[Any]:
+    return (
+        select(Board.id, Board.name, BoardMember.role)
+        .join(BoardMember, BoardMember.board_id == Board.id)
+        .where(BoardMember.user_id == _USER_ID, Board.archived_at.is_(None))
+        .order_by(
+            (Board.owner_id == _USER_ID).desc(), sorted_by_name(Board.name, collation), Board.id
+        )
+    )
+
+
+_BOARD_CHOICES = _for_each_collation(_board_choices)
 
 
 async def list_board_choices(db: AsyncSession, user: User) -> list[BoardChoice]:
@@ -234,7 +253,7 @@ async def list_board_choices(db: AsyncSession, user: User) -> list[BoardChoice]:
     role and nothing more: one light statement, for the pages that only name the boards (the
     board page's switcher and its "Move to board" dialog) and have no use for the counts of
     ``list_boards``."""
-    rows = await db.execute(_BOARD_CHOICES, {"user_id": user.id})
+    rows = await db.execute(_BOARD_CHOICES[name_collation()], {"user_id": user.id})
     return [BoardChoice(*row) for row in rows]
 
 
@@ -335,12 +354,15 @@ def sort_choice(user: User, pref: CategorySortPref | None) -> SortChoice:
 
 # The user's own row for a category, when they have one (select_item_views joins it).
 _SORT_PREF = aliased(CategorySortPref, name="pref")
+
+
 # What each sort field orders by, ascending.
-_SORT_COLUMNS: dict[str, ColumnElement] = {
-    "name": func.lower(Item.name),
-    "created": Item.created_at,
-    "updated": Item.updated_at,
-}
+def _sort_columns(collation: str | None) -> dict[str, ColumnElement]:
+    return {
+        "name": sorted_by_name(Item.name, collation),
+        "created": Item.created_at,
+        "updated": Item.updated_at,
+    }
 
 
 # The account's default order, as the parameters the item statements take (the user's values go
@@ -350,7 +372,7 @@ _DEFAULT_DESCENDING = bindparam("sort_descending", type_=Boolean)
 _DEFAULT_OPEN_FIRST = bindparam("sort_open_first", type_=Boolean)
 
 
-def _item_order() -> list[ColumnElement]:
+def _item_order(collation: str | None) -> list[ColumnElement]:
     """How items are listed in a category, on the board page and in every fragment alike: in the
     user's order for the category (their row in ``_SORT_PREF``, which the statement joins), else
     in their account's default.
@@ -362,8 +384,9 @@ def _item_order() -> list[ColumnElement]:
     descending = func.coalesce(_SORT_PREF.descending, _DEFAULT_DESCENDING)
     open_first = func.coalesce(_SORT_PREF.open_first, _DEFAULT_OPEN_FIRST)
     order: list[ColumnElement] = [case((open_first, Item.is_done), else_=false())]
-    for name in SORT_FIELDS:  # a field without a column in _SORT_COLUMNS fails here, at import
-        column = _SORT_COLUMNS[name]
+    columns = _sort_columns(collation)
+    for name in SORT_FIELDS:  # a field without a column in _sort_columns fails here, at import
+        column = columns[name]
         order.append(case((and_(field == name, not_(descending)), column)))
         order.append(case((and_(field == name, descending), column)).desc())
     order.append(Item.id)
@@ -431,20 +454,26 @@ def _item_views_query(board_ref: ColumnElement | ScalarSelect) -> Select[Any]:
     )
 
 
-# Built once, here, with their order: building such a statement and working out its cache key
-# takes longer than running it (the order alone, 0.4 ms), and every board and category view runs
-# one. Per call only the values of the parameters change.
-_BOARD_ITEMS = (
-    _item_views_query(_BOARD_ID).where(Item.board_id == _BOARD_ID).order_by(*_item_order())
+# Built once, here, with their order (for each collation of names): building such a statement and
+# working out its cache key takes longer than running it (the order alone, 0.4 ms), and every
+# board and category view runs one. Per call only the values of the parameters change.
+_BOARD_ITEMS = _for_each_collation(
+    lambda collation: (
+        _item_views_query(_BOARD_ID)
+        .where(Item.board_id == _BOARD_ID)
+        .order_by(*_item_order(collation))
+    )
 )
 # An alias of its own: the subquery would correlate to the joined ``Category`` and have no table.
 _in_category = aliased(Category)
-_CATEGORY_ITEMS = (
-    _item_views_query(
-        select(_in_category.board_id).where(_in_category.id == _CATEGORY_ID).scalar_subquery()
+_CATEGORY_ITEMS = _for_each_collation(
+    lambda collation: (
+        _item_views_query(
+            select(_in_category.board_id).where(_in_category.id == _CATEGORY_ID).scalar_subquery()
+        )
+        .where(Item.category_id == _CATEGORY_ID)
+        .order_by(*_item_order(collation))
     )
-    .where(Item.category_id == _CATEGORY_ID)
-    .order_by(*_item_order())
 )
 
 
@@ -459,9 +488,9 @@ async def select_item_views(
     if (board_id is None) == (category_id is None):
         raise TypeError("Give exactly one of board_id and category_id.")
     if board_id is not None:
-        query, params = _BOARD_ITEMS, {"board_id": board_id}
+        query, params = _BOARD_ITEMS[name_collation()], {"board_id": board_id}
     else:
-        query, params = _CATEGORY_ITEMS, {"category_id": category_id}
+        query, params = _CATEGORY_ITEMS[name_collation()], {"category_id": category_id}
     rows = await db.execute(query, params | {"user_id": user.id} | _account_sort(user))
 
     authors: dict[int, Author] = {}  # one Author per person

@@ -24,7 +24,7 @@ from easytodo.boards.routes import router as boards_router
 from easytodo.config import Settings, get_settings
 from easytodo.content.prefs_routes import router as sort_router
 from easytodo.content.routes import router as content_router
-from easytodo.db import create_engine
+from easytodo.db import create_engine, detect_name_collation, use_name_collation
 from easytodo.errors import install_error_handlers
 from easytodo.log_filters import install_log_filters
 from easytodo.mail.mailer import get_mailer
@@ -84,6 +84,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine = create_engine(settings)
         app.state.engine = engine
         app.state.sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        # Once: whether names can be sorted in Polish alphabetical order (a UTF8 database).
+        use_name_collation(await detect_name_collation(engine))
         app.state.mailer = get_mailer(settings)
         app.state.attachment_store = AttachmentStore(settings.attachments_dir)
         # This worker's board sockets, and the LISTEN connection that feeds them every event.

@@ -537,7 +537,11 @@ make run              # http://localhost:8000, restarts on code changes
 - Run `make css` again after adding Tailwind classes to the templates. The Docker image builds the
   CSS by itself.
 - The tests use their own database (`easytodo_test` in the same container) and empty it after
-  each test.
+  each test. It must be UTF8, as the one in that container is (`postgres:17-alpine` creates it so):
+  names are sorted in Polish alphabetical order with the ICU collation `pl-x-icu`, which only a
+  UTF8 database has, and the tests of that order fail on a `SQL_ASCII` one (`createdb -E UTF8
+  -T template0 ...` makes a UTF8 database). The app itself falls back to the database's own order
+  and logs a warning when it starts on a database without that collation.
 - The browser tests render every page in the font Inter, whatever your system's default is
   (`backend/tests/e2e/fonts.conf`), because where a word wraps depends on the font. Install it
   first: `sudo apt-get install fonts-inter` (Debian, Ubuntu; CI does the same) or `brew install

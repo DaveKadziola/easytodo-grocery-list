@@ -4,9 +4,10 @@ from datetime import UTC, datetime
 
 import pytest
 from factories import DEFAULT_PASSWORD, create_board, create_category, create_item, create_user
-from helpers import NASTY, NASTY_ESCAPED, count_queries, login
+from helpers import NASTY, NASTY_ESCAPED, count_queries, login, require_polish_order
 from sqlalchemy import func, select
 
+from easytodo import db as database
 from easytodo.boards import routes, service
 from easytodo.boards.permissions import Action
 from easytodo.boards.service import BoardChoice, get_board_view, list_board_choices, list_boards
@@ -156,6 +157,29 @@ async def test_list_boards_puts_own_boards_first_then_sorts_by_name_in_one_query
         ("Cherry list", BoardRole.OWNER, 1, 0, "dave@example.com"),
         ("Apple club", BoardRole.EDITOR, 3, 2, "eve@example.com"),
     ]
+
+
+async def test_boards_sort_in_polish_alphabetical_order(db):
+    require_polish_order()
+    dave = await create_user(db, "dave@example.com")
+    for name in ("Zakupy", "Łódź", "Apteka"):
+        await create_board(db, dave, name)
+
+    summaries = await list_boards(db, dave)
+    choices = await list_board_choices(db, dave)
+
+    assert [s.board.name for s in summaries] == ["Apteka", "Łódź", "Zakupy"]
+    assert [c.name for c in choices] == ["Apteka", "Łódź", "Zakupy"]
+
+
+async def test_without_the_collation_boards_sort_in_the_databases_own_order(db, monkeypatch):
+    monkeypatch.setattr(database, "_name_collation", None)
+    dave = await create_user(db, "dave@example.com")
+    for name in ("Zakupy", "Łódź", "Apteka"):
+        await create_board(db, dave, name)
+
+    assert [s.board.name for s in await list_boards(db, dave)] == ["Apteka", "Zakupy", "Łódź"]
+    assert [c.name for c in await list_board_choices(db, dave)] == ["Apteka", "Zakupy", "Łódź"]
 
 
 async def test_board_page_lists_boards_with_one_light_statement(client_factory, db, monkeypatch):

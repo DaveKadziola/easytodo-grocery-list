@@ -13,6 +13,7 @@ import httpx
 from factories import DEFAULT_PASSWORD
 from sqlalchemy import event, text
 
+from easytodo.db import NAME_COLLATION, name_collation
 from easytodo.security.csrf import CSRF_COOKIE, CSRF_HEADER
 from easytodo.web import FLASH_COOKIE
 
@@ -122,3 +123,8 @@ async def wait_until_blocked_by(db, blocker_pid: int, timeout_s: float = 5.0) ->
             return
         await asyncio.sleep(0.02)
     raise AssertionError(f"no query started waiting for a lock held by backend {blocker_pid}")
+
+
+def require_polish_order() -> None:
+    """Fail, not skip, on a database that cannot sort names in Polish alphabetical order."""
+    assert name_collation() == NAME_COLLATION, "the test database must be UTF8, see README"
