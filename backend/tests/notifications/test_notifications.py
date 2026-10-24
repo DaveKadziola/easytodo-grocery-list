@@ -145,7 +145,9 @@ async def test_moving_a_category_notifies_each_member_of_both_boards_once(client
     assert await notifications_of(db, t.eve) == []
 
 
-async def test_a_moved_category_is_named_as_it_is_after_the_move(client_factory, db):
+async def test_a_moved_category_is_named_as_each_board_knew_it(client_factory, db):
+    """Renamed by the move (the name was taken on the target board, or just changed in the dialog):
+    the members of the board it left read the name it had there, the target board's the new one."""
     t = await two_boards(db)
     dairy = await create_category(db, t.home, "Dairy")
     eve_client = await signed_in(client_factory, "eve@example.com")
@@ -157,8 +159,39 @@ async def test_a_moved_category_is_named_as_it_is_after_the_move(client_factory,
     )
 
     assert r.status_code == 200
+    assert await notifications_of(db, t.frank) == [  # only on the source board
+        ("eve moved “Dairy” from “Home” to “Shop”.", t.home.id)
+    ]
+    for on_the_target in (t.owner, t.gina):
+        assert await notifications_of(db, on_the_target) == [
+            ("eve moved “Fresh dairy” from “Home” to “Shop”.", t.shop.id)
+        ]
+
+
+async def test_a_category_renamed_because_its_name_was_taken_is_told_by_both_names(
+    client_factory, db
+):
+    t = await two_boards(db)
+    dairy = await create_category(db, t.home, "Dairy")
+    await create_category(db, t.shop, "Dairy")
+    eve_client = await signed_in(client_factory, "eve@example.com")
+    r = await eve_client.post(
+        f"/categories/{dairy.id}/move", data={"board_id": t.shop.id, "name": "Dairy"}, headers=HX
+    )
+    assert r.status_code == 409  # the dialog offers a free name instead
+
+    r = await eve_client.post(
+        f"/categories/{dairy.id}/move",
+        data={"board_id": t.shop.id, "name": "Dairy (2)"},
+        headers=HX,
+    )
+
+    assert r.status_code == 200
     assert await notifications_of(db, t.frank) == [
-        ("eve moved “Fresh dairy” from “Home” to “Shop”.", t.home.id)
+        ("eve moved “Dairy” from “Home” to “Shop”.", t.home.id)
+    ]
+    assert await notifications_of(db, t.gina) == [
+        ("eve moved “Dairy (2)” from “Home” to “Shop”.", t.shop.id)
     ]
 
 

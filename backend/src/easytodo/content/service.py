@@ -389,6 +389,7 @@ async def move_category(
     # needs the boards as they are now, and the board it leaves by name.
     position = await _next_position(db, target.id)
     source_id = category.board_id
+    old_name = category.name
     source_name = await db.scalar(select(Board.name).where(Board.id == source_id))
     # Everyone who is on the target board is sent there (also those who are on both boards, once);
     # the rest of the source board's members, who only lose it, are sent to the board it left.
@@ -400,15 +401,26 @@ async def move_category(
         category.name = name
         category.position = position
         await db.flush()
-    said = {
-        "actor": user_display_name(user),
-        "category": name,
-        "source": source_name,
-        "target": target.name,
-    }
+    said = {"actor": user_display_name(user), "source": source_name, "target": target.name}
+    # Each board's members read the category as they knew it: the source board's by the name it
+    # had there (the move may have renamed it, e.g. to "Dairy (2)"), the target board's by its new one.
     told = [
-        *notify(db, on_target, NotificationKind.CATEGORY_MOVED, board_id=target.id, **said),
-        *notify(db, sorted(on_source), NotificationKind.CATEGORY_MOVED, board_id=source_id, **said),
+        *notify(
+            db,
+            on_target,
+            NotificationKind.CATEGORY_MOVED,
+            board_id=target.id,
+            category=name,
+            **said,
+        ),
+        *notify(
+            db,
+            sorted(on_source),
+            NotificationKind.CATEGORY_MOVED,
+            board_id=source_id,
+            category=old_name,
+            **said,
+        ),
     ]
     await commit_and_publish(
         db,
