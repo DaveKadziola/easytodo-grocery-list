@@ -41,8 +41,10 @@
   {#- relative: the bell's panel, on a phone, is as wide as the page and hangs from the header. #}
   <header class="relative border-b border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
     {#- Tight gaps on a phone keep it to one row; with more buttons (an admin's) it wraps rather
-        than scroll sideways. #}
-    <div class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-2 px-4 py-2 sm:gap-4">
+        than scroll sideways.
+        container: the max width of the page, for this row and for <main> below, so that the header
+        and the content stay in line on every page; a page that needs more room overrides the block. #}
+    <div class="mx-auto flex {% block container %}max-w-5xl{% endblock %} flex-wrap items-center justify-between gap-2 px-4 py-2 sm:gap-4">
       <div class="flex min-w-0 items-center gap-2 sm:gap-3">
         {#- The name is for screen readers on a phone: the header must fit one row there, with the bell. #}
         <a href="/boards" class="flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-2 text-lg font-semibold">
@@ -74,7 +76,7 @@
       {% endif %}
     </div>
   </header>
-  <main class="mx-auto max-w-5xl px-4 py-8">
+  <main class="mx-auto {{ self.container() }} px-4 py-8">
     {% block content %}{% endblock %}
   </main>
   {% include "partials/_toast.html" %}

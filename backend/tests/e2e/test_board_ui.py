@@ -795,6 +795,68 @@ def test_categories_flow_into_columns(signed_in_page, seed, user, width, columns
     assert column_count == columns
 
 
+# One range per word of a category title: its text node's offsets, then how many line boxes the word
+# has. A word that fits on a line has one; a word the browser broke in the middle has two.
+LINES_OF_EACH_WORD = """(heading) => {
+  const walker = document.createTreeWalker(heading, NodeFilter.SHOW_TEXT);
+  const lines = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    for (const word of node.data.matchAll(/\\S+/g)) {
+      const range = document.createRange();
+      range.setStart(node, word.index);
+      range.setEnd(node, word.index + word[0].length);
+      lines.push([word[0], range.getClientRects().length]);
+    }
+  }
+  return lines;
+}"""
+
+
+@pytest.mark.parametrize("width", [375, 768, 1024, 1280, 1440])
+def test_long_category_title_does_not_break_a_word(signed_in_page, seed, user, width, open_board):
+    title = "Artykuły gospodarstwa domowego"
+    board_id = seed_board(seed, user, {title: ["Płyn do naczyń"], "Dairy": []})
+    page = signed_in_page(viewport={"width": width, "height": 900})
+
+    open_board(page, board_id)
+
+    section = category(page, title)
+    buttons = section.locator("div.flex > .btn-icon, div.flex > details > summary.btn-icon")
+    assert buttons.count() == 4  # the handle, hide, sort and ⋮: an editor's four buttons
+    for button in buttons.all():
+        box = button.bounding_box()
+        assert box is not None
+        assert box["width"] >= 44
+        assert box["height"] >= 44
+    broken = [
+        word
+        for word, lines in section.get_by_role("heading", name=title).evaluate(LINES_OF_EACH_WORD)
+        if lines != 1
+    ]
+    assert broken == [], f"at {width} px these words are split over lines: {broken}"
+
+
+@pytest.mark.parametrize("width", [768, 1280, 1440])
+@pytest.mark.parametrize("page_name", ["board", "board list"])
+def test_header_and_content_have_the_same_width(
+    signed_in_page, seed, user, width, page_name, open_board
+):
+    """The board page is wider than the others (room for three columns); its header goes with it."""
+    board_id = seed_board(seed, user, {"Dairy": []})
+    page = signed_in_page(viewport={"width": width, "height": 900})
+
+    if page_name == "board":
+        open_board(page, board_id)
+    else:
+        page.goto("/boards")
+
+    header = page.locator("header > div").bounding_box()
+    content = page.locator("main").bounding_box()
+    assert header is not None
+    assert content is not None
+    assert (header["x"], header["width"]) == (content["x"], content["width"])
+
+
 TOGGLED = re.compile(r"/items/\d+/toggle$")
 MOVED = re.compile(r"/items/\d+/move$")
 ORDER_SAVED = re.compile(r"/categories/order$")
