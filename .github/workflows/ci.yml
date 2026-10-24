@@ -89,18 +89,7 @@ jobs:
       - run: docker compose build
       - run: docker compose up -d --wait
       - name: Smoke test
-        run: |
-          curl -fsS localhost:8000/healthz
-          curl -fsS -o /dev/null localhost:8000/login
-          curl -fsS -o /dev/null localhost:8000/static/css/app.css
-          docker compose exec -T app alembic current | grep -F "(head)"
-          migrations_run=$(docker compose logs app | grep -c "Running upgrade")
-          test "$migrations_run" -ge 1
-          docker compose restart app
-          docker compose up -d --wait
-          test "$(docker compose logs app | grep -c 'Running upgrade')" -eq "$migrations_run"
-      - name: The app can write to the attachments volume
-        run: docker compose exec -T app test -w /app/backend/data/attachments
+        run: sh scripts/docker-smoke.sh
       - name: App and database logs
         if: failure()
         run: docker compose logs

@@ -2,6 +2,7 @@ import asyncio
 import importlib.util
 import json
 import random
+import re
 import statistics
 import sys
 from contextlib import asynccontextmanager
@@ -43,6 +44,27 @@ def test_percentile_agrees_with_statistics_quantiles_on_unsorted_data():
 def test_percentile_of_empty_data_is_an_error():
     with pytest.raises(ValueError):
         percentile([], 50)
+
+
+@pytest.mark.parametrize("p", [-1, 101])
+def test_percentile_rejects_p_outside_0_to_100(p):  # triage #9
+    with pytest.raises(ValueError, match="between 0 and 100"):
+        percentile([1.0, 2.0], p)
+
+
+def test_parse_args_checks_credentials_and_realistic(capsys):  # triage #9
+    base = ["--base-url", "http://bench.test"]
+    with pytest.raises(SystemExit):
+        bench.parse_args(["--target", "v2", *base])
+    assert "--target v2 requires --email and --password" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        bench.parse_args(["--target", "legacy", "--realistic", *base])
+    assert "--realistic requires --target v2" in capsys.readouterr().err
+
+    credentials = ["--email", "b@example.com", "--password", "pw"]
+    assert bench.parse_args(["--target", "v2", *base, *credentials]).realistic is False
+    assert bench.parse_args(["--target", "v2", "--realistic", *base, *credentials]).realistic
+    assert bench.parse_args(["--target", "legacy", *base]).realistic is False
 
 
 async def test_measure_discards_ten_warmup_requests():
@@ -291,6 +313,155 @@ async def test_v2_event_latencies_reject_an_event_of_another_board(monkeypatch):
         seeded = await target.seed(categories=1, items=3)
         with pytest.raises(RuntimeError, match="board 7"):
             await target.event_latencies(iter(seeded.item_ids * 10), trials=5)
+
+
+async def test_v2_event_latencies_name_the_board_and_item_on_a_timeout(monkeypatch):  # triage #151
+    socket = FakeSocket()  # stays silent: no event ever arrives
+
+    @asynccontextmanager
+    async def fake_connect(url, *, origin, additional_headers):
+        yield socket
+
+    monkeypatch.setattr(bench, "connect", fake_connect)
+    monkeypatch.setattr(bench, "EVENT_TIMEOUT_S", 0.05)
+    client, _ = _recording_client(_v2_handler())
+    second, _ = _recording_client(_v2_handler())
+    async with client, second:
+        target = bench.V2Target(client, second, email="b@example.com", password="pw")
+        seeded = await target.seed(categories=1, items=3)
+        with pytest.raises(
+            RuntimeError, match=r"No event on board 7 for item 1 within 0\.05 s"
+        ) as raised:
+            await target.event_latencies(iter(seeded.item_ids), trials=5)
+    assert raised.value.__suppress_context__  # `from None`: no TimeoutError chained under it
+
+
+def _realistic_handler(
+    *, invite_form: dict, attachments: list[httpx.Request], accept_status: int = 303
+):
+    """One server stub for the owner's, the second and the member's client: board 7 whose items
+    are numbered in the order they were added, the invite page of ``/invite/tok``."""
+    sessions = iter(f"session-{n}" for n in range(1, 100))
+    items: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        route = (request.method, path)
+        if request.method == "POST":  # what the browser sends on every change
+            assert request.headers.get("x-csrf-token") == "csrf" or path in ("/login", "/register")
+            assert request.headers["origin"] == "http://bench.test"
+        if route in {("GET", "/login"), ("GET", "/register")}:
+            return httpx.Response(200, headers={"set-cookie": "easytodo_csrf=csrf; Path=/"})
+        if route in {("POST", "/login"), ("POST", "/register")}:
+            cookie = f"easytodo_session={next(sessions)}; Path=/"
+            return httpx.Response(303, headers={"location": "/", "set-cookie": cookie})
+        if route == ("POST", "/invite/tok/accept"):
+            return httpx.Response(accept_status, headers={"location": "/boards/7"})
+        if route == ("POST", "/boards"):
+            return httpx.Response(303, headers={"location": "/boards/7"})
+        if route == ("POST", "/boards/7/invites"):
+            invite_form.update(parse_qs(request.content.decode()))
+            link = '<input id="invite-link" value="http://public.test/invite/tok" readonly>'
+            return httpx.Response(201, text=link)
+        if route == ("POST", "/boards/7/categories"):
+            return httpx.Response(201, text='<section id="category-100"></section>')
+        if request.method == "POST" and path.endswith("/items"):
+            items.append(len(items) + 1)
+            return httpx.Response(200, text="<section></section>")
+        if request.method == "POST" and path.endswith("/checklist"):
+            return httpx.Response(200, text="<div></div>")
+        if request.method == "POST" and path.endswith("/attachments"):
+            attachments.append(request)
+            return httpx.Response(200, text='<li data-attachment-id="1"></li>')
+        if route == ("GET", "/boards/7"):
+            return httpx.Response(200, text="".join(f'<li id="item-{i}"></li>' for i in items))
+        return httpx.Response(500, text=f"unexpected {request.method} {path}")
+
+    return handler
+
+
+def _routes(seen: list[httpx.Request]) -> list[tuple[str, str]]:
+    return [(r.method, r.url.path) for r in seen]
+
+
+async def test_v2_realistic_seed_shares_the_board_and_adds_checklists_and_attachments():
+    invite_form: dict = {}
+    attachments: list[httpx.Request] = []
+    handler = _realistic_handler(invite_form=invite_form, attachments=attachments)
+    owner, owner_seen = _recording_client(handler)
+    second, _ = _recording_client(handler)
+    member, member_seen = _recording_client(handler)
+    async with owner, second, member:
+        target = bench.V2Target(
+            owner,
+            second,
+            email="bench@example.com",
+            password="bench-password-123",
+            member_client=member,
+        )
+        seeded = await target.seed(categories=2, items=10)
+
+    assert seeded.category_ids == [100, 100]
+    assert len(seeded.item_ids) == 20  # item-1 ... item-20, as the board page lists them
+
+    # The member signs up through the invite page (the host of the link is not used) and accepts.
+    member_routes = _routes(member_seen)
+    assert member_routes[:3] == [
+        ("GET", "/register"),
+        ("POST", "/register"),
+        ("POST", "/invite/tok/accept"),
+    ]
+    assert member_seen[0].url.params["next"] == "/invite/tok"
+    assert member_seen[1].url.params["next"] == "/invite/tok"
+    assert {r.url.host for r in member_seen} == {"bench.test"}
+    form = parse_qs(member_seen[1].content.decode())
+    assert re.fullmatch(r"bench-member-[0-9a-f]{8}@example\.com", form["email"][0])
+    assert form["password"] == ["bench-password-123"] and form["csrf_token"] == ["csrf"]
+    # A link for an editor, without an e-mail address.
+    assert invite_form["role"] == ["editor"] and "email" not in invite_form
+
+    # The two accounts add one task each in turn: the member the ones with an odd number.
+    owner_item_posts = [
+        r for r in owner_seen if r.method == "POST" and r.url.path.endswith("/items")
+    ]
+    member_item_posts = [r for r in member_seen if r.url.path.endswith("/items")]
+    assert (len(owner_item_posts), len(member_item_posts)) == (10, 10)
+    assert [parse_qs(r.content.decode())["name"][0] for r in member_item_posts] == [
+        f"item {c}-{i}" for c in range(2) for i in (1, 3, 5, 7, 9)
+    ]
+
+    # Every 10th task gets 5 checklist entries and a file, from the owner.
+    checklist_paths = [r.url.path for r in owner_seen if r.url.path.endswith("/checklist")]
+    assert checklist_paths == ["/items/1/checklist"] * 5 + ["/items/11/checklist"] * 5
+    assert [r.url.path for r in attachments] == ["/items/1/attachments", "/items/11/attachments"]
+    assert all(r.headers["content-type"].startswith("multipart/form-data") for r in attachments)
+    assert b'filename="note.txt"' in attachments[0].content
+    assert b"EasyToDo bench\n" in attachments[0].content
+    assert attachments[0].headers["x-csrf-token"] == "csrf"
+
+
+async def test_v2_realistic_seed_names_the_failed_step_when_joining(monkeypatch):
+    handler = _realistic_handler(invite_form={}, attachments=[], accept_status=403)
+    owner, _ = _recording_client(handler)
+    second, _ = _recording_client(handler)
+    member, _ = _recording_client(handler)
+    async with owner, second, member:
+        target = bench.V2Target(
+            owner, second, email="b@example.com", password="pw", member_client=member
+        )
+        with pytest.raises(RuntimeError, match=r"accepting the invite.*HTTP 403"):
+            await target.seed(categories=1, items=2)
+
+
+async def test_v2_seed_without_a_member_client_is_the_plain_seed():
+    handler = _realistic_handler(invite_form={}, attachments=[])
+    owner, owner_seen = _recording_client(handler)
+    second, _ = _recording_client(handler)
+    async with owner, second:
+        target = bench.V2Target(owner, second, email="b@example.com", password="pw")
+        await target.seed(categories=1, items=2)
+    paths = [r.url.path for r in owner_seen]
+    assert not any(p.endswith(("/invites", "/checklist", "/attachments")) for p in paths)
 
 
 class RecordingTarget:

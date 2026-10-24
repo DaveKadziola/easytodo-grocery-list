@@ -17,6 +17,7 @@ from sqlalchemy import DefaultClause, delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from easytodo.boards.service import get_board_view
 from easytodo.models import (
     ATTACHMENT_KINDS,
     RETENTION_CHOICES,
@@ -402,4 +403,92 @@ async def test_downgrade_to_0001_keeps_archived_categories_under_unique_names(db
         assert names == [f"Dairy (archived {a})", f"Dairy (archived {b})", "Dairy"]
     finally:
         await db.rollback()  # an open transaction would block the ALTER of the upgrade
+        await asyncio.to_thread(command.upgrade, cfg, "head")
+
+
+async def _insert_v2_0_data(engine: AsyncEngine) -> tuple[int, int]:
+    """What a v2.0 install holds, as raw SQL against the 0001 schema (the models are v2.1's by
+    now): an owner, bob who edits the owner's board, and three items in one category, the done one
+    added first. Returns the ids of the owner and of the board."""
+    async with engine.begin() as conn:
+        ids = []
+        for email in ("owner@example.com", "bob@example.com"):
+            ids.append(
+                await conn.scalar(
+                    text("INSERT INTO users (email, password_hash) VALUES (:e, 'x') RETURNING id"),
+                    {"e": email},
+                )
+            )
+        owner_id, bob_id = ids
+        board_id = await conn.scalar(
+            text("INSERT INTO boards (name, owner_id) VALUES ('Groceries', :o) RETURNING id"),
+            {"o": owner_id},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO board_members (board_id, user_id, role)"
+                " VALUES (:b, :o, 'owner'), (:b, :u, 'editor')"
+            ),
+            {"b": board_id, "o": owner_id, "u": bob_id},
+        )
+        category_id = await conn.scalar(
+            text(
+                "INSERT INTO categories (board_id, name, position)"
+                " VALUES (:b, 'Fruit', 0) RETURNING id"
+            ),
+            {"b": board_id},
+        )
+        for name, done in (("banana", True), ("Apple", False), ("cherry", False)):
+            await conn.execute(
+                text(
+                    "INSERT INTO items (board_id, category_id, name, is_done, done_at)"
+                    " VALUES (:b, :c, :n, :d, CASE WHEN :d THEN now() END)"
+                ),
+                {"b": board_id, "c": category_id, "n": name, "d": done},
+            )
+    return owner_id, board_id
+
+
+async def test_upgrade_from_0001_keeps_v2_0_data(db, _db_engine: AsyncEngine):
+    cfg = alembic_cfg()
+    await asyncio.to_thread(command.downgrade, cfg, "0001")
+    try:
+        owner_id, board_id = await _insert_v2_0_data(_db_engine)
+        await asyncio.to_thread(command.upgrade, cfg, "head")
+
+        # The accounts get the defaults, and nothing is archived, deleted or attributed.
+        accounts = await db.execute(
+            select(
+                User.display_name,
+                User.archive_retention_days,
+                User.sort_open_first,
+                User.sort_field,
+                User.sort_descending,
+            )
+        )
+        assert [tuple(row) for row in accounts] == [(None, 30, True, "name", False)] * 2
+        assert await db.scalar(select(Board.archived_at).where(Board.id == board_id)) is None
+        assert (await db.scalars(select(Category.archived_at))).all() == [None]
+        assert (await db.execute(select(Item.created_by, Item.deleted_at))).all() == [
+            (None, None)
+        ] * 3
+
+        # The board looks as it did: open tasks first, by name; nobody is shown as the author.
+        owner = await db.get(User, owner_id)
+        view = await get_board_view(db, board_id, owner)
+        items = view.categories[0].items
+        assert [iv.item.name for iv in items] == ["Apple", "cherry", "banana"]
+        assert not any(iv.author or iv.show_author for iv in items)
+        assert [iv.item.is_done for iv in items] == [False, False, True]
+
+        # The way back to v2.0 with its data, and forward again.
+        await db.rollback()  # an open transaction would block the ALTER
+        await asyncio.to_thread(command.downgrade, cfg, "0001")
+        async with _db_engine.connect() as conn:
+            names = await conn.scalars(text("SELECT name FROM items ORDER BY id"))
+            assert names.all() == ["banana", "Apple", "cherry"]
+        await asyncio.to_thread(command.upgrade, cfg, "head")
+        assert await _count(db, Item) == 3
+    finally:
+        await db.rollback()
         await asyncio.to_thread(command.upgrade, cfg, "head")
