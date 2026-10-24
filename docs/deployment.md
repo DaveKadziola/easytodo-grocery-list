@@ -128,3 +128,6 @@ A tunnel connector on your side opens an outgoing connection to the provider. Th
   ```
 
   With the proxy, run `docker compose --profile proxy up -d --build` instead, or set `COMPOSE_PROFILES=proxy` in `.env`. Database migrations run when the app starts.
+
+  **From v2.0 to v2.1:** the update adds a volume, `attachments` (`easytodo_attachments`), for the files attached to items. docker compose creates it by itself on the first start; add the `tar` line of the backup above to your backup job at once, because the database dump alone does not hold the files. Then go through [Upgrading from v2.0](../README.md#upgrading-from-v20) in the README: it also says how to go back to v2.0.
+- [ ] **Memory for photos.** To make a thumbnail the app decodes the picture, which takes memory in proportion to its size in pixels, not to the size of its file, so `EASYTODO_ATTACHMENT_MAX_BYTES` does not limit it. The app refuses pictures of more than about 89 megapixels (Pillow's default limit): one that large takes about 270 MB to decode, and a WebP of up to twice that many pixels can briefly take several hundred MB as it is opened, before it is refused, even when the file is small. The compose file sets no memory limit. If you set one for the `app` service (`mem_limit: 512m`, say), a very large picture can get the container killed and restarted: use at least 1g.
