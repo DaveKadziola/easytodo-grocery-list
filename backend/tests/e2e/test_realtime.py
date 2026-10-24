@@ -114,6 +114,12 @@ def wait_for_message(page: Page, messages: list[dict], type_: str) -> None:
     )
 
 
+def accept_discarding(page: Page) -> None:
+    """Closing the sheet over an edited name asks "Discard your changes to this item?": say yes
+    to the next question (Playwright would dismiss it, and the sheet would stay)."""
+    page.once("dialog", lambda question: question.accept())
+
+
 def test_second_browser_sees_new_item_within_2s(two_logged_in_pages):
     a, b = two_logged_in_pages
 
@@ -185,6 +191,7 @@ def test_remote_change_waits_for_the_item_modal_to_close(two_logged_in_pages):
 
     expect(dialog.get_by_label("Name")).to_have_value("Oat milk")
     expect(items_of(b, "Dairy")).to_have_text([re.compile("Milk")])  # held back while editing
+    accept_discarding(b)
     dialog.get_by_role("button", name="Cancel").click()
     expect(items_of(b, "Dairy")).to_have_text([re.compile("Bread"), re.compile("Milk")])
 
@@ -356,6 +363,7 @@ def test_open_item_details_refresh_live_while_the_board_waits(
     expect(name).to_have_value("Oat milk")  # what is being typed stays
     expect(name).to_be_focused()
     expect(page.locator(f"#item-{milk_id}-name")).to_have_text("Milk")  # the board waits
+    accept_discarding(page)
     dialog.get_by_role("button", name="Cancel").click()
     expect(page.get_by_role("button", name="Whole milk", exact=True)).to_be_visible(
         timeout=LIVE_UPDATE_MS
@@ -943,6 +951,7 @@ def test_role_change_reload_waits_for_the_item_modal(
 
     assert page.evaluate("window.notReloaded") is True  # not while the modal is open
     expect(dialog.get_by_label("Name")).to_have_value("Oat milk")
+    accept_discarding(page)
     dialog.get_by_role("button", name="Cancel").click()
     # Reloaded as a viewer: no "Add item" any more (the name's button is there for a viewer too).
     expect(page.get_by_placeholder("Add item")).to_have_count(0, timeout=LIVE_UPDATE_MS)
@@ -1047,3 +1056,21 @@ def test_sort_order_is_personal_on_a_shared_board(
         [re.compile(name) for name in ("Butter", "Cheese", "Cream", "Milk")],
         timeout=LIVE_UPDATE_MS,
     )
+
+
+def test_a_failing_live_refresh_shows_no_toast(logged_in_page, seed, user):
+    """The board is fetched again on every (re)connect, and again for an event: a request the
+    user did not make. When it fails, the header's status speaks, not a toast."""
+    board_id = seed_two_categories(seed, user)
+    page = logged_in_page
+    page.add_init_script(
+        "window.failedRequests = 0;"
+        "document.addEventListener('htmx:responseError', () => { window.failedRequests += 1; });"
+    )  # (registered before the page's own listeners: seen first)
+    page.route(re.compile(r"/boards/\d+/content$"), lambda route: route.fulfill(status=503))
+    page.goto(f"/boards/{board_id}")
+
+    wait_until(page, lambda: page.evaluate("window.failedRequests"), "the 503 being handled")
+    page.wait_for_timeout(SETTLE_MS)
+    assert page.locator("#toasts .toast").count() == 0  # (not expect: it would wait for them to go)
+    expect(category(page, "Dairy")).to_be_visible()  # the page as rendered stays

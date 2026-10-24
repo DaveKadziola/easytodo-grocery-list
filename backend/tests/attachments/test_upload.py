@@ -854,7 +854,7 @@ async def test_details_and_tile_markup(editor_client, viewer_client, item, board
     editor = (await editor_client.get(f"/items/{item.id}/details", headers=HX)).text
 
     assert f'<li data-attachment-id="{note}"' in editor
-    assert 'class="inline-flex min-h-11 items-center gap-2">' in editor
+    assert 'class="inline-flex min-h-11 max-w-full items-center gap-2">' in editor
     assert f'href="/attachments/{note}"' in editor
     assert "14 Bytes" in editor
     assert (

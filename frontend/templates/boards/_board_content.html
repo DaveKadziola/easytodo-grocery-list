@@ -1,6 +1,7 @@
 {# The whole board: its header and its categories in position order. Swapped as a whole by
    GET /boards/{id}/content (and after an item moves), so the name and the controls stay current
-   too. One column on a phone, two on a tablet, three from 1280 px (CSS columns).
+   too. One column on a phone (up to 767 px, landscape included), two from 768 px, three from 1280 px
+   (CSS columns; two earlier would leave a title 76 to 139 px for its words beside four 44 px buttons).
    Context: view (BoardView); sets role for the included fragments. -#}
 {% set role = view.role %}
 {% set can_edit = can(role, Action.EDIT_CONTENT) %}
@@ -25,7 +26,7 @@
     {% endif %}
   </div>
 
-  <div id="categories" class="gap-6 sm:columns-2 xl:columns-3"{% if can_edit %} data-sortable-categories{% endif %}>
+  <div id="categories" class="gap-6 md:columns-2 xl:columns-3"{% if can_edit %} data-sortable-categories{% endif %}>
     {#- Shown only while it is the only child: until the first category arrives (the "New category"
         dialog adds it here, the board is not reloaded) and again once the last one is archived. #}
     <p class="mb-6 hidden text-slate-600 dark:text-slate-400 only:block">{% if can_edit %}Add your first category{% else %}This board has no categories yet.{% endif %}</p>

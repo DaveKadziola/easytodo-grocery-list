@@ -107,14 +107,17 @@
 
   // What the user just did did not happen (and board.js has undone a tick): no answer at all, or
   // an error answer that brings no toast of its own (a proxy's 502, an unexpected 500).
-  // Not for a live update's request (realtime.js marks it), which the user did not start: the
-  // header's connection status covers that.
+  // Not for the page's own background requests (realtime.js marks a live update's, notifications.js
+  // the bell's: xhr.easytodoBackground), which the user did not start: the header's connection
+  // status covers them.
   document.addEventListener("htmx:sendError", (event) => {
     if (event.detail.xhr && event.detail.xhr.easytodoBackground) return;
     showToast("error", "Could not reach the server. Try again.");
   });
   document.addEventListener("htmx:responseError", (event) => {
-    if (!event.detail.xhr.getResponseHeader("HX-Trigger")) {
+    const { xhr } = event.detail;
+    if (xhr.easytodoBackground) return;
+    if (!xhr.getResponseHeader("HX-Trigger")) {
       showToast("error", "Something went wrong. Try again.");
     }
   });

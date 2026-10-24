@@ -259,6 +259,58 @@ def test_bell_fits_a_phone(signed_in_page, seed, user, open_board):
     assert too_small_targets(page) == []  # the bell, "Open board", and the rest of the header
 
 
+LANDSCAPE_PHONE = {"viewport": {"width": 667, "height": 375}, "is_mobile": True, "has_touch": True}
+TABLET = {"viewport": {"width": 768, "height": 1024}, "is_mobile": True, "has_touch": True}
+
+
+@pytest.mark.parametrize("device", [LANDSCAPE_PHONE, TABLET], ids=["landscape phone", "tablet"])
+def test_bell_panel_fits_a_landscape_phone_and_a_tablet_for_an_admin(signed_in_as, seed, device):
+    """The admin's header has the most buttons and wraps at 667 px: a panel that hangs from the
+    bell (right-aligned) would lose its left part off the screen; up to 767 px it hangs from the
+    header, as on a phone, and from 768 px from the bell."""
+    admin = seed(lambda db: create_user(db, "admin@example.com", is_admin=True))
+    seed_notifications(seed, admin, unread=2, read=3)
+    page = signed_in_as(admin.email, **device)
+    wait_until_live(page)
+    expect(badge(page)).to_have_text("2 unread")
+
+    bell(page).tap()
+
+    panel = page.locator("#notifications-panel")
+    expect(panel).to_contain_text("vic joined")
+    box = panel.bounding_box()
+    assert box is not None
+    assert box["x"] >= 0 and box["x"] + box["width"] <= device["viewport"]["width"], box
+    header = page.locator("body > header").bounding_box()
+    assert header is not None
+    if device is LANDSCAPE_PHONE:  # hanging from the header
+        assert box["y"] >= header["y"] + header["height"] - 1, (box, header)
+    assert page.evaluate("document.scrollingElement.scrollWidth <= window.innerWidth")
+    assert too_small_targets(page) == []
+
+
+COUNT_ERRORS = """
+window.failedRequests = 0;
+document.addEventListener("htmx:responseError", () => { window.failedRequests += 1; });
+"""  # (registered before the page's own listeners: seen first)
+
+
+def test_a_failing_request_of_the_bell_shows_no_toast(logged_in_page):
+    """The badge is the page's own errand: when it fails, the user did nothing wrong (the header's
+    status says the rest), but a request the user makes still gets its toast."""
+    page = logged_in_page
+    page.add_init_script(COUNT_ERRORS)
+    page.route("**/notifications/badge", lambda route: route.fulfill(status=503, body="down"))
+    page.reload()
+    wait_until(page, lambda: page.evaluate("window.failedRequests"), "the 503 being handled")
+    page.wait_for_timeout(300)  # long enough for a toast that is (wrongly) shown for it
+    assert page.locator("#toasts .toast").count() == 0  # (not expect: it would wait for them to go)
+
+    page.route("**/probe", lambda route: route.fulfill(status=500, body="down"))
+    page.evaluate("htmx.ajax('GET', '/probe', {target: 'body', swap: 'none'})")
+    expect(page.locator("#toasts")).to_have_text("Something went wrong. Try again.")
+
+
 @pytest.mark.parametrize("scheme", ["light", "dark"])
 def test_bell_and_panel_stay_readable(signed_in_page, seed, user, scheme):
     seed_notifications(seed, user, unread=2, read=2)

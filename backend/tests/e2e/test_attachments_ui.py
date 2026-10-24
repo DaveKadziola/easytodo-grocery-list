@@ -22,7 +22,8 @@ from easytodo.attachments.routes import PDF_CSP
 pytestmark = pytest.mark.e2e
 
 UPLOADED = re.compile(r"/items/\d+/attachments$")
-LONG_NAME = "Quarterly-report-with-a-name-that-has-no-place-to-break-2026-final-v2.txt"
+# No hyphen, space or other place to break at: it must wrap anywhere (wrap-anywhere).
+LONG_NAME = "Quarterly_report_with_a_name_that_has_no_place_to_break_2026_final_v2.txt"
 
 
 def file_of(name: str, mime_type: str, content: bytes) -> dict:
@@ -192,6 +193,11 @@ def test_attachment_section_fits_a_phone(logged_in_page_mobile, seed, user, open
     assert too_small_targets(page) == []  # the whole page, the modal's controls too
     at_least_44px(deletes)
     at_least_44px(dialog.locator("li[data-attachment-id] a"))
+    # A link never reaches under its Delete button, however long (and unbreakable) its name is.
+    for row in files.all():
+        link, delete = row.locator("a").bounding_box(), row.get_by_role("button").bounding_box()
+        assert link is not None and delete is not None
+        assert link["x"] + link["width"] <= delete["x"], row.inner_text()
     at_least_44px(dialog.get_by_label("Add a file"))
     at_least_44px(dialog.get_by_role("button", name="Upload", exact=True))
     assert page.evaluate("document.scrollingElement.scrollWidth <= window.innerWidth")

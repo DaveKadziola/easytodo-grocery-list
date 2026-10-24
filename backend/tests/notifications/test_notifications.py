@@ -408,7 +408,7 @@ async def test_signed_in_pages_load_the_bell_after_htmx(client_factory, db, team
                 '[&::-webkit-details-marker]:hidden" aria-label="Notifications" '
                 'aria-describedby="notifications-badge">'
             ) in html
-            assert re.search(r'<details id="notifications" class="sm:relative">\s*<summary', html)
+            assert re.search(r'<details id="notifications" class="md:relative">\s*<summary', html)
             # The badge loads itself: rendering the page asks the database nothing for the bell.
             assert (
                 '<span id="notifications-badge" hx-get="/notifications/badge" hx-trigger="load" '

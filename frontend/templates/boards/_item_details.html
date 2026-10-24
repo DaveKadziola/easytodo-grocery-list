@@ -75,13 +75,13 @@
       {% set file = view.attachment %}
       <li data-attachment-id="{{ file.id }}" class="flex items-start gap-2">
         <div class="min-w-0 flex-1">
-          <a href="/attachments/{{ file.id }}{% if file.kind == 'pdf' %}/file{% endif %}"{% if file.kind == "pdf" %} target="_blank" rel="noopener"{% endif %} class="inline-flex min-h-11 items-center gap-2">
+          <a href="/attachments/{{ file.id }}{% if file.kind == 'pdf' %}/file{% endif %}"{% if file.kind == "pdf" %} target="_blank" rel="noopener"{% endif %} class="inline-flex min-h-11 max-w-full items-center gap-2">
             {% if file.kind == "image" %}
             <img src="/attachments/{{ file.id }}/thumb" alt="" width="44" height="44" loading="lazy" class="size-11 shrink-0 rounded object-cover">
             {% else %}
             <span class="inline-flex size-11 shrink-0 items-center justify-center text-2xl" aria-hidden="true">{% if file.kind == "pdf" %}📕{% else %}📄{% endif %}</span>
             {% endif %}
-            <span class="link min-w-0 break-words">{{ file.filename }}</span>
+            <span class="link min-w-0 wrap-anywhere">{{ file.filename }}</span>
           </a>
           <p class="text-sm text-slate-600 dark:text-slate-400">{{ file.size_bytes|filesizeformat(true) }} · {% if view.uploader %}{{ view.uploader.name }} · {% endif %}<time datetime="{{ file.created_at.isoformat() }}" class="whitespace-nowrap">{{ file.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</time></p>
         </div>

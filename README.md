@@ -124,10 +124,14 @@ invite and reset links (`/invite/[redacted]`); the health check is time-bound, a
 warns at start when `EASYTODO_FORWARDED_ALLOW_IPS` trusts everyone but the port is not bound to
 127.0.0.1 ([docs/deployment.md](docs/deployment.md)).
 
-One limit: on a Linux desktop whose default sans-serif font is DejaVu Sans, a word of about 12 or
-more letters in a category title can still wrap mid-word, as in v2.0 (a 12-letter word is about 143
-px wide in DejaVu Sans Bold; the title has 135 to 141 px on a phone and on a screen from 1280 px
-wide; in Inter, Liberation Sans and most other fonts it fits).
+One limit: a long word in a category title can still wrap mid-word where the title is narrow. On a
+phone the title has 240 px less than the screen is wide (120 px at 360 px, 135 px at 375 px, 519 px
+at 767 px: landscape phones have one column, so room), from 768 px up to about 775 px it has 140 to
+143 px (two columns), and from 1280 px it has 141 px (three columns). A 12-letter word such as
+"gospodarstwa" is about 125 px wide in Inter, 122 px in Liberation Sans and 143 px in DejaVu Sans
+(bold, 18 px), the default font of some Linux desktops: so in DejaVu Sans it can split on phones
+narrower than 383 px, from 768 to 774 px and from 1280 px up, and in Inter on phones narrower than
+365 px; longer words need more room than that.
 
 ### Upgrading from v2.0
 

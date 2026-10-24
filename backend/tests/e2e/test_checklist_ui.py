@@ -440,6 +440,7 @@ def test_a_rename_is_saved_with_enter_and_unsaved_text_stays_until_the_modal_clo
 
     expect(dialog.get_by_role("checkbox", name="Flour")).to_be_checked()
     expect(eggs).to_have_value("Free-range eggs")  # kept across the swap
+    page.once("dialog", lambda question: question.accept())  # "Discard your changes ...?"
     page.keyboard.press("Escape")
     dialog = open_item(page, "Milk")
     expect(dialog.get_by_label("Edit Eggs")).to_have_value("Eggs")  # but not across the closing

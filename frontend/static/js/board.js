@@ -628,6 +628,23 @@
     becameIdle();
   }
 
+  // What the open item's details hold that is not saved, as the phrases of a question: a file
+  // chosen and not uploaded, text typed into "Add entry", a checklist entry whose name was edited
+  // (Enter saves it). Closing the sheet throws all of that away; so would Save, which saves the
+  // name, the description and the category, not these.
+  function unsavedDetails(slot) {
+    const found = [];
+    const file = slot.querySelector("#attachment-file");
+    if (file && file.files.length > 0) found.push("the file you have not uploaded");
+    const entry = slot.querySelector('input[id^="checklist-new-"]');
+    if (entry && entry.value.trim() !== "") found.push("the entry you have not added");
+    const renamed = Array.from(slot.querySelectorAll('input[id^="checklist-"][id$="-text"]')).some(
+      (input) => input.value !== input.defaultValue,
+    );
+    if (renamed) found.push("your changes to a checklist entry");
+    return found;
+  }
+
   document.addEventListener("alpine:init", () => {
     Alpine.data("itemModal", () => ({
       open: false,
@@ -666,19 +683,20 @@
       },
 
       changed() {
-        const { name, description, category } = this.$refs;
+        const { name, description, category, details } = this.$refs;
         const { original } = this;
         return (
           name.value !== original.name ||
           description.value !== original.description ||
-          category.value !== original.categoryId
+          category.value !== original.categoryId ||
+          unsavedDetails(details).length > 0
         );
       },
 
       trapFocus,
 
-      // A tap on the dimmed page around the modal (on a phone, often meant to hide the keyboard):
-      // closes it, but asks first when that would throw edits away.
+      // Esc, "Cancel" and a tap on the dimmed page around the modal (on a phone, often meant to hide
+      // the keyboard) close it, but ask first when that would throw edits away.
       dismiss() {
         if (this.changed() && !window.confirm("Discard your changes to this item?")) return;
         this.close();
@@ -692,7 +710,10 @@
       // was picked). An item that is no longer on the page was deleted, or the board reloaded.
       save() {
         const { itemId, original } = this;
-        const { form, name, description, category } = this.$refs;
+        const { form, name, description, category, details } = this.$refs;
+        const unsaved = unsavedDetails(details);
+        // Nothing is sent until this is answered: "Cancel" keeps the sheet open as it is.
+        if (unsaved.length > 0 && !window.confirm(`Discard ${unsaved.join(" and ")}?`)) return;
         const item = itemElement(itemId);
         if (item) {
           let saved = Promise.resolve();

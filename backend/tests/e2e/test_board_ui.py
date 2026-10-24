@@ -786,7 +786,17 @@ def test_ticking_an_item_deleted_on_another_device_resyncs_the_board(
 
 @pytest.mark.parametrize(
     ("width", "columns"),
-    [(375, "auto"), (768, "2"), (1024, "2"), (1279, "2"), (1280, "3")],  # 3 from 1280 px (xl)
+    # One column up to 767 px (a landscape phone is 640 to 750 px wide: two columns would leave
+    # a title less than 140 px), two from 768 px (md), three from 1280 px (xl).
+    [
+        (375, "auto"),
+        (640, "auto"),
+        (767, "auto"),
+        (768, "2"),
+        (1024, "2"),
+        (1279, "2"),
+        (1280, "3"),
+    ],
 )
 def test_categories_flow_into_columns(signed_in_page, seed, user, width, columns, open_board):
     board_id = seed_board(seed, user, {name: [] for name in ("Dairy", "Bakery", "Fruit")})
@@ -815,7 +825,7 @@ LINES_OF_EACH_WORD = """(heading) => {
 }"""
 
 
-@pytest.mark.parametrize("width", [375, 768, 1024, 1280, 1440])
+@pytest.mark.parametrize("width", [375, 640, 700, 768, 1024, 1280, 1440])
 def test_long_category_title_does_not_break_a_word(signed_in_page, seed, user, width, open_board):
     title = "Artykuły gospodarstwa domowego"
     board_id = seed_board(seed, user, {title: ["Płyn do naczyń"], "Dairy": []})

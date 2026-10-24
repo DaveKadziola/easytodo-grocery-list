@@ -1,16 +1,18 @@
 {# The item modal: Alpine component "itemModal" (static/js/board.js), on an element around the board
    content. board.js fills the fields (as text) from the data-* attributes of the item name that
    was clicked, never from values written into a script, and the category list from the
-   categories on the page. The CSP build of Alpine cannot assign, so there is no x-model. Esc
-   closes it, and Tab keeps to its controls; a tap on the dimmed page around it closes it too,
-   after asking if that would throw edits away. While it is open the page behind is inert. It is
+   categories on the page. The CSP build of Alpine cannot assign, so there is no x-model. Esc,
+   "Cancel" and a tap on the dimmed page around it close it, after asking if that would throw
+   edits away (the fields above, and what the details hold that is not saved: a chosen file, text
+   in "Add entry", an edited checklist entry); "Save" asks about the latter too. Tab keeps to its
+   controls. While it is open the page behind is inert. It is
    shown and hidden with its hidden attribute ("closed"), not x-show, which would wait for the
    next animation frame and so fall out of step with the page behind (see board.js). Below the form
    is the slot of the item's details (#item-details, fetched when the modal opens and again when
    an event names the item); a member who may not edit gets _item_viewer.html instead. The panel has
    tabindex -1 (no Tab stop): a click on text in it leaves the focus there, so Esc is still heard
    inside the dialog rather than on the page behind it. -#}
-<div hidden :hidden="closed" class="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/50 dark:bg-black/60 sm:items-center sm:p-4" @click.self="dismiss" @keydown.escape="close">
+<div hidden :hidden="closed" class="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/50 dark:bg-black/60 sm:items-center sm:p-4" @click.self="dismiss" @keydown.escape="dismiss">
   <div role="dialog" aria-modal="true" aria-labelledby="item-modal-title" tabindex="-1" class="max-h-dvh w-full max-w-md overflow-y-auto rounded-t-2xl bg-white dark:bg-slate-900 p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-xl focus:outline-none sm:rounded-2xl" @keydown.tab="trapFocus">
     <h2 id="item-modal-title" class="text-lg font-semibold">Edit item</h2>
     <form x-ref="form" @submit.prevent="save" class="mt-4 space-y-4">
@@ -29,7 +31,7 @@
       <div class="flex flex-wrap items-center justify-between gap-2 pt-2">
         <button type="button" class="btn-danger" @click="remove">Delete item</button>
         <div class="flex gap-2">
-          <button type="button" class="btn-secondary" @click="close">Cancel</button>
+          <button type="button" class="btn-secondary" @click="dismiss">Cancel</button>
           <button type="submit" class="btn-primary">Save</button>
         </div>
       </div>

@@ -38,7 +38,7 @@
   <script src="{{ static_url('js/app.js') }}" defer></script>
 </head>
 <body class="min-h-dvh bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
-  {#- relative: the bell's panel, on a phone, is as wide as the page and hangs from the header. #}
+  {#- relative: the bell's panel, up to 767 px (a landscape phone, whose header wraps, included), is as wide as the page and hangs from the header; from 768 px it hangs from the bell. #}
   <header class="relative border-b border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
     {#- Tight gaps on a phone keep it to one row; with more buttons (an admin's) it wraps rather
         than scroll sideways.
@@ -58,7 +58,7 @@
         <span class="hidden truncate text-sm text-slate-600 sm:inline dark:text-slate-400">{{ current_user.email }}</span>
         {% if not current_user.must_change_password %}
         {#- The bell: its badge loads itself (GET /notifications/badge), so rendering this page asks the database nothing for it; the panel is fetched when it opens, and notifications.js keeps both current over /ws/user. #}
-        <details id="notifications" class="sm:relative">
+        <details id="notifications" class="md:relative">
           <summary class="btn-icon relative cursor-pointer list-none text-slate-600 dark:text-slate-400 [&::-webkit-details-marker]:hidden" aria-label="Notifications" aria-describedby="notifications-badge">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="size-6" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
             <span id="notifications-badge" hx-get="/notifications/badge" hx-trigger="load" hx-swap="outerHTML"></span>
