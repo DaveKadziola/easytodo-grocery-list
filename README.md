@@ -124,6 +124,11 @@ invite and reset links (`/invite/[redacted]`); the health check is time-bound, a
 warns at start when `EASYTODO_FORWARDED_ALLOW_IPS` trusts everyone but the port is not bound to
 127.0.0.1 ([docs/deployment.md](docs/deployment.md)).
 
+One limit: on a Linux desktop whose default sans-serif font is DejaVu Sans, a word of about 12 or
+more letters in a category title can still wrap mid-word, as in v2.0 (a 12-letter word is about 143
+px wide in DejaVu Sans Bold; the title has 135 to 141 px on a phone and on a screen from 1280 px
+wide; in Inter, Liberation Sans and most other fonts it fits).
+
 ### Upgrading from v2.0
 
 There is nothing to convert by hand: the database migrates itself when the container starts, and
@@ -272,7 +277,8 @@ browsers, or a normal and a private window, each signed in as someone else.
    the browser's downloads (on an iPhone, in Files).
 9. **The ⋮ menu on a board.** As the owner, open the board list. ⋮ on a board shows Rename,
    Invite and Archive; open a board: its page has no buttons for managing the board. Share it
-   with Bob (step 4). As Bob, ⋮ on that board in his list shows only "Leave board".
+   with Bob again, as an editor (step 4); this is the board of steps 12 to 18. As Bob, ⋮ on
+   that board in his list shows only "Leave board".
 10. **Archive and delete for good.** As the owner, create a board named `Łosoś` and choose ⋮ →
     Archive. It disappears from the list, for Bob too if it was shared, and "Archived (1)" shows
     under the list. Open it: the page gives the date and the day it is deleted for good
@@ -286,16 +292,16 @@ browsers, or a normal and a private window, each signed in as someone else.
 11. **My boards and Shared with me.** The owner's list has the section "My boards", and a board
     that Bob has joined carries the badge "Shared". Bob's list has "Shared with me", where the
     board shows the owner's email and Bob's role.
-12. **Move a category to another board.** As the owner, take the board you shared with Bob as an
-    editor (step 4); it is called "Groceries" here. Give it a category "Dairy" with a few items,
-    a checklist on one of them and a file on another (steps 17 and 18), and make a second board
-    "Party" with a category "Dairy" as well. Open the category's ⋮ menu on "Groceries" → "Move
-    to board…", pick "Party" and choose "Move". The dialog says "That board already has a
-    category with this name." and fills in "Dairy (2)"; choose "Move" again. The category is the
-    last one on "Party", with its items, checklist and files, and "Groceries" no longer has it.
-    Have both boards open in two browsers: both change without reloading. Bob's dialog lists only
-    the boards where he is an editor or the owner, and he can move a category only from a board
-    where he is an editor.
+12. **Move a category to another board.** As the owner, take the board you shared with Bob in step
+    9, where he is an editor; it is called "Groceries" here. Give it the categories "Dairy" and
+    "Bakery" with a few items each, a checklist on one Dairy item and a file on another (steps 17
+    and 18), and make a second board "Party" with a category "Dairy" as well. Open the category's ⋮
+    menu on "Groceries" → "Move to board…", pick "Party" and choose "Move". The dialog says "That
+    board already has a category with this name." and fills in "Dairy (2)"; choose "Move" again. The
+    category is the last one on "Party", with its items, checklist and files, and "Groceries" no
+    longer has it: it keeps "Bakery", which the steps after this one use. Have both boards open in
+    two browsers: both change without reloading. Bob's dialog lists only the boards where he is an
+    editor or the owner, and he can move a category only from a board where he is an editor.
 13. **Who added an item.** On the board shared with Bob, add an item as Bob: a coloured circle
     with his initials ("B" for bob@example.com) shows on it for both of you. Your own items on
     that board, including the ones you added before sharing it, show your circle as well. Open
@@ -304,34 +310,36 @@ browsers, or a normal and a private window, each signed in as someone else.
     Remove Bob (step 4) and the board has one member again: no item shows a circle, and the
     details say only "Added" with the date. Items from before v2.1 have no author and never show
     one ([Upgrading from v2.0](#upgrading-from-v20), step 6).
-14. **Notifications.** As the owner, watch the bell in the header while Bob joins a board by an
-    invite link (step 4): its counter goes up without reloading, and the panel says that Bob
-    joined. Bob leaves the board: another notification. Change Bob's role, as the owner, and the
-    bell of Bob's browser shows that. Archive the shared board: Bob's bell shows it, and the
-    board is gone from his list. Opening the panel reads everything: the counter goes back to
-    zero, on the user's other devices too.
+14. **Notifications.** Bob is off the board since step 13. As the owner, watch the bell in the
+    header while Bob joins it again by an invite link (a viewer, step 4): its counter goes up
+    without reloading, and the panel says that Bob joined. Bob leaves the board: another
+    notification. Invite him once more and, as the owner, change his role to editor: the bell
+    of Bob's browser shows that. Archive the board: Bob's bell shows it, and it is gone from his
+    list. Restore it from "Archived" (step 10) and Bob has it again, still as an editor.
+    Opening the panel reads everything: the counter goes back to zero, on the user's other
+    devices too.
 15. **"New category".** On a phone: open a board. The bar at the bottom has "Boards" and "New
     category". Tap "New category": a dialog asks for the name and offers "At the bottom"
     (chosen) and "On top". Type a name, choose "On top" and "Add category": the category is the
     first on the board and the cursor is in its "Add item" box, ready to type. On a desktop
     browser the same button is in the board's header.
-16. **Sorting.** Account → Sorting: set "Sort by" to "Date added", "Order" to "Z–A / newest
-    first" and "Save sorting"; every category lists its items that way (open ones first, as long
-    as "Open items first" is ticked). In one category, ⇅ → another "Sort by" → "Apply": the
-    button is marked as custom (its tooltip says "Custom order"), and "Use my default" takes it
-    back. As Bob, set a different order on the same category: the owner's view of it stays as it
-    was. The item's details give when it was added and last modified.
-17. **Attachments.** Open an item and, under "Attachments", "Add a file" → "Upload": a `.txt`
-    file, a `.md` file with a heading and a link, a JPEG or PNG and a PDF. The picture has a
-    thumbnail, the PDF opens in a new tab, the other two open on a page of their own (the
-    Markdown's heading is a heading, and a `javascript:` link in it is not a link). The item's
-    tile shows a paperclip with the number of files. These must be refused with a message and
-    leave nothing behind: a file of 11 MB ("Files can be at most 10 MB."), an `.exe` renamed to
-    `photo.png` ("Only images, PDF, .txt and .md files can be attached."), and a `.txt` file that
-    is not UTF-8 text. As Bob, a viewer: the files can be opened and downloaded, but there is no
-    "Add a file" and no ✕. Run `docker compose down` and `docker compose up -d`: the files are
-    still there. On a phone: "Add a file" offers the camera, so take a photo with it; on an
-    iPhone, a photo kept in HEIC works too, and shows as a picture.
+16. **Sorting.** Account → Sorting: set "Sort by" to "Date added", "Order" to "Z–A / newest first"
+    and "Save sorting"; every category lists its items that way (open ones first, as long as "Open
+    items first" is ticked). In one category of the board shared with Bob, ⇅ → another "Sort by" →
+    "Apply": the button is marked as custom (its tooltip says "Custom order"), and "Use my default"
+    takes it back. As Bob, set a different order on the same category: the owner's view of it stays
+    as it was. The item's details give when it was added and last modified.
+17. **Attachments.** Open an item of the board shared with Bob and, under "Attachments", "Add a
+    file" → "Upload": a `.txt` file, a `.md` file with a heading and a link, a JPEG or PNG and a
+    PDF. The picture has a thumbnail, the PDF opens in a new tab, the other two open on a page of
+    their own (the Markdown's heading is a heading, and a `javascript:` link in it is not a link).
+    The item's tile shows a paperclip with the number of files. These must be refused with a message
+    and leave nothing behind: a file of 11 MB ("Files can be at most 10 MB."), an `.exe` renamed to
+    `photo.png` ("Only images, PDF, .txt and .md files can be attached."), and a `.txt` file that is
+    not UTF-8 text. Make Bob a viewer on the "Invite and members" page: as Bob, the files can be
+    opened and downloaded, but there is no "Add a file" and no ✕. Run `docker compose down` and
+    `docker compose up -d`: the files are still there. On a phone: "Add a file" offers the camera,
+    so take a photo with it; on an iPhone, a photo kept in HEIC works too, and shows as a picture.
 18. **Checklists.** Open an item → "Checklist" → "Add entry" and add three entries. Tick one, edit
     another (Enter saves it), delete the third with ✕, then add a few more and drag one by its
     handle ⠿, or focus the handle and press ↑ or ↓. The item's tile shows "1/3" or so. Tick every
@@ -530,6 +538,10 @@ make run              # http://localhost:8000, restarts on code changes
   CSS by itself.
 - The tests use their own database (`easytodo_test` in the same container) and empty it after
   each test.
+- The browser tests render every page in the font Inter, whatever your system's default is
+  (`backend/tests/e2e/fonts.conf`), because where a word wraps depends on the font. Install it
+  first: `sudo apt-get install fonts-inter` (Debian, Ubuntu; CI does the same) or `brew install
+  --cask font-inter` (macOS); without it the suite stops and says so.
 
 ```sh
 make test             # tests, without the browser tests

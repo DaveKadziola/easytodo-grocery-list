@@ -784,7 +784,10 @@ def test_ticking_an_item_deleted_on_another_device_resyncs_the_board(
     expect(items_of(page, "Dairy")).to_have_text([re.compile("Yogurt")])
 
 
-@pytest.mark.parametrize(("width", "columns"), [(375, "auto"), (768, "2"), (1280, "3")])
+@pytest.mark.parametrize(
+    ("width", "columns"),
+    [(375, "auto"), (768, "2"), (1024, "2"), (1279, "2"), (1280, "3")],  # 3 from 1280 px (xl)
+)
 def test_categories_flow_into_columns(signed_in_page, seed, user, width, columns, open_board):
     board_id = seed_board(seed, user, {name: [] for name in ("Dairy", "Bakery", "Fruit")})
     page = signed_in_page(viewport={"width": width, "height": 900})

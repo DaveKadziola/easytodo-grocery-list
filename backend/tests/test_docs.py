@@ -14,6 +14,8 @@ def test_every_setting_is_in_the_readme_and_env_example():
     env_example = (ROOT / ".env.example").read_text()
     for name in Settings.model_fields:
         variable = f"EASYTODO_{name.upper()}"
-        row = rf"^\| `{re.escape(variable)}` \|"  # a row of the Configuration table
+        # A row of the Configuration table: the name in backticks in its first cell. Prose, which
+        # has no leading "|", does not count.
+        row = rf"^\|[^|\n]*`{re.escape(variable)}`[^|\n]*\|"
         assert re.search(row, readme, re.MULTILINE), f"README.md has no row for `{variable}`"
         assert f"{variable}=" in env_example, f".env.example has no line for {variable}="

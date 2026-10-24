@@ -10,9 +10,10 @@ median of the p95 of 3 runs of v2.1 is at most the median of the p95 of 3 runs o
 the same seed and request count and with the `scripts/bench.py` of v2.1 for both. The 5% is a
 margin on top of the median, not an estimate of the noise between runs, which is larger: in the
 v2.1 result below the p95 of a single run of v2.0 is up to 5% from the median of its three runs on
-view_board and up to 12% on add_item and toggle_item (the highest and the lowest run differ by 6%,
-20% and 19%). That is why the medians of 3 runs are compared, never single runs. The v2 result
-further down is not the baseline of v2.1: it was measured on another machine, by another method.
+view_board, up to 12% on add_item and up to 9% on toggle_item (the highest and the lowest run
+differ by 6%, 20% and 19%). That is why the medians of 3 runs are compared, never single runs.
+The v2 result further down is not the baseline of v2.1: it was measured on another machine, by
+another method.
 
 ## v2.1 result
 

@@ -6,8 +6,11 @@ work runs in a worker thread.
 """
 
 import asyncio
+import os
 import re
+import sys
 from collections.abc import Awaitable, Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -37,6 +40,62 @@ document.addEventListener("htmx:afterSettle", (event) => {
   }
 });
 """
+
+
+# The page has no web font, only the system's (`ui-sans-serif, system-ui, sans-serif`), and where a
+# word wraps depends on it: "gospodarstwa" in a bold title is 125 px in Inter and 143 px in DejaVu
+# Sans, a stock Ubuntu's default. So Chromium gets this fontconfig, which makes Inter the system's
+# sans-serif on every Linux machine, the CI runner included (it installs fonts-inter).
+FONTS_CONF = Path(__file__).with_name("fonts.conf")
+SANS_STACK = "ui-sans-serif, system-ui, sans-serif"  # --font-sans of app.css, without the emoji
+
+# Canvas widths of one text in a bold 18 px font: Inter itself, what is drawn when it is missing
+# (the fallback is monospace), and the page's stack.
+FONT_WIDTHS = """(stack) => {
+  const context = document.createElement("canvas").getContext("2d");
+  const width = (family) => {
+    context.font = `600 18px ${family}`;
+    return context.measureText("Artykuły gospodarstwa domowego").width;
+  };
+  return { inter: width("Inter, monospace"), fallback: width("monospace"), stack: width(stack) };
+}"""
+INTER_MISSING = (
+    "The e2e tests need the font Inter (the layout tests were measured with it, and the page's "
+    "words wrap differently in another one), and Chromium found none. Install it: "
+    "`sudo apt-get install fonts-inter` on Debian and Ubuntu (CI does), "
+    "`brew install --cask font-inter` on macOS."
+)
+INTER_NOT_USED = (
+    "Inter is installed, but the page's sans-serif font is not Inter. "
+    f"{FONTS_CONF}, which the `browser_type_launch_args` fixture gives Chromium as its "
+    "FONTCONFIG_FILE, should make it so: is it there, well-formed, and does it still prefer Inter?"
+)
+
+
+@pytest.fixture(scope="session")
+def browser_type_launch_args(browser_type_launch_args: dict[str, Any]) -> dict[str, Any]:
+    """Chromium's own fontconfig is ``fonts.conf``: Inter is the page's font on every machine."""
+    env = {**os.environ, "FONTCONFIG_FILE": str(FONTS_CONF)}
+    return {**browser_type_launch_args, "env": env}
+
+
+@pytest.fixture(scope="session")
+def browser(browser: Browser) -> Browser:
+    """The browser of pytest-playwright, once it is known to render the pages in Inter: if not,
+    the session stops with the reason (better than a failure in every layout test about a word
+    that wrapped). Only the tests that use the browser start it: the tests of this directory that
+    need none must not leave Playwright's event loop running for the async tests after them."""
+    page = browser.new_page()
+    try:
+        widths = page.evaluate(FONT_WIDTHS, SANS_STACK)
+    finally:
+        page.close()
+    if abs(widths["inter"] - widths["fallback"]) < 0.5:
+        pytest.exit(INTER_MISSING, returncode=1)
+    # fonts.conf pins the font through fontconfig, which only Linux's Chromium uses.
+    if sys.platform.startswith("linux") and abs(widths["stack"] - widths["inter"]) >= 0.5:
+        pytest.exit(INTER_NOT_USED, returncode=1)
+    return browser
 
 
 def watch_console(page: Page) -> list[str]:
