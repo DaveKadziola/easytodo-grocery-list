@@ -16,7 +16,7 @@ from playwright.sync_api import Locator, Page, Request, Route, expect
 from sqlalchemy import func, update
 
 from e2e import test_responsive
-from e2e.conftest import open_board_menu, watch_console
+from e2e.conftest import PICKED_UP, open_board_menu, watch_console
 from e2e.locators import TAP_TARGETS, add_item, category, item, items_of
 from e2e.test_resync import expect_struck
 from easytodo.models import Board, BoardMember, BoardRole, Category, Item
@@ -159,8 +159,10 @@ def test_drag_item_to_other_category(logged_in_page, seed, user, open_board):
     expect(items_of(page, "Dairy")).to_have_text([re.compile("Yogurt")])
 
 
-def touch_drag(page: Page, source: Locator, target: Locator, hold_ms: int) -> None:
-    """A finger on ``source``, held for ``hold_ms``, then moved onto ``target`` and lifted."""
+def touch_drag(page: Page, source: Locator, target: Locator, landed: Locator | None) -> None:
+    """A finger on ``source``, moved onto ``target`` and lifted. With ``landed`` it is a drag: the
+    finger waits until something is picked up (Sortable's long press), and lifts when ``landed``
+    shows the dragged element where the finger is. Without, it is a swipe, which scrolls."""
     target.evaluate(SCROLL_CLEAR_OF_THE_BOTTOM_BAR)
     start, end = source.bounding_box(), target.bounding_box()
     touch = page.context.new_cdp_session(page)
@@ -171,12 +173,13 @@ def touch_drag(page: Page, source: Locator, target: Locator, hold_ms: int) -> No
 
     x = start["x"] + start["width"] / 2
     finger("touchStart", x, start["y"] + 10)
-    page.wait_for_timeout(hold_ms)
+    if landed is not None:
+        expect(page.locator(PICKED_UP)).to_have_count(1)
     for step in range(1, 11):
         finger("touchMove", x, start["y"] + 10 + (end["y"] - start["y"]) * step / 10)
         page.wait_for_timeout(20)
-    # Rest on the target before lifting: Sortable looks under the finger every 50 ms.
-    page.wait_for_timeout(200)
+    if landed is not None:
+        expect(landed).to_have_count(1)  # Sortable looks under the finger every 50 ms
     finger("touchEnd")
 
 
@@ -189,17 +192,19 @@ def test_long_press_drags_an_item_on_a_touch_screen(logged_in_page_mobile, seed,
         "request", lambda request: moves.append(request.url) if "/move" in request.url else None
     )
 
-    touch_drag(page, item(page, "Milk"), item(page, "Bread"), hold_ms=0)  # a swipe scrolls
-
-    page.wait_for_timeout(300)
-    assert moves == []
+    touch_drag(page, item(page, "Milk"), item(page, "Bread"), landed=None)  # a swipe scrolls
     expect(items_of(page, "Dairy")).to_have_text([re.compile("Milk")])
 
+    bakery = category(page, "Bakery")
     with page.expect_response(re.compile(r"/items/\d+/move$")) as moved:
-        touch_drag(page, item(page, "Milk"), item(page, "Bread"), hold_ms=400)  # a long press
+        # A long press: the item is picked up, and lifted where it has landed in Bakery.
+        touch_drag(
+            page, item(page, "Milk"), item(page, "Bread"), landed=bakery.locator(f"li{PICKED_UP}")
+        )
 
     assert moved.value.status == 200
     expect(items_of(page, "Bakery")).to_have_text([re.compile("Bread"), re.compile("Milk")])
+    assert len(moves) == 1  # the swipe moved nothing
 
 
 def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, open_board):
@@ -1050,7 +1055,11 @@ def test_category_handle_drags_on_a_touch_screen(logged_in_page_mobile, seed, us
             page,
             category(page, "Bakery").locator(".category-handle"),
             category(page, "Dairy").locator(".category-handle"),
-            hold_ms=0,  # the handle does not scroll the page: a finger on it drags at once
+            # The handle does not scroll the page: a finger on it drags at once. Bakery has landed
+            # when it is the section just before Dairy.
+            landed=category(page, "Dairy")
+            .locator("xpath=preceding-sibling::section")
+            .and_(page.locator(PICKED_UP)),
         )
 
     assert saved.value.status == 204

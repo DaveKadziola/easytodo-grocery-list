@@ -24,7 +24,7 @@ from helpers import (
     signed_in,
     text_of,
     toast_message,
-    wait_until_a_query_waits_for_a_lock,
+    wait_until_blocked_by,
 )
 from sqlalchemy import delete, select, text, update
 
@@ -358,10 +358,11 @@ async def test_board_write_racing_a_delete_is_404_not_500(
     async with db.bind.connect() as other_device:
         transaction = await other_device.begin()
         await other_device.execute(delete(Board).where(Board.id == board.id))
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
         write = asyncio.create_task(
             owner_client.request(method, path.format(id=board.id), data=data, headers=HX | headers)
         )
-        await wait_until_a_query_waits_for_a_lock(db)
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         r = await write
 

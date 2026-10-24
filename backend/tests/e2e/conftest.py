@@ -21,6 +21,10 @@ from easytodo.models import User
 
 PHONE = {"viewport": {"width": 375, "height": 812}, "is_mobile": True, "has_touch": True}
 
+# What a drag has picked up: Sortable gives the element the class when the press is long enough.
+# The ghost that follows the finger is a copy of it, with this class too and ``sortable-fallback``.
+PICKED_UP = ".sortable-chosen:not(.sortable-fallback)"
+
 # Counts the board content reloads that are in place (swapped in, htmx set up on them) in
 # <html data-board-reloads>: an attribute, which expect() can wait for under the page's CSP
 # (page.wait_for_function cannot: it polls with eval).

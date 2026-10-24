@@ -15,7 +15,7 @@ from factories import (
     create_item,
     create_user,
 )
-from helpers import NASTY, NASTY_ESCAPED, toast_message, wait_until_a_query_waits_for_a_lock
+from helpers import NASTY, NASTY_ESCAPED, toast_message, wait_until_blocked_by
 from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -301,7 +301,8 @@ async def test_move_racing_an_archive_on_another_device_is_404_not_500(  # Revie
                 f"/categories/{category.id}/move", data=move_form(target_board), headers=HX
             )
         )
-        await wait_until_a_query_waits_for_a_lock(db)
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         r = await move
 
@@ -381,7 +382,8 @@ async def test_second_of_two_moves_of_the_same_category_is_404_not_500(
                 f"/categories/{category.id}/move", data=move_form(target_board), headers=HX
             )
         )
-        await wait_until_a_query_waits_for_a_lock(db)
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         r = await move
 
@@ -411,7 +413,8 @@ async def test_move_waits_for_an_item_being_added_and_takes_it_along(
                 f"/categories/{category.id}/move", data=move_form(target_board), headers=HX
             )
         )
-        await wait_until_a_query_waits_for_a_lock(db)
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         r = await move
 
@@ -436,7 +439,8 @@ async def test_move_waits_for_a_tick_and_keeps_it(editor_client, category, item,
                 f"/categories/{category.id}/move", data=move_form(target_board), headers=HX
             )
         )
-        await wait_until_a_query_waits_for_a_lock(db)
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         r = await move
 
@@ -462,7 +466,8 @@ async def test_name_taken_at_commit_is_a_plain_409_and_nothing_moves(
                 f"/categories/{category.id}/move", data=move_form(target_board), headers=HX
             )
         )
-        await wait_until_a_query_waits_for_a_lock(db)
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         r = await move
 

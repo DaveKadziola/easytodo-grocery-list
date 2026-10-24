@@ -1,6 +1,6 @@
 """Shared test steps that drive the app over HTTP, the names that test escaping and typed
-confirmations, reading pages and toasts, counting the SQL a block runs, and waiting for another
-connection's row lock."""
+confirmations, reading pages and toasts, counting the SQL a block runs, and waiting for a lock
+another connection holds."""
 
 import asyncio
 import json
@@ -98,19 +98,27 @@ def count_queries(db) -> Iterator[list[str]]:
         event.remove(engine, "before_cursor_execute", record)
 
 
-async def wait_until_a_query_waits_for_a_lock(db) -> None:
-    """Return once some query on the test database waits for a lock (a request blocked by the row
-    lock another connection of the test holds); fail after 5 s."""
-    deadline = asyncio.get_running_loop().time() + 5
-    while asyncio.get_running_loop().time() < deadline:
+async def wait_until_blocked_by(db, blocker_pid: int, timeout_s: float = 5.0) -> None:
+    """Return once some query on the test database waits for a lock that the backend
+    ``blocker_pid`` holds (``pg_blocking_pids``); fail after ``timeout_s`` seconds.
+
+    ``blocker_pid`` is the ``pg_backend_pid()`` of the connection that holds the lock the request
+    queues on, read inside its open transaction. A wait on some other backend (another request
+    that happens to queue, a lock the app itself takes) does not count: the test goes on only
+    when the wait it means to see has begun."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while loop.time() < deadline:
         async with db.bind.connect() as conn:  # a fresh snapshot of pg_stat_activity each time
             waiting = await conn.scalar(
                 text(
                     "SELECT count(*) FROM pg_stat_activity"
                     " WHERE datname = current_database() AND wait_event_type = 'Lock'"
-                )
+                    " AND :blocker = ANY(pg_blocking_pids(pid))"
+                ),
+                {"blocker": blocker_pid},
             )
         if waiting:
             return
         await asyncio.sleep(0.02)
-    raise AssertionError("no query started waiting for the row lock")
+    raise AssertionError(f"no query started waiting for a lock held by backend {blocker_pid}")

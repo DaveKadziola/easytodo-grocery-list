@@ -10,8 +10,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from factories import create_board, create_category, create_item, create_user
-from helpers import NASTY, NASTY_ESCAPED, wait_until_a_query_waits_for_a_lock
-from sqlalchemy import delete, func, select, update
+from helpers import NASTY, NASTY_ESCAPED, wait_until_blocked_by
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from content.test_board_markup import EDIT_CONTROLS, section
@@ -324,11 +324,14 @@ async def test_two_sorts_of_the_same_category_at_once_leave_one_row(
     commit_and_publish = prefs.commit_and_publish
     first_is_writing, release_first = asyncio.Event(), asyncio.Event()
     commits = 0
+    first_pid = 0
 
     async def hold_the_first_commit(session, *events):
-        nonlocal commits
+        nonlocal commits, first_pid
         commits += 1
         if commits == 1:  # the first writer, whose row is in but not committed
+            connection = await session.connection()  # not session.scalar: it would flush
+            first_pid = await connection.scalar(text("SELECT pg_backend_pid()"))
             first_is_writing.set()
             await release_first.wait()
         await commit_and_publish(session, *events)
@@ -345,7 +348,7 @@ async def test_two_sorts_of_the_same_category_at_once_leave_one_row(
         first = asyncio.create_task(sort("name", False))
         await first_is_writing.wait()
         second = asyncio.create_task(sort("created", True))
-        await wait_until_a_query_waits_for_a_lock(db)  # the second one's upsert, behind the first
+        await wait_until_blocked_by(db, first_pid)  # the second one's upsert, behind the first
         release_first.set()
         await asyncio.gather(first, second)  # neither raises
 

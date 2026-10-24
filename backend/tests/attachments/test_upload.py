@@ -18,7 +18,7 @@ from helpers import (
     NASTY,
     NASTY_ESCAPED,
     toast_message,
-    wait_until_a_query_waits_for_a_lock,
+    wait_until_blocked_by,
 )
 from PIL import Image
 from sqlalchemy import func, select, text, update
@@ -891,10 +891,11 @@ async def test_a_delete_that_loses_the_race_for_the_row_is_404_with_a_resync(
         await other_device.execute(
             text("DELETE FROM attachments WHERE id = :id"), {"id": attachment_id}
         )
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
         racing = asyncio.create_task(
             editor_client.delete(f"/attachments/{attachment_id}", headers=HX)
         )
-        await wait_until_a_query_waits_for_a_lock(db)
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         r = await racing
 
@@ -922,8 +923,9 @@ async def test_an_upload_waits_for_the_lock_of_another_change_to_the_item(editor
         await other_device.execute(
             text("SELECT 1 FROM items WHERE id = :id FOR NO KEY UPDATE"), {"id": item.id}
         )
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
         uploading = asyncio.create_task(upload(editor_client, item.id))
-        await wait_until_a_query_waits_for_a_lock(db)
+        await wait_until_blocked_by(db, other_pid)
         assert not uploading.done()
         await transaction.commit()
 

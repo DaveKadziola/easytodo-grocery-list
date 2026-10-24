@@ -15,7 +15,7 @@ from factories import (
     create_item,
     create_user,
 )
-from helpers import NASTY, NASTY_ESCAPED, text_of, wait_until_a_query_waits_for_a_lock
+from helpers import NASTY, NASTY_ESCAPED, text_of, wait_until_blocked_by
 from sqlalchemy import select, text, update
 
 from content.test_board_markup import EDIT_CONTROLS, section
@@ -498,7 +498,8 @@ async def test_a_flip_waits_for_the_change_to_the_same_entry_it_flips(editor_cli
             update(ChecklistEntry).where(ChecklistEntry.id == entry.id).values(is_done=True)
         )
         flip = asyncio.create_task(editor_client.post(f"/checklist/{entry.id}/check", headers=HX))
-        await wait_until_a_query_waits_for_a_lock(db)
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         r = await flip
 
@@ -522,7 +523,8 @@ async def test_entries_added_at_the_same_moment_take_one_position_each(editor_cl
             )
             for name in ("Eggs", "Flour", "Sugar")
         ]
-        await wait_until_a_query_waits_for_a_lock(db)
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         responses = await asyncio.gather(*adds)
 
@@ -548,7 +550,8 @@ async def test_a_stale_reorder_racing_a_delete_of_one_entry_is_422(editor_client
                 headers=HX,
             )
         )
-        await wait_until_a_query_waits_for_a_lock(db)
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         r = await reorder
 
@@ -578,7 +581,8 @@ async def test_a_stale_reorder_racing_an_uncommitted_add_is_422(editor_client, i
                 headers=HX,
             )
         )
-        await wait_until_a_query_waits_for_a_lock(db)
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         r = await reorder
 
@@ -603,7 +607,8 @@ async def test_two_adds_at_99_entries_leave_100_with_distinct_positions(editor_c
             )
             for name in ("One", "Two")
         ]
-        await wait_until_a_query_waits_for_a_lock(db)
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         responses = await asyncio.gather(*adds)
 
@@ -630,7 +635,8 @@ async def test_a_reorder_waits_for_a_tick_of_another_entry_and_goes_through(
                 headers=HX,
             )
         )
-        await wait_until_a_query_waits_for_a_lock(db)
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         r = await reorder
 

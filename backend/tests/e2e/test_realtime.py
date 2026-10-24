@@ -13,7 +13,7 @@ from factories import create_board, create_category, create_item, create_user
 from playwright.sync_api import Locator, Page, Route, WebSocketRoute, expect
 from sqlalchemy import delete, select, update
 
-from e2e.conftest import open_board_menu
+from e2e.conftest import PICKED_UP, open_board_menu
 from e2e.locators import add_item, category, item, items_of
 from easytodo.content import service
 from easytodo.models import BoardMember, BoardRole, Category, Item
@@ -476,7 +476,7 @@ def test_refresh_during_a_held_touch_drag_does_not_end_it(
         touch.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": points})
 
     finger("touchStart", 0)
-    page.wait_for_timeout(400)  # a long press: the drag starts
+    expect(page.locator(PICKED_UP)).to_have_count(1)  # a long press: the drag starts
     for step in range(1, 6):
         finger("touchMove", step / 10)
         page.wait_for_timeout(20)
@@ -487,7 +487,8 @@ def test_refresh_during_a_held_touch_drag_does_not_end_it(
     for step in range(6, 11):
         finger("touchMove", step / 10)
         page.wait_for_timeout(20)
-    page.wait_for_timeout(200)  # Sortable looks under the finger every 50 ms
+    # Sortable looks under the finger every 50 ms: Milk has landed in Bakery when it shows there.
+    expect(category(page, "Bakery").locator(f"li{PICKED_UP}")).to_have_count(1)
     with page.expect_response(MOVED) as moved:
         finger("touchEnd")
 

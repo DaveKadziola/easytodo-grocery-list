@@ -76,6 +76,18 @@ async def _clean_db(_db_engine: AsyncEngine) -> AsyncIterator[None]:
     await truncate_all_tables(_db_engine)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_developer_settings() -> Iterator[None]:
+    """The tests see no EASYTODO_* variable and no ``.env`` file, whatever the developer's shell,
+    CI or the working directory holds: a leftover EASYTODO_PUBLIC_URL, say, would change every
+    origin the tests build. A test that needs a setting passes it, or sets it with monkeypatch."""
+    with pytest.MonkeyPatch.context() as patch:
+        for name in [name for name in os.environ if name.startswith("EASYTODO_")]:
+            patch.delenv(name)
+        patch.setitem(Settings.model_config, "env_file", None)
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _no_gc_freeze(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every test starts an app, and freezing the heap at startup costs a full collection

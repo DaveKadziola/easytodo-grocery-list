@@ -8,7 +8,8 @@
 {% block title %}Invite and members · {{ board.name }} · EasyToDo{% endblock %}
 {% block content %}
 {% set manage = can(role, Action.MANAGE_MEMBERS) %}
-{#- Invite links (no address) work for anyone who has one: removing a member does not stop them rejoining with one. #}
+{#- Invite links (no address) work for anyone who has one: removing a member does not stop them
+    rejoining with one. #}
 {% set open_links = invites|selectattr("email", "none")|list %}
 <div id="sharing" hx-target="#sharing" hx-select="#sharing" class="mx-auto w-full max-w-2xl space-y-6">
   <div>

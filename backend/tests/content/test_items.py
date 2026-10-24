@@ -12,7 +12,7 @@ from factories import (
     create_item,
     create_user,
 )
-from helpers import wait_until_a_query_waits_for_a_lock
+from helpers import wait_until_blocked_by
 from sqlalchemy import delete, func, select, text, update
 
 from easytodo.boards.service import list_boards
@@ -496,7 +496,8 @@ async def test_change_racing_a_delete_on_another_device_is_404_not_500(  # Revie
         change = asyncio.create_task(
             editor_client.request(method, path.format(**ids), data=data, headers=HX)
         )
-        await wait_until_a_query_waits_for_a_lock(db)
+        other_pid = await other_device.scalar(text("SELECT pg_backend_pid()"))
+        await wait_until_blocked_by(db, other_pid)
         await transaction.commit()
         r = await change
 
@@ -687,3 +688,23 @@ def test_clean_description_refuses_more_than_2000_characters():
     assert clean_description("y" * 2000) == "y" * 2000
     with pytest.raises(ValidationFailed, match="^Description must be at most 2000 characters.$"):
         clean_description("y" * 2001)
+
+
+async def test_lock_wait_helper_counts_only_waits_on_the_given_backend(db):
+    """Some other backend queuing for a lock is not the wait a test means to see."""
+    async with (
+        db.bind.connect() as holder,
+        db.bind.connect() as waiter,
+        db.bind.connect() as bystander,
+    ):
+        holder_pid = await holder.scalar(text("SELECT pg_backend_pid()"))
+        bystander_pid = await bystander.scalar(text("SELECT pg_backend_pid()"))
+        await holder.execute(text("SELECT pg_advisory_lock(4242)"))
+        waiting = asyncio.create_task(waiter.execute(text("SELECT pg_advisory_lock(4242)")))
+        try:
+            await wait_until_blocked_by(db, holder_pid)
+            with pytest.raises(AssertionError):  # the waiter waits, but not for the bystander
+                await wait_until_blocked_by(db, bystander_pid, timeout_s=0.3)
+        finally:
+            await holder.execute(text("SELECT pg_advisory_unlock(4242)"))
+            await waiting

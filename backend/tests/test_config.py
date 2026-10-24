@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from pydantic import ValidationError
 
@@ -138,3 +140,13 @@ def test_database_url_is_kept_secret():
     assert (
         templates.env.from_string("{{ settings.database_url }}").render(settings=s) == "**********"
     )
+
+
+def test_tests_ignore_the_developers_environment_and_env_file(tmp_path, monkeypatch):
+    """``tests/conftest.py`` drops every EASYTODO_* variable and the ``.env`` file for the whole
+    session, so a developer's (or CI's) settings cannot change what a test sees."""
+    assert [name for name in os.environ if name.startswith("EASYTODO_")] == []
+    (tmp_path / ".env").write_text("EASYTODO_PUBLIC_URL=https://leak.example\n")
+    monkeypatch.chdir(tmp_path)
+    s = Settings(database_url=DATABASE_URL, secret_key="x" * 40)  # on purpose without _env_file
+    assert s.public_origin == "http://localhost:8000"

@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 from factories import DEFAULT_PASSWORD, create_board, create_user
-from helpers import login, signed_in, toast_message, wait_until_a_query_waits_for_a_lock
+from helpers import login, signed_in, toast_message, wait_until_blocked_by
 from sqlalchemy import func, select, text, update
 
 from easytodo.boards.invite_routes import EMAIL_INVITE_LIMIT
@@ -220,6 +220,33 @@ async def test_email_invite_sends_mail_with_link(client, board, mail_outbox, db)
     )
     page = await client.get(f"/boards/{board.id}/members")
     assert "friend@example.com" in page.text  # listed as pending
+
+
+async def test_malformed_invite_email_is_refused(client, board, db, mail_outbox):
+    await login(client, "owner@example.com")
+
+    r = await client.post(
+        f"/boards/{board.id}/invites",
+        data={"role": "editor", "email": "not-an-email"},
+        headers=HX,
+    )
+
+    assert r.status_code == 422
+    assert toast_message(r) == "Enter a valid email address."
+    assert await count_invites(db) == 0
+    assert mail_outbox == []
+
+
+async def test_blank_invite_email_makes_a_link_invite(client, board, db, mail_outbox):
+    await login(client, "owner@example.com")
+
+    r = await client.post(f"/boards/{board.id}/invites", data={"role": "editor", "email": "   "})
+
+    assert r.status_code == 201
+    assert LINK.search(r.text)
+    assert await count_invites(db) == 1
+    assert await db.scalar(select(BoardInvite.email)) is None  # a link, not an address's invite
+    assert mail_outbox == []
 
 
 async def test_email_invite_matches_case_insensitively(client_factory, db, mail_outbox):
@@ -442,8 +469,9 @@ async def test_email_accept_locks_the_board_before_the_invite(
         await deleting.execute(
             text("SELECT 1 FROM boards WHERE id = :id FOR UPDATE"), {"id": board.id}
         )
+        deleting_pid = await deleting.scalar(text("SELECT pg_backend_pid()"))
         accept = asyncio.create_task(bob.post(f"/invite/{sent.link.rsplit('/', 1)[1]}/accept"))
-        await wait_until_a_query_waits_for_a_lock(db)
+        await wait_until_blocked_by(db, deleting_pid)
         await deleting.execute(  # LockNotAvailableError if the accept held the invite
             text("SELECT 1 FROM board_invites WHERE id = :id FOR UPDATE NOWAIT"),
             {"id": sent.invite.id},
