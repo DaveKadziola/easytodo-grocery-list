@@ -1,6 +1,6 @@
 [project]
 name = "easytodo"
-version = "2.0.0.dev0"
+version = "2.1.0"
 description = "Self-hosted, multi-user grocery and to-do lists with real-time sync."
 requires-python = ">=3.12"
 dependencies = [
@@ -12,6 +12,9 @@ dependencies = [
     "email-validator>=2.3.0",
     "fastapi>=0.156.1",
     "jinja2>=3.1.6",
+    "markdown-it-py>=4.2.0",
+    "pillow>=13.0.0",
+    "pillow-heif>=1.8.1",
     "pydantic-settings>=2.16.1",
     "pyotp>=2.10.0",
     "python-multipart>=0.0.32",
@@ -46,6 +49,10 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.format]
+# Alembic writes the migrations (single quotes, its own layout); they are linted, not formatted.
+exclude = ["migrations/versions/*"]
 
 [tool.ruff.lint]
 extend-select = ["I", "UP"]

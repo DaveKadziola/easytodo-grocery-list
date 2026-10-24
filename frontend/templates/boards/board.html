@@ -1,38 +1,61 @@
-{# Context: view (BoardView), boards (the user's BoardSummary list, for the board switcher). The
-   board is rendered inline, so the first view is ready HTML; then realtime.js keeps it current over
-   the board's WebSocket, and shows the connection in the header (#conn-status). On a phone a bar
-   along the bottom holds the board switcher and "New category". -#}
+{# Context: view (BoardView), boards (the user's BoardChoice list, for the board switcher and the
+   boards a category can move to). The board is rendered inline, so the first view is ready HTML;
+   then realtime.js keeps it current over the board's WebSocket, and shows the connection in the
+   header (#conn-status). On a phone a bar along the bottom holds the board switcher and "New
+   category". A member who may edit gets the dialog that moves a category to another board, when
+   there is one to move it to, and the dialog that adds a category (which the "New category"
+   buttons in the header and the bottom bar open); they are outside the board content, so that a
+   reload leaves them alone. -#}
 {% extends "base.html" %}
 {% block title %}{{ view.board.name }} · EasyToDo{% endblock %}
 {% block scripts %}
   <script src="{{ static_url('js/board.js') }}" defer></script>
   <script src="{{ static_url('js/realtime.js') }}" defer></script>
 {% endblock %}
+{#- From 1280 px the board has three columns, and in a third of 1152 px (not 1024) a category's title,
+    beside its four 44 px buttons, still has room for a word like "gospodarstwa"; from 768 px, two;
+    below that, one (in two columns the title would have 76 to 139 px between 640 and 767 px). #}
+{% block container %}max-w-5xl xl:max-w-6xl{% endblock %}
 {% block header_status %}
 <p id="conn-status" data-board-id="{{ view.board.id }}" role="status" class="conn-status" data-public-url="{{ settings.public_origin }}"><span class="sr-only sm:not-sr-only"></span></p>
 {% endblock %}
 {% block content %}
 {% set can_edit = can(view.role, Action.EDIT_CONTENT) %}
+{#- The other boards where the member may edit: where a category can go. #}
+{% set targets = namespace(boards=[]) %}
+{% for s in boards if s.id != view.board.id and can(s.role, Action.EDIT_CONTENT) %}
+{% set targets.boards = targets.boards + [s] %}
+{% endfor %}
+{% set move_targets = targets.boards %}
 {% if can_edit %}
 <div x-data="itemModal">
   {% include "boards/_board_content.html" %}
   {% include "boards/_item_modal.html" %}
 </div>
 {% else %}
-{% include "boards/_board_content.html" %}
+<div x-data="itemViewer">
+  {% include "boards/_board_content.html" %}
+  {% include "boards/_item_viewer.html" %}
+</div>
+{% endif %}
+{% if can_edit and move_targets %}
+{% include "boards/_move_category.html" %}
+{% endif %}
+{% if can_edit %}
+{% include "boards/_new_category.html" %}
 {% endif %}
 <nav id="bottom-bar" aria-label="Board" class="bottom-bar">
   <details class="relative">
     <summary class="btn-secondary cursor-pointer list-none [&::-webkit-details-marker]:hidden">Boards</summary>
     <div class="menu bottom-full left-0 right-auto mt-0 mb-2 max-h-[60dvh] overflow-y-auto">
       {% for s in boards %}
-      <a href="/boards/{{ s.board.id }}" class="menu-item break-all aria-[current=page]:text-emerald-700 dark:aria-[current=page]:text-emerald-400"{% if s.board.id == view.board.id %} aria-current="page"{% endif %}>{{ s.board.name }}</a>
+      <a href="/boards/{{ s.id }}" class="menu-item break-all aria-[current=page]:text-emerald-700 dark:aria-[current=page]:text-emerald-400"{% if s.id == view.board.id %} aria-current="page"{% endif %}>{{ s.name }}</a>
       {% endfor %}
       <a href="/boards" class="menu-item">All boards</a>
     </div>
   </details>
   {% if can_edit %}
-  <button type="button" class="btn-primary" data-focus="new-category-name">New category</button>
+  <button type="button" class="btn-primary" data-new-category aria-haspopup="dialog">New category</button>
   {% endif %}
 </nav>
 {% endblock %}

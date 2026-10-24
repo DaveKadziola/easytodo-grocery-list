@@ -1,5 +1,8 @@
 import asyncio
+import atexit
 import os
+import shutil
+import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -13,12 +16,13 @@ from fastapi import FastAPI
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 import easytodo.models  # noqa: F401  (registers every table on Base.metadata)
+from easytodo.attachments.storage import AttachmentStore
 from easytodo.config import Settings, get_settings
-from easytodo.db import Base
+from easytodo.db import Base, detect_name_collation, use_name_collation
 from easytodo.mail.mailer import SentMail
 from easytodo.main import create_app
 
@@ -56,6 +60,15 @@ async def _db_engine(_migrated_db: None) -> AsyncIterator[AsyncEngine]:
     await engine.dispose()
 
 
+@pytest.fixture(scope="session")
+async def _name_collation(_db_engine: AsyncEngine) -> str | None:
+    """What the app finds out at start-up (the collation names are sorted in), for the tests that
+    call the services without an app: found the same way, and set for the rest of the session."""
+    collation = await detect_name_collation(_db_engine)
+    use_name_collation(collation)
+    return collation
+
+
 async def truncate_all_tables(engine: AsyncEngine) -> None:
     tables = Base.metadata.sorted_tables
     if not tables:
@@ -72,12 +85,41 @@ async def _clean_db(_db_engine: AsyncEngine) -> AsyncIterator[None]:
     await truncate_all_tables(_db_engine)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_developer_settings() -> Iterator[None]:
+    """The tests see no EASYTODO_* variable and no ``.env`` file, whatever the developer's shell,
+    CI or the working directory holds: a leftover EASYTODO_PUBLIC_URL, say, would change every
+    origin the tests build. A test that needs a setting passes it, or sets it with monkeypatch."""
+    with pytest.MonkeyPatch.context() as patch:
+        # Any case: pydantic-settings reads the names case-insensitively.
+        for name in [name for name in os.environ if name.upper().startswith("EASYTODO_")]:
+            patch.delenv(name)
+        patch.setitem(Settings.model_config, "env_file", None)
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _no_gc_freeze(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test starts an app, and freezing the heap at startup costs a full collection
+    (about 55 ms): only ``tests/test_lifespan.py`` runs the real ``_freeze_startup_heap``."""
+    monkeypatch.setattr("easytodo.main._freeze_startup_heap", lambda: None)
+
+
+# Where the files of attachments go unless a test says otherwise: one directory for the session,
+# removed when it ends, so no test writes into the working directory.
+SESSION_ATTACHMENTS_DIR = Path(tempfile.mkdtemp(prefix="easytodo-attachments-"))
+atexit.register(shutil.rmtree, SESSION_ATTACHMENTS_DIR, ignore_errors=True)
+
+
 def _test_settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "database_url": TEST_DATABASE_URL,
         "secret_key": "x" * 40,
         "public_url": BASE_URL,
         "env": "test",
+        "attachments_dir": SESSION_ATTACHMENTS_DIR,
+        # No clean-up task in the app under test (or a live server): a test calls ``purge``.
+        "purge_interval_hours": 0,
     }
     return Settings(_env_file=None, **(values | overrides))
 
@@ -88,10 +130,19 @@ def settings() -> Settings:
 
 
 @pytest.fixture
-def cli_env(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> Iterator[None]:
-    """The environment the CLI reads its settings from, pointing at the test database."""
-    monkeypatch.setenv("EASYTODO_DATABASE_URL", settings.database_url)
+def store(tmp_path: Path) -> AttachmentStore:
+    """A store of files in the test's own directory, which ``cli_env`` points the CLI at too.
+    ``tests/attachments`` has the running app's store under this name."""
+    return AttachmentStore(tmp_path)
+
+
+@pytest.fixture
+def cli_env(monkeypatch: pytest.MonkeyPatch, settings: Settings, tmp_path: Path) -> Iterator[None]:
+    """The environment the CLI reads its settings from, pointing at the test database and at the
+    test's own directory for files (never ``backend/data/attachments``)."""
+    monkeypatch.setenv("EASYTODO_DATABASE_URL", settings.database_url.get_secret_value())
     monkeypatch.setenv("EASYTODO_SECRET_KEY", settings.secret_key.get_secret_value())
+    monkeypatch.setenv("EASYTODO_ATTACHMENTS_DIR", str(tmp_path))
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -102,10 +153,26 @@ def app(settings: Settings, _clean_db: None) -> FastAPI:
     return create_app(settings)
 
 
+def _state_per_request(app: ASGIApp) -> ASGIApp:
+    """``app`` where each request has its own shallow copy of the lifespan state, as under uvicorn
+    (``"state": self.app_state.copy()``). ``LifespanManager`` hands every request of one app the
+    same dict, so a request that runs while another is in flight (a second client, a request made
+    from a patched function) would overwrite the other's ``request.state.user`` and ``.session``,
+    and a test would pass for the wrong reason. A lifespan scope keeps the shared dict: startup
+    writes into it."""
+
+    async def with_own_state(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            scope["state"] = dict(scope.get("state", {}))
+        await app(scope, receive, send)
+
+    return with_own_state
+
+
 @pytest.fixture
 async def _running_app(app: FastAPI) -> AsyncIterator[ASGIApp]:
     """The app with its lifespan entered once, shared by ``client`` and ``client_factory()``."""
-    async with LifespanManager(app) as manager:
+    async with LifespanManager(_state_per_request(app)) as manager:
         yield manager.app
 
 
@@ -142,7 +209,9 @@ async def client_factory(_running_app: ASGIApp, settings: Settings) -> AsyncIter
             if not settings_overrides:
                 return await stack.enter_async_context(_new_client(_running_app))
             other = _test_settings(**(settings.model_dump() | settings_overrides))
-            manager = await stack.enter_async_context(LifespanManager(create_app(other)))
+            manager = await stack.enter_async_context(
+                LifespanManager(_state_per_request(create_app(other)))
+            )
             return await stack.enter_async_context(_new_client(manager.app, other.public_origin))
 
         yield factory
@@ -155,13 +224,15 @@ async def https_client(_clean_db: None) -> AsyncIterator[httpx.AsyncClient]:
     proxy-headers middleware trusting every peer (``EASYTODO_FORWARDED_ALLOW_IPS=*``), so
     ``X-Forwarded-Proto`` / ``X-Forwarded-For`` set the request's scheme and client."""
     https = _test_settings(public_url="https://testserver")
-    async with LifespanManager(create_app(https)) as manager:
+    async with LifespanManager(_state_per_request(create_app(https))) as manager:
         proxied = ProxyHeadersMiddleware(manager.app, trusted_hosts="*")
         async with _new_client(proxied, https.public_origin) as c:
             yield c
 
 
 @pytest.fixture
-async def db(_db_engine: AsyncEngine, _clean_db: None) -> AsyncIterator[AsyncSession]:
+async def db(
+    _db_engine: AsyncEngine, _clean_db: None, _name_collation: str | None
+) -> AsyncIterator[AsyncSession]:
     async with AsyncSession(_db_engine, expire_on_commit=False) as session:
         yield session

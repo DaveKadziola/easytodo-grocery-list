@@ -13,23 +13,29 @@ from sqlalchemy import ColumnExpressionArgument, ScalarSelect, Select, delete, f
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from easytodo.attachments.service import total_bytes
+from easytodo.auth.reset import invalidate_reset_tokens
 from easytodo.auth.service import DEFAULT_BOARD_NAME, normalize_email
 from easytodo.auth.sessions import revoke_all_sessions, sessions_revoked
 from easytodo.boards.permissions import is_possible_id
 from easytodo.boards.service import add_board
+from easytodo.display import user_display_name
 from easytodo.errors import Conflict, NotFound
 from easytodo.models import (
     Board,
     BoardMember,
+    BoardRole,
     Category,
     Item,
+    NotificationKind,
     RecoveryCode,
     User,
     UserSession,
     UserStatus,
 )
+from easytodo.notifications.service import notify
 from easytodo.realtime.events import BoardEvent, EventType, commit_and_publish
-from easytodo.security.passwords import hash_password
+from easytodo.security.passwords import hash_password_async
 
 ACTIVE_WINDOW = timedelta(days=30)  # "active" users signed in within it
 CANNOT_DELETE_SELF = "You can't delete your own account here."
@@ -50,6 +56,7 @@ class AdminStats:
     categories_total: int
     items_total: int
     items_open: int
+    attachments_bytes: int  # the size of every attached file
 
 
 def _page_count(total: int, per_page: int) -> int:
@@ -102,8 +109,9 @@ async def get_stats(db: AsyncSession) -> AdminStats:
                 count(Board),
                 select(func.count()).select_from(shared).scalar_subquery(),
                 count(Category),
-                count(Item),
-                count(Item, Item.is_done.is_(False)),
+                count(Item, Item.deleted_at.is_(None)),
+                count(Item, Item.deleted_at.is_(None), Item.is_done.is_(False)),
+                total_bytes,
             )
         )
     ).one()
@@ -179,7 +187,7 @@ async def create_user_with_temp_password(
     password = secrets.token_urlsafe(12)
     user = User(
         email=email,
-        password_hash=hash_password(password),
+        password_hash=await hash_password_async(password),
         is_admin=is_admin,
         must_change_password=True,
     )
@@ -198,8 +206,11 @@ async def create_user_with_temp_password(
 async def _keep_an_active_admin(db: AsyncSession, user: User) -> None:
     """``Conflict`` if ``user`` is the only active admin, so they may not go.
 
-    Locks the active admins' rows until the commit: two admins removing each other at once
-    cannot both succeed.
+    Locks the active admins' rows until the commit, FOR NO KEY UPDATE: two admins removing each
+    other at once cannot both succeed (that lock conflicts with itself), and a row that points at
+    an admin (a notification for them) can still be inserted, whose foreign key takes only FOR KEY
+    SHARE. A plain FOR UPDATE would make a member leaving a board, or someone joining one, wait
+    behind the removal.
     """
     if not user.is_admin or user.status != UserStatus.ACTIVE:
         return
@@ -207,7 +218,7 @@ async def _keep_an_active_admin(db: AsyncSession, user: User) -> None:
         select(User.id)
         .where(User.is_admin, User.status == UserStatus.ACTIVE)
         .order_by(User.id)
-        .with_for_update()
+        .with_for_update(key_share=True)
     )
     if not any(admin_id != user.id for admin_id in admins):
         raise Conflict(LAST_ADMIN)
@@ -215,30 +226,75 @@ async def _keep_an_active_admin(db: AsyncSession, user: User) -> None:
 
 async def delete_user(db: AsyncSession, admin: User, user_id: int) -> None:
     """Delete the account; the boards it owns go with it (FK cascades), and its devices are
-    signed out."""
+    signed out. The boards of others it was a member of lose a member: the others' pages reload
+    them, and the owner of each that is not archived is told that the member left, as when they
+    leave themselves (an owner who is the admin doing this is not: they know)."""
     if user_id == admin.id:
         raise Conflict(CANNOT_DELETE_SELF)
     user = await get_user(db, user_id)
     await _keep_an_active_admin(db, user)
+    # The account's row first, as in ``revoke_all_sessions`` (not in ``get_user``: that would lock
+    # before ``_keep_an_active_admin``'s locks, which are in id order, and let two admins deleting
+    # each other deadlock instead of getting ``LAST_ADMIN``).
+    await db.execute(select(User.id).where(User.id == user.id).with_for_update(key_share=True))
     owned = list(await db.scalars(select(Board.id).where(Board.owner_id == user.id)))
+    # Their memberships on the boards of others, read before the cascade deletes them.
+    memberships = (
+        await db.execute(
+            select(BoardMember.board_id, Board.owner_id, Board.name, Board.archived_at)
+            .join(Board, Board.id == BoardMember.board_id)
+            .where(BoardMember.user_id == user.id, BoardMember.role != BoardRole.OWNER)
+            .order_by(BoardMember.board_id)
+        )
+    ).all()
+    name = user_display_name(user)
     # Deleted here rather than by the cascade, so their sockets are closed too.
     revoked = await revoke_all_sessions(db, user.id)
     await db.delete(user)
+    told: list[BoardEvent] = []
+    for board_id, owner_id, board_name, archived_at in memberships:
+        if archived_at is None and owner_id != admin.id:
+            told += notify(
+                db,
+                [owner_id],
+                NotificationKind.MEMBER_LEFT,
+                board_id=board_id,
+                actor=name,
+                board=board_name,
+            )
     await commit_and_publish(
         db,
         *sessions_revoked(user.id, revoked),
         *(BoardEvent(EventType.BOARD_DELETED, board_id=board_id) for board_id in owned),
+        # The others on these boards reload them; the deleted user's own sockets are closed.
+        *(
+            BoardEvent(EventType.MEMBER_REMOVED, board_id=board_id, user_id=user.id)
+            for board_id, *_ in memberships
+        ),
+        *told,
     )
 
 
 async def set_status(db: AsyncSession, admin: User, user_id: int, status: UserStatus) -> None:
-    """Disable the account (it is signed out everywhere and cannot sign in) or enable it."""
+    """Disable the account (it is signed out everywhere, its reset links end, and it cannot sign
+    in) or enable it. Enabling it again does not bring the links back: a link mailed before is
+    gone for good, and a new one has to be asked for."""
     user = await get_user(db, user_id)
     revoked: list[int] = []
-    if status == UserStatus.DISABLED:
+    disabling = status == UserStatus.DISABLED
+    if disabling:
         await _keep_an_active_admin(db, user)
+    # The account's row is locked first, as in ``revoke_all_sessions``: by the UPDATE of the status
+    # (flushed now, no statement added), or, if the status stays, by a SELECT (a flush of nothing
+    # locks nothing, and a disabled account can still have sessions and links to end).
+    if user.status != status:
+        user.status = status
+        await db.flush()
+    elif disabling:
+        await db.execute(select(User.id).where(User.id == user.id).with_for_update(key_share=True))
+    if disabling:
         revoked = await revoke_all_sessions(db, user.id)
-    user.status = status
+        await invalidate_reset_tokens(db, user.id)
     await commit_and_publish(db, *sessions_revoked(user.id, revoked))
 
 

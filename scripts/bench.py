@@ -20,7 +20,16 @@ order above on the same seed, so add_item grows the board before toggle_item run
     uv run python ../scripts/bench.py --target v2 --base-url http://localhost:8000 \
         --email bench@example.com --password bench-password-123
 
-For --target v2, --base-url must be the app's EASYTODO_PUBLIC_URL (CSRF checks the Origin header).
+For --target v2, --base-url must be the app's EASYTODO_PUBLIC_URL or one of its
+EASYTODO_EXTRA_ORIGINS: the CSRF check compares the Origin header, and a request from any other
+origin gets a 403 (the board's WebSocket is closed with code 4400).
+
+--realistic (v2 only) seeds the board the way a household uses it, so that the v2.1 features are
+on the page: a second account (bench-member-<run>@example.com, with the --password) joins the
+board as an editor through an invite link and adds every other task, which makes the board
+shared (each task shows its author's initials), and every REALISTIC_EVERY-th task gets
+CHECKLIST_ENTRIES checklist entries and a small text file. The registration is rate limited per
+IP (10 an hour): start each realistic run on a fresh app.
 """
 
 import argparse
@@ -34,6 +43,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Protocol
+from urllib.parse import urlsplit
 
 import httpx
 from websockets.asyncio.client import ClientConnection, connect
@@ -49,6 +59,9 @@ SESSION_COOKIE = "easytodo_session"
 CLIENT_ID_HEADER = "X-Client-Id"
 CLIENT_ID = "bench"  # the browser tab making the changes
 SECOND_CLIENT_ID = "bench-second-client"  # the tab whose socket waits for them
+REALISTIC_EVERY = 10  # --realistic: every 10th task gets a checklist and a file
+CHECKLIST_ENTRIES = 5  # checklist entries of such a task
+BENCH_FILE = ("note.txt", b"EasyToDo bench\n", "text/plain")  # the file of such a task
 
 
 def percentile(values: list[float], p: float) -> float:
@@ -157,6 +170,34 @@ async def log_in(client: httpx.AsyncClient, email: str, password: str) -> None:
     client.headers[CSRF_HEADER] = token
 
 
+async def join_by_invite(
+    client: httpx.AsyncClient, invite_link: str, email: str, password: str
+) -> None:
+    """Sign ``client`` up as ``email`` through the invite's page and accept the invite, as a
+    person who follows the link does; it then sends the CSRF header and the Origin on every change.
+    Only the path of ``invite_link`` is used: its host is EASYTODO_PUBLIC_URL, which is also the
+    address ``client`` talks to. Any answer but 303 is a ``RuntimeError`` that names the step."""
+    client.headers["Origin"] = origin_of(client)
+    page = urlsplit(invite_link).path  # /invite/{token}
+    after = {"next": page}  # sign-up works from an invite page even with registration closed
+    response = await client.get("/register", params=after)
+    token = client.cookies.get(CSRF_COOKIE)
+    if response.status_code != 200 or token is None:
+        raise RuntimeError(
+            f"Joining by invite: opening the sign-up page failed: HTTP {response.status_code}"
+        )
+    form = {"email": email, "password": password, CSRF_FIELD: token}
+    response = await client.post("/register", params=after, data=form)
+    if response.status_code != 303:
+        raise RuntimeError(f"Joining by invite: signing up failed: HTTP {response.status_code}")
+    response = await client.post(f"{page}/accept", headers={CSRF_HEADER: token})
+    if response.status_code != 303:
+        raise RuntimeError(
+            f"Joining by invite: accepting the invite failed: HTTP {response.status_code}"
+        )
+    client.headers[CSRF_HEADER] = token
+
+
 async def _received(socket: ClientConnection) -> tuple[float, str]:
     """The next message on ``socket``, with the ``perf_counter`` time it arrived at."""
     message = await socket.recv()
@@ -165,7 +206,9 @@ async def _received(socket: ClientConnection) -> tuple[float, str]:
 
 class V2Target:
     """v2: FastAPI + HTMX app; logs in through the form and uses the fragment routes.
-    ``second_client`` is only used to sign in a second time, for the board socket of ws_event."""
+    ``second_client`` is only used to sign in a second time, for the board socket of ws_event.
+    With a ``member_client`` the seed is the realistic one (see the module docstring): a second
+    account joins the board and the board gets checklists and files."""
 
     def __init__(
         self,
@@ -174,9 +217,11 @@ class V2Target:
         *,
         email: str,
         password: str,
+        member_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.client = client
         self.second_client = second_client
+        self.member_client = member_client
         self.email = email
         self.password = password
         self.board_id: int | None = None
@@ -186,9 +231,32 @@ class V2Target:
         self.client.headers[CLIENT_ID_HEADER] = CLIENT_ID  # as app.js sends it from each tab
 
     async def _post(self, path: str, **form: str) -> httpx.Response:
-        response = await self.client.post(path, data=form)
+        return await self._post_as(self.client, path, **form)
+
+    @staticmethod
+    async def _post_as(client: httpx.AsyncClient, path: str, **form: str) -> httpx.Response:
+        response = await client.post(path, data=form)
         response.raise_for_status()
         return response
+
+    async def _share_board(self, member_client: httpx.AsyncClient, run: str) -> None:
+        """A second account joins the board as an editor, through an invite link."""
+        response = await self._post(f"/boards/{self.board_id}/invites", role="editor")
+        match = re.search(r'<input id="invite-link" value="([^"]+)"', response.text)
+        if match is None:
+            raise RuntimeError("The invite page shows no invite link")
+        email = f"bench-member-{run}@example.com"
+        await join_by_invite(member_client, match[1], email, self.password)
+
+    async def _fill_details(self, item_ids: list[int]) -> None:
+        """A checklist and a file for every REALISTIC_EVERY-th task."""
+        for item_id in item_ids[::REALISTIC_EVERY]:
+            for n in range(CHECKLIST_ENTRIES):
+                await self._post(f"/items/{item_id}/checklist", text=f"step {n}")
+            response = await self.client.post(
+                f"/items/{item_id}/attachments", files={"file": BENCH_FILE}
+            )
+            response.raise_for_status()
 
     async def seed(self, categories: int, items: int) -> Seeded:
         await self._login()
@@ -198,6 +266,8 @@ class V2Target:
         if response.status_code != 303 or match is None:
             raise RuntimeError(f"Creating the board failed: HTTP {response.status_code}")
         self.board_id = int(match[1])
+        if self.member_client is not None:
+            await self._share_board(self.member_client, run)
 
         category_ids = []
         for c in range(categories):
@@ -209,7 +279,9 @@ class V2Target:
             category_id = int(match[1])
             category_ids.append(category_id)
             for i in range(items):
-                await self._post(f"/categories/{category_id}/items", name=f"item {c}-{i}")
+                # With a second account, it adds every other task: the authors differ.
+                adder = self.member_client if self.member_client and i % 2 else self.client
+                await self._post_as(adder, f"/categories/{category_id}/items", name=f"item {c}-{i}")
 
         page = await self.client.get(f"/boards/{self.board_id}")
         page.raise_for_status()
@@ -218,6 +290,8 @@ class V2Target:
             raise RuntimeError(
                 f"Seeded {categories * items} items, the board lists {len(item_ids)}"
             )
+        if self.member_client is not None:
+            await self._fill_details(item_ids)
         return Seeded(category_ids, item_ids)
 
     async def view_board(self) -> None:
@@ -245,10 +319,16 @@ class V2Target:
         ) as socket:
             for trial in range(WARMUP_REQUESTS + trials):
                 receiving = asyncio.create_task(_received(socket))
+                item_id = next(item_ids)
                 try:
                     started = time.perf_counter()
-                    await self.toggle_item(next(item_ids))
+                    await self.toggle_item(item_id)
                     received_at, message = await asyncio.wait_for(receiving, EVENT_TIMEOUT_S)
+                except TimeoutError:
+                    raise RuntimeError(
+                        f"No event on board {self.board_id} for item {item_id}"
+                        f" within {EVENT_TIMEOUT_S} s"
+                    ) from None
                 finally:
                     receiving.cancel()  # when the toggle failed
                 if json.loads(message).get("board_id") != self.board_id:
@@ -291,9 +371,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--requests", type=int, default=200, help="measured requests per scenario")
     parser.add_argument("--categories", type=int, default=20)
     parser.add_argument("--items", type=int, default=30, help="items per category")
+    parser.add_argument(
+        "--realistic",
+        action="store_true",
+        help="v2 only: a shared board, with checklists and files (see the module docstring)",
+    )
     args = parser.parse_args(argv)
     if args.target == "v2" and not (args.email and args.password):
         parser.error("--target v2 requires --email and --password")
+    if args.realistic and args.target != "v2":
+        parser.error("--realistic requires --target v2")
     return args
 
 
@@ -302,12 +389,19 @@ async def main(argv: Sequence[str] | None = None) -> None:
     async with (
         httpx.AsyncClient(base_url=args.base_url, timeout=30) as client,
         httpx.AsyncClient(base_url=args.base_url, timeout=30) as second_client,
+        httpx.AsyncClient(base_url=args.base_url, timeout=30) as member_client,
     ):
         target: Target
         if args.target == "legacy":
             target = LegacyTarget(client)
         else:
-            target = V2Target(client, second_client, email=args.email, password=args.password)
+            target = V2Target(
+                client,
+                second_client,
+                email=args.email,
+                password=args.password,
+                member_client=member_client if args.realistic else None,
+            )
         results = await run_scenarios(
             target, requests=args.requests, categories=args.categories, items=args.items
         )

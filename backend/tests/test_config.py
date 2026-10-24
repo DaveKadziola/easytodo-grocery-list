@@ -1,7 +1,10 @@
+import os
+
 import pytest
 from pydantic import ValidationError
 
 from easytodo.config import Settings
+from easytodo.web import templates
 
 
 def test_secret_key_must_have_32_chars():
@@ -112,3 +115,38 @@ def test_allowed_origins_are_the_public_and_the_extra_origins(monkeypatch):
         {"http://localhost:8000", "http://192.168.122.50:8000", "http://192.168.1.100:8000"}
     )
     assert s.public_origin == "http://localhost:8000"  # links and the error messages use it
+
+
+def test_purge_runs_daily_unless_turned_off(monkeypatch):
+    def interval() -> int:
+        return Settings(
+            _env_file=None, database_url=DATABASE_URL, secret_key="x" * 40
+        ).purge_interval_hours
+
+    assert interval() == 24
+    monkeypatch.setenv("EASYTODO_PURGE_INTERVAL_HOURS", "0")
+    assert interval() == 0
+    monkeypatch.setenv("EASYTODO_PURGE_INTERVAL_HOURS", "-1")
+    with pytest.raises(ValidationError):
+        interval()
+
+
+def test_database_url_is_kept_secret():
+    """The URL holds the database password: it stays out of reprs, logs and templates."""
+    s = Settings(_env_file=None, database_url=DATABASE_URL, secret_key="x" * 40)
+
+    assert s.database_url.get_secret_value() == DATABASE_URL
+    assert "u:p@h" not in repr(s) and "u:p@h" not in str(s)
+    assert (
+        templates.env.from_string("{{ settings.database_url }}").render(settings=s) == "**********"
+    )
+
+
+def test_tests_ignore_the_developers_environment_and_env_file(tmp_path, monkeypatch):
+    """``tests/conftest.py`` drops every EASYTODO_* variable and the ``.env`` file for the whole
+    session, so a developer's (or CI's) settings cannot change what a test sees."""
+    assert [name for name in os.environ if name.upper().startswith("EASYTODO_")] == []
+    (tmp_path / ".env").write_text("EASYTODO_PUBLIC_URL=https://leak.example\n")
+    monkeypatch.chdir(tmp_path)
+    s = Settings(database_url=DATABASE_URL, secret_key="x" * 40)  # on purpose without _env_file
+    assert s.public_origin == "http://localhost:8000"

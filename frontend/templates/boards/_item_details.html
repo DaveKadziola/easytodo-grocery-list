@@ -1,0 +1,105 @@
+{# An item's details, the fragment GET /items/{id}/details answers with: it replaces the (empty)
+   #item-details in the slot of the editor's item modal or of the viewer's dialog, and again
+   whenever an event names the item (static/js/realtime.js). Every checklist and attachment route
+   answers with it too. Read-only markup for a member who may not edit.
+   Context: details (ItemDetails). Who added the item is named only on a shared board.
+   Nothing in it may look like an item or a category of the board (data-item-id,
+   data-category-*, id="item-<n>"): the board's scripts look for those on the whole page. -#}
+{% from "partials/_checklist_count.html" import checklist_count %}
+{% set item = details.item %}
+{% set entries = details.entries %}
+{% set files = details.attachments %}
+{% set can_edit = can(details.role, Action.EDIT_CONTENT) %}
+<div id="item-details" data-details-item-id="{{ item.id }}" class="mt-6 space-y-4 border-t border-slate-200 pt-4 dark:border-slate-700">
+  <p class="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600 dark:text-slate-400">
+    <span>{% if details.show_author %}Added by {{ details.author.name }} · {% else %}Added {% endif %}<time datetime="{{ item.created_at.isoformat() }}" class="whitespace-nowrap">{{ item.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</time></span>
+    <span>Modified <time datetime="{{ item.updated_at.isoformat() }}" class="whitespace-nowrap">{{ item.updated_at.strftime("%Y-%m-%d %H:%M") }} UTC</time></span>
+  </p>
+  {#- The checklist: an editor ticks, renames, deletes, drags and adds entries, each in a request of its own whose answer replaces #item-details (hx-target); a viewer reads it, and sees nothing when it is empty. #}
+  <section id="item-checklist"{% if can_edit %} hx-target="#item-details"{% endif %}>
+    {% if can_edit or entries %}
+    <div class="mb-1 flex items-center gap-2 font-semibold">
+      <h3 id="item-checklist-title">Checklist</h3>
+      {% if entries %}{{ checklist_count(entries|selectattr("is_done")|list|length, entries|length) }}{% endif %}
+    </div>
+    {% endif %}
+    {% if can_edit %}
+    {#- The list is outside the forms: its checkboxes and fields send no more than their own. #}
+    <ul data-sortable-checklist>
+      {% for entry in entries %}
+      <li id="checklist-entry-{{ entry.id }}" data-entry-id="{{ entry.id }}" class="flex items-center py-0.5">
+        {#- Drag it, or focus it and press ↑ or ↓ (board.js). A span with a role, not a <button>: Firefox does not start a drag from a button inside the draggable row. #}
+        <span id="checklist-{{ entry.id }}-handle" class="checklist-handle btn-icon shrink-0 cursor-grab touch-none text-slate-500 dark:text-slate-400" role="button" tabindex="0" aria-label="Move {{ entry.text }}" aria-keyshortcuts="ArrowUp ArrowDown" title="Drag to reorder, or press ↑ or ↓"><span aria-hidden="true">⠿</span></span>
+        <label class="tap-target">
+          <input type="checkbox" id="checklist-{{ entry.id }}-done" class="size-5 accent-emerald-600" aria-label="{{ entry.text }}" hx-post="/checklist/{{ entry.id }}/check"{% if entry.is_done %} checked{% endif %}>
+        </label>
+        {#- Saved with Enter. #}
+        <form hx-patch="/checklist/{{ entry.id }}" class="min-w-0 flex-1">
+          <input id="checklist-{{ entry.id }}-text" name="text" value="{{ entry.text }}" aria-label="Edit {{ entry.text }}" required maxlength="200" autocomplete="off" class="input">
+        </form>
+        <button type="button" class="btn-icon shrink-0 text-slate-600 dark:text-slate-400" hx-delete="/checklist/{{ entry.id }}" data-refocus="checklist-new-{{ item.id }}" aria-label="Delete {{ entry.text }}" title="Delete"><span aria-hidden="true">✕</span></button>
+      </li>
+      {% endfor %}
+    </ul>
+    <form hx-post="/items/{{ item.id }}/checklist" data-refocus="checklist-new-{{ item.id }}" hx-disabled-elt="find button" class="mt-2 flex gap-2">
+      <label for="checklist-new-{{ item.id }}" class="sr-only">Add entry</label>
+      <input id="checklist-new-{{ item.id }}" name="text" placeholder="Add entry" required maxlength="200" autocomplete="off" class="input">
+      <button type="submit" class="btn-primary shrink-0">Add</button>
+    </form>
+    {% elif entries %}
+    <ul class="space-y-1">
+      {% for entry in entries %}
+      {#- The struck-through text is its own box: the icon beside it keeps its mark. #}
+      <li class="flex items-start gap-2 py-1">
+        {% if entry.is_done %}
+        <span class="shrink-0 text-emerald-700 dark:text-emerald-400"><span role="img" aria-label="done">✓</span></span>
+        <span class="min-w-0 break-words text-slate-500 line-through dark:text-slate-400">{{ entry.text }}</span>
+        {% else %}
+        <span class="shrink-0 text-slate-600 dark:text-slate-400"><span role="img" aria-label="not done">○</span></span>
+        <span class="min-w-0 break-words">{{ entry.text }}</span>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {#- The attached files: an editor deletes one and adds another (the form's answer, like every other request here, replaces #item-details); a viewer sees the list and opens the files. A picture shows as its thumbnail, a PDF opens in the browser's viewer in a new tab, and the other files on a page of their own (/attachments/{id}). #}
+  <section id="item-attachments"{% if can_edit %} hx-target="#item-details" hx-swap="outerHTML"{% endif %}>
+    <div class="mb-1 flex items-center gap-2 font-semibold">
+      <h3 id="item-attachments-title">Attachments</h3>
+      {% if files %}<span class="text-sm font-normal text-slate-600 dark:text-slate-400">{{ files|length }}</span>{% endif %}
+    </div>
+    {% if files %}
+    <ul class="space-y-1">
+      {% for view in files %}
+      {% set file = view.attachment %}
+      <li data-attachment-id="{{ file.id }}" class="flex items-start gap-2">
+        <div class="min-w-0 flex-1">
+          <a href="/attachments/{{ file.id }}{% if file.kind == 'pdf' %}/file{% endif %}"{% if file.kind == "pdf" %} target="_blank" rel="noopener"{% endif %} class="inline-flex min-h-11 max-w-full items-center gap-2">
+            {% if file.kind == "image" %}
+            <img src="/attachments/{{ file.id }}/thumb" alt="" width="44" height="44" loading="lazy" class="size-11 shrink-0 rounded object-cover">
+            {% else %}
+            <span class="inline-flex size-11 shrink-0 items-center justify-center text-2xl" aria-hidden="true">{% if file.kind == "pdf" %}📕{% else %}📄{% endif %}</span>
+            {% endif %}
+            <span class="link min-w-0 wrap-anywhere">{{ file.filename }}</span>
+          </a>
+          <p class="text-sm text-slate-600 dark:text-slate-400">{{ file.size_bytes|filesizeformat(true) }} · {% if view.uploader %}{{ view.uploader.name }} · {% endif %}<time datetime="{{ file.created_at.isoformat() }}" class="whitespace-nowrap">{{ file.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</time></p>
+        </div>
+        {% if can_edit %}
+        <button type="button" class="btn-icon shrink-0 text-slate-600 dark:text-slate-400" hx-delete="/attachments/{{ file.id }}" hx-confirm="Delete “{{ file.filename }}”?" data-refocus="attachment-file" aria-label="Delete {{ file.filename }}" title="Delete"><span aria-hidden="true">✕</span></button>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-sm text-slate-600 dark:text-slate-400">No attachments yet.</p>
+    {% endif %}
+    {% if can_edit %}
+    <form hx-post="/items/{{ item.id }}/attachments" hx-encoding="multipart/form-data" hx-disabled-elt="find button" data-refocus="attachment-file" class="mt-2 space-y-2">
+      <label for="attachment-file" class="label">Add a file</label>
+      <input id="attachment-file" type="file" name="file" required accept="image/*,.heic,.heif,application/pdf,.pdf,.txt,text/plain,.md,text/markdown" class="block min-h-11 w-full text-sm file:mr-3 file:min-h-11 file:rounded-lg file:border-0 file:px-3">
+      <button type="submit" class="btn-secondary">Upload</button>
+    </form>
+    {% endif %}
+  </section>
+</div>

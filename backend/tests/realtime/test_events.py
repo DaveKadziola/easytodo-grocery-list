@@ -18,6 +18,7 @@ def test_event_types_use_the_wire_names():
         "CATEGORIES_REORDERED": "categories.reordered",
         "MEMBER_REMOVED": "member.removed",
         "SESSIONS_REVOKED": "sessions.revoked",
+        "NOTIFICATIONS_CHANGED": "notifications.changed",
         "RESYNC": "resync",
     }
 
@@ -27,6 +28,7 @@ def test_event_round_trips_through_json():
         EventType.CATEGORY_CHANGED,
         board_id=3,
         category_ids=(7, 8),
+        item_ids=(9,),
         user_id=5,
         session_ids=(11,),
         origin="tab-1",
@@ -38,6 +40,7 @@ def test_event_round_trips_through_json():
         "type": "category.changed",
         "board_id": 3,
         "category_ids": [7, 8],
+        "item_ids": [9],
         "user_id": 5,
         "session_ids": [11],
         "origin": "tab-1",

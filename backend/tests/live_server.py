@@ -101,7 +101,7 @@ def emptying_tables(settings: Settings) -> Iterator[None]:
     try:
         yield
     finally:
-        in_worker_thread(asyncio.run, _empty_tables(settings.database_url))
+        in_worker_thread(asyncio.run, _empty_tables(settings.database_url.get_secret_value()))
 
 
 @pytest.fixture

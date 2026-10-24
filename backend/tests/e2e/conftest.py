@@ -6,20 +6,27 @@ work runs in a worker thread.
 """
 
 import asyncio
+import os
 import re
+import sys
 from collections.abc import Awaitable, Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
 from factories import DEFAULT_PASSWORD, create_board, create_category, create_item, create_user
 from live_server import LiveServer, in_worker_thread, live_server  # noqa: F401 (fixture)
-from playwright.sync_api import Browser, BrowserContext, Page, expect
+from playwright.sync_api import Browser, BrowserContext, Locator, Page, expect
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from easytodo.models import User
 
 PHONE = {"viewport": {"width": 375, "height": 812}, "is_mobile": True, "has_touch": True}
+
+# What a drag has picked up: Sortable gives the element the class when the press is long enough.
+# The ghost that follows the finger is a copy of it, with this class too and ``sortable-fallback``.
+PICKED_UP = ".sortable-chosen:not(.sortable-fallback)"
 
 # Counts the board content reloads that are in place (swapped in, htmx set up on them) in
 # <html data-board-reloads>: an attribute, which expect() can wait for under the page's CSP
@@ -34,6 +41,84 @@ document.addEventListener("htmx:afterSettle", (event) => {
 });
 """
 
+
+# The page has no web font, only the system's (`ui-sans-serif, system-ui, sans-serif`), and where a
+# word wraps depends on it: "gospodarstwa" in a bold title is 125 px in Inter and 143 px in DejaVu
+# Sans, a stock Ubuntu's default. So Chromium gets this fontconfig, which makes Inter the system's
+# sans-serif on every Linux machine, the CI runner included (it installs fonts-inter).
+FONTS_CONF = Path(__file__).with_name("fonts.conf")
+SANS_STACK = "ui-sans-serif, system-ui, sans-serif"  # --font-sans of app.css, without the emoji
+
+# Canvas widths of one text in a bold 18 px font: Inter itself, what is drawn when it is missing
+# (the fallback is monospace), and the page's stack.
+FONT_WIDTHS = """(stack) => {
+  const context = document.createElement("canvas").getContext("2d");
+  const width = (family) => {
+    context.font = `600 18px ${family}`;
+    return context.measureText("Artykuły gospodarstwa domowego").width;
+  };
+  return { inter: width("Inter, monospace"), fallback: width("monospace"), stack: width(stack) };
+}"""
+INTER_MISSING = (
+    "The e2e tests need the font Inter (the layout tests were measured with it, and the page's "
+    "words wrap differently in another one), and Chromium found none. Install it: "
+    "`sudo apt-get install fonts-inter` on Debian and Ubuntu (CI does), "
+    "`brew install --cask font-inter` on macOS."
+)
+INTER_NOT_USED = (
+    "Inter is installed, but the page's sans-serif font is not Inter. "
+    f"{FONTS_CONF}, which the `browser_type_launch_args` fixture gives Chromium as its "
+    "FONTCONFIG_FILE, should make it so: is it there, well-formed, and does it still prefer Inter?"
+)
+
+
+@pytest.fixture(scope="session")
+def browser_type_launch_args(browser_type_launch_args: dict[str, Any]) -> dict[str, Any]:
+    """Chromium's own fontconfig is ``fonts.conf``: Inter is the page's font on every machine."""
+    env = {**os.environ, "FONTCONFIG_FILE": str(FONTS_CONF)}
+    return {**browser_type_launch_args, "env": env}
+
+
+@pytest.fixture(scope="session")
+def browser(browser: Browser) -> Browser:
+    """The browser of pytest-playwright, once it is known to render the pages in Inter: if not,
+    the session stops with the reason (better than a failure in every layout test about a word
+    that wrapped). Only the tests that use the browser start it: the tests of this directory that
+    need none must not leave Playwright's event loop running for the async tests after them."""
+    page = browser.new_page()
+    try:
+        widths = page.evaluate(FONT_WIDTHS, SANS_STACK)
+    finally:
+        page.close()
+    if abs(widths["inter"] - widths["fallback"]) < 0.5:
+        pytest.exit(INTER_MISSING, returncode=1)
+    # fonts.conf pins the font through fontconfig, which only Linux's Chromium uses.
+    if sys.platform.startswith("linux") and abs(widths["stack"] - widths["inter"]) >= 0.5:
+        pytest.exit(INTER_NOT_USED, returncode=1)
+    return browser
+
+
+def watch_console(page: Page) -> list[str]:
+    """Every console error or warning and every uncaught exception on ``page`` from now on."""
+    problems: list[str] = []
+    page.on(
+        "console",
+        lambda msg: (
+            problems.append(f"{msg.type}: {msg.text}") if msg.type in ("error", "warning") else None
+        ),
+    )
+    page.on("pageerror", lambda exc: problems.append(f"pageerror: {exc}"))
+    return problems
+
+
+def open_board_menu(page: Page, name: str) -> Locator:
+    """Open the ⋮ menu of the board ``name`` on the board list (``/boards``); returns the board's
+    card (``li.card``), whose menu items are inside it."""
+    menu = page.get_by_label(f"Actions for {name}", exact=True)
+    menu.click()
+    return page.locator("li.card").filter(has=menu)
+
+
 type Seed = Callable[[Callable[[AsyncSession], Awaitable[Any]]], Any]
 
 
@@ -44,7 +129,9 @@ def seed(live_server: LiveServer) -> Seed:  # noqa: F811
 
     def run(make: Callable[[AsyncSession], Awaitable[Any]]) -> Any:
         async def main() -> Any:
-            engine = create_async_engine(live_server.settings.database_url, poolclass=NullPool)
+            engine = create_async_engine(
+                live_server.settings.database_url.get_secret_value(), poolclass=NullPool
+            )
             try:
                 async with AsyncSession(engine, expire_on_commit=False) as db:
                     return await make(db)

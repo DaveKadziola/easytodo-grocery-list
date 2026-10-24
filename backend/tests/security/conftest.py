@@ -50,6 +50,12 @@ def build_mini_app(settings: Settings) -> FastAPI:
     async def submit() -> dict[str, bool]:
         return {"ok": True}
 
+    @app.post("/form-seen")
+    async def form_seen(request: Request) -> dict[str, bool]:
+        """Keeps the form it read (the CSRF check has read it already), to see what became of it."""
+        app.state.form_seen = await request.form()
+        return {"ok": True}
+
     @app.post("/limited", dependencies=[Depends(rate_limit("test", 2, 60))])
     async def limited() -> dict[str, bool]:
         return {"ok": True}

@@ -9,6 +9,8 @@ import time
 import pytest
 from playwright.sync_api import Locator, Page, Route, WebSocketRoute, expect
 
+from e2e.locators import add_item, item, items_of
+
 pytestmark = pytest.mark.e2e
 
 BOARD_SOCKET = re.compile(r"/ws/boards/\d+")
@@ -18,29 +20,6 @@ FIRST_RETRY_EARLIEST_S = 0.8
 FIRST_RETRY_LATEST_S = 1.2
 SETTLE_MS = 1000  # long enough for an update that is (wrongly) not held back to show
 STRUCK = re.compile(r"\bline-through\b")
-
-
-def category(page: Page, name: str) -> Locator:
-    return page.locator("section[data-category-id]").filter(
-        has=page.get_by_role("heading", name=name, exact=True)
-    )
-
-
-def items_of(page: Page, category_name: str) -> Locator:
-    return category(page, category_name).locator("li[data-item-id]")
-
-
-def item(page: Page, name: str) -> Locator:
-    return page.locator("li[data-item-id]").filter(
-        has=page.get_by_role("checkbox", name=name, exact=True)
-    )
-
-
-def add_item(page: Page, category_name: str, name: str) -> None:
-    section = category(page, category_name)
-    section.get_by_placeholder("Add item").fill(name)
-    section.get_by_role("button", name="Add", exact=True).click()
-    expect(items_of(page, category_name).filter(has_text=name)).to_have_count(1)
 
 
 def expect_struck(row: Locator, struck: bool) -> None:

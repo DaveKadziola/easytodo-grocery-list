@@ -1,11 +1,14 @@
 """Board members: the members page, changing a member's role, removing a member and leaving."""
 
+import re
+
 import pytest
 from factories import create_board, create_user
-from helpers import signed_in, toast_message
+from helpers import LINKS_STILL_WORK, signed_in, toast_message
 from sqlalchemy import select
 
-from easytodo.boards.invites import create_link_invite
+from easytodo.boards.invites import create_email_invite, create_link_invite
+from easytodo.mail.mailer import ConsoleMailer
 from easytodo.models import Board, BoardInvite, BoardMember, BoardRole
 from easytodo.realtime.events import BoardEvent, EventType
 from easytodo.security.csrf import CSRF_HEADER
@@ -13,7 +16,7 @@ from easytodo.security.csrf import CSRF_HEADER
 HX = {"HX-Request": "true"}
 NO_PERMISSION = "You don't have permission to do that."
 OWNER_ROLE = "The owner's role can't be changed."
-OWNER_LEAVES = "The owner can't leave. Delete the board instead."
+OWNER_LEAVES = "The owner can't leave. Archive the board instead."
 
 
 async def members_of(db, board_id: int) -> dict[int, BoardRole]:
@@ -40,6 +43,10 @@ async def test_members_page_lists_members_with_roles(client_factory, db, team):
     path = f"/boards/{board.id}/members"
 
     page = (await (await signed_in(client_factory, "owner@example.com")).get(path)).text
+    assert "<title>Invite and members · Groceries · EasyToDo</title>" in page
+    assert re.search(r"<h1[^>]*>Invite and members</h1>\s*<p[^>]*>Groceries</p>", page)
+    assert re.search(r'<a href="/boards"[^>]*>Back to boards</a>', page)
+    assert f'href="/boards/{board.id}"' not in page
     assert page.index("owner@example.com") < page.index("eve@example.com")
     assert page.index("eve@example.com") < page.index("frank@example.com")
     assert f'hx-patch="/boards/{board.id}/members/{eve.id}"' in page
@@ -56,10 +63,12 @@ async def test_members_page_lists_members_with_roles(client_factory, db, team):
         assert control not in page
     assert f'action="/boards/{board.id}/leave"' in page
 
-    board_page = await (await signed_in(client_factory, "frank@example.com")).get(
-        f"/boards/{board.id}"
-    )
-    assert f'href="{path}"' in board_page.text
+    # The way to this page is the owner's ⋮ menu on the board list; a member has no link to it
+    # (they leave from their own ⋮ menu).
+    for email, linked in (("owner@example.com", True), ("frank@example.com", False)):
+        client = await signed_in(client_factory, email)
+        assert (f'href="{path}"' in (await client.get("/boards")).text) is linked
+        assert f'href="{path}"' not in (await client.get(f"/boards/{board.id}")).text
 
 
 async def test_non_members_get_404_for_the_members_page(client_factory, db, team):
@@ -89,7 +98,8 @@ async def test_owner_changes_a_members_role(client_factory, db, team, sharing_ev
     }
     # Carries the member, so that member's own page can reload with its new controls.
     assert sharing_events == [
-        BoardEvent(EventType.BOARD_UPDATED, board_id=board.id, user_id=eve.id)
+        BoardEvent(EventType.BOARD_UPDATED, board_id=board.id, user_id=eve.id),
+        BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=eve.id),  # the bell on their devices
     ]
     eve_client = await signed_in(client_factory, "eve@example.com")
     r = await eve_client.post(f"/boards/{board.id}/categories", data={"name": "Dairy"}, headers=HX)
@@ -118,12 +128,38 @@ async def test_removed_member_loses_access(client_factory, db, team, sharing_eve
     assert "eve@example.com" not in r.text
     assert await members_of(db, board.id) == {owner.id: BoardRole.OWNER, frank.id: BoardRole.VIEWER}
     assert sharing_events == [
-        BoardEvent(EventType.MEMBER_REMOVED, board_id=board.id, user_id=eve.id)
+        BoardEvent(EventType.MEMBER_REMOVED, board_id=board.id, user_id=eve.id),
+        BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=eve.id),
     ]
     for path in (f"/boards/{board.id}", f"/boards/{board.id}/members"):
         r = await eve_client.get(path)
         assert r.status_code == 404
         assert "Board not found." in r.text
+
+
+async def test_remove_warns_that_invite_links_still_work(client_factory, db, team, settings):
+    """An invite link works for anyone who has it, the person removed included: say so where the
+    owner confirms the removal. An e-mail invite is for one address and is not mentioned."""
+    board, owner, *_ = team
+    path = f"/boards/{board.id}/members"
+    owner_client = await signed_in(client_factory, "owner@example.com")
+    plain = 'hx-confirm="Remove eve@example.com from this board?"'
+    warned = f'hx-confirm="Remove eve@example.com from this board? {LINKS_STILL_WORK}"'
+    assert plain in (await owner_client.get(path)).text
+
+    await create_email_invite(
+        db, board.id, owner, "friend@example.com", BoardRole.EDITOR, ConsoleMailer(), settings
+    )
+    page = (await owner_client.get(path)).text
+    assert plain in page and LINKS_STILL_WORK not in page
+
+    _, link = await create_link_invite(db, board.id, owner, BoardRole.EDITOR)
+    page = (await owner_client.get(path)).text
+    assert warned in page and plain not in page
+    assert page.count(LINKS_STILL_WORK) == 2  # every member who can be removed: eve and frank
+
+    await owner_client.delete(f"/boards/{board.id}/invites/{link.id}")
+    assert plain in (await owner_client.get(path)).text  # a revoked link rejoins nobody
 
 
 async def test_member_leaves_board(client_factory, db, team, sharing_events):
@@ -140,9 +176,11 @@ async def test_member_leaves_board(client_factory, db, team, sharing_events):
     assert r.headers["location"] == "/boards"
 
     assert await members_of(db, board.id) == {owner.id: BoardRole.OWNER}
-    assert sharing_events == [
+    assert sharing_events == [  # each leaving tells the owner
         BoardEvent(EventType.MEMBER_REMOVED, board_id=board.id, user_id=eve.id),
+        BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=owner.id),
         BoardEvent(EventType.MEMBER_REMOVED, board_id=board.id, user_id=frank.id),
+        BoardEvent(EventType.NOTIFICATIONS_CHANGED, user_id=owner.id),
     ]
     assert (await eve_client.get(f"/boards/{board.id}")).status_code == 404
     assert "Groceries" not in (await eve_client.get("/boards")).text

@@ -20,6 +20,13 @@ from easytodo.config import Settings
 logger = logging.getLogger(__name__)
 
 SMTP_TIMEOUT_S = 10
+# The addresses of the machine the app runs on: the console backend's log is read there.
+LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]"})
+CONSOLE_MAIL_WARNING = (
+    "No mail is sent (EASYTODO_MAIL_BACKEND=console) although the app runs at %s: "
+    "password-reset and invite links are written to this log instead. "
+    "Set EASYTODO_MAIL_BACKEND=smtp."
+)
 OUTBOX_SIZE = 100  # mails the console backend keeps
 _SUBJECT_PREFIX = "Subject: "
 
@@ -100,6 +107,9 @@ class SmtpMailer:
 def get_mailer(settings: Settings) -> Mailer:
     if settings.mail_backend == "smtp":
         return SmtpMailer(settings)
+    if settings.public_url.host not in LOCAL_HOSTS:
+        # Once per worker, at start: the app is not run on the machine of whoever reads its log.
+        logger.warning(CONSOLE_MAIL_WARNING, settings.public_origin)
     return ConsoleMailer()
 
 

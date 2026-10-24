@@ -1,0 +1,34 @@
+{# The dialog that moves a category, with its items, to another board: Alpine component
+   "moveCategory" (static/js/board.js), outside the board content. The category menu's "Move to
+   board…" opens it with the category's id and name (the "move-category" event on the window); the
+   name is as text (x-text, .value), never written into a script. It is shown and hidden with its
+   hidden attribute ("closed"), as the item modal is (see _item_modal.html), and while it is open
+   the page behind is inert. A name that is taken on the target board stays in the dialog: the
+   field gets the free name the server suggests, and the alert says why, until another board is
+   picked. Esc, or a tap on the dimmed page, closes it; Tab keeps to its controls.
+   Context: move_targets (the BoardChoice list of the boards to move to, not empty). -#}
+<div id="move-category" x-data="moveCategory" hidden :hidden="closed" class="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/50 dark:bg-black/60 sm:items-center sm:p-4" @click.self="close" @keydown.escape="close" @move-category.window="openFor" @category-name-taken="nameTaken" @htmx:after-request="afterRequest">
+  <div role="dialog" aria-modal="true" aria-labelledby="move-category-title" tabindex="-1" class="max-h-dvh w-full max-w-md overflow-y-auto rounded-t-2xl bg-white dark:bg-slate-900 p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-xl focus:outline-none sm:rounded-2xl" @keydown.tab="trapFocus">
+    <h2 id="move-category-title" class="text-lg font-semibold">Move to board</h2>
+    <p x-text="label" class="mt-1 break-words text-slate-700 dark:text-slate-300"></p>
+    <form x-ref="form" @submit.prevent="move" class="mt-4 space-y-4">
+      <div>
+        <label for="move-category-board" class="label">Board</label>
+        <select id="move-category-board" name="board_id" x-ref="board" class="input" @change="boardPicked">
+          {% for s in move_targets %}
+          <option value="{{ s.id }}">{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="move-category-name" class="label">Category name</label>
+        <input id="move-category-name" name="name" x-ref="name" required maxlength="120" pattern=".*\S.*" autocomplete="off" class="input">
+      </div>
+      <p id="move-category-taken" role="alert" x-show="taken" class="form-error">That board already has a category with this name.</p>
+      <div class="flex justify-end gap-2 pt-2">
+        <button type="button" class="btn-secondary" @click="close">Cancel</button>
+        <button type="submit" class="btn-primary">Move</button>
+      </div>
+    </form>
+  </div>
+</div>

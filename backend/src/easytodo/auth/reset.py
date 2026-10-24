@@ -1,14 +1,16 @@
 """Password reset by e-mail: a link that works once and expires after ``RESET_TTL``; only the
 token's hash is stored.
 
-A new request, a reset and a password change each end every earlier link of the account.
-Resetting does not turn two-factor authentication off.
+A new request, a reset, a password change and an admin disabling the account (``set_status``)
+each end every earlier link of the account; enabling it again brings none back. Resetting does
+not turn two-factor authentication off.
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import ColumnElement, func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from easytodo.auth.service import normalize_email
 from easytodo.auth.sessions import revoke_all_sessions, sessions_revoked
@@ -17,10 +19,17 @@ from easytodo.errors import NotFound, ValidationFailed
 from easytodo.mail.mailer import Mailer, render_mail
 from easytodo.models import PasswordResetToken, User, UserStatus
 from easytodo.realtime.events import commit_and_publish
-from easytodo.security.passwords import hash_password, validate_password
+from easytodo.security.passwords import hash_password_async, validate_password
+from easytodo.security.ratelimit import RateLimiter
 from easytodo.security.tokens import hash_token, new_token
 
+logger = logging.getLogger(__name__)
+
 RESET_TTL = timedelta(minutes=60)
+# Mails one account gets from the forgotten-password form per window, whoever asks and from
+# wherever: the per-IP limit alone leaves anyone with many addresses free to fill a mailbox.
+RESET_MAILS_PER_ACCOUNT = 3
+RESET_MAILS_WINDOW_S = 3600
 INVALID_RESET_LINK = "This reset link is invalid or has expired."
 
 
@@ -39,17 +48,39 @@ async def invalidate_reset_tokens(db: AsyncSession, user_id: int) -> None:
 
 
 async def request_password_reset(
-    db: AsyncSession, email: str, mailer: Mailer, settings: Settings
+    db: AsyncSession,
+    email: str,
+    mailer: Mailer,
+    settings: Settings,
+    *,
+    limiter: RateLimiter | None = None,
 ) -> None:
     """Mail a reset link to the active account with this address (normalised), ending its
     earlier links. Does nothing for an unknown, invalid or disabled address, so the caller
-    answers the same either way."""
+    answers the same either way.
+
+    With a ``limiter``, an account gets at most ``RESET_MAILS_PER_ACCOUNT`` mails per
+    ``RESET_MAILS_WINDOW_S``; a request over that does nothing either, and ends no link, so that
+    a flood of requests cannot make the link already in the mailbox useless. (An admin sending
+    a link, who has no use for the cap, passes none.)"""
     try:
         email = normalize_email(email)
     except ValidationFailed:
         return  # no account has an invalid address
-    user = await db.scalar(select(User).where(User.email == email))
+    # Locked FOR NO KEY UPDATE, as in ``revoke_all_sessions``: this writes several token rows, and
+    # a reset, a change or a disable that holds the account's row would otherwise wait for rows
+    # this holds. (Fresh, whatever the caller has loaded: the account may have changed meanwhile.)
+    user = await db.scalar(
+        select(User)
+        .where(User.email == email)
+        .with_for_update(key_share=True)
+        .execution_options(populate_existing=True)
+    )
     if user is None or user.status == UserStatus.DISABLED:
+        return
+    if limiter is not None and not limiter.hit(
+        f"password-reset-mail:user:{user.id}", RESET_MAILS_PER_ACCOUNT, RESET_MAILS_WINDOW_S
+    ):
         return
     await invalidate_reset_tokens(db, user.id)
     raw_token = new_token()
@@ -68,6 +99,24 @@ async def request_password_reset(
         valid_minutes=RESET_TTL // timedelta(minutes=1),
     )
     await mailer.send(user.email, subject, body)
+
+
+async def process_reset_request(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    email: str,
+    mailer: Mailer,
+    settings: Settings,
+    limiter: RateLimiter,
+) -> None:
+    """``request_password_reset`` for a background task, which runs once the response is sent:
+    in a session of its own (the request's is gone), and whatever goes wrong is logged, never
+    raised, as nobody is left to answer. The session holds no connection while the mail is sent
+    (it commits before)."""
+    try:
+        async with sessionmaker() as db:
+            await request_password_reset(db, email, mailer, settings, limiter=limiter)
+    except Exception:
+        logger.exception("Password reset request failed")
 
 
 async def get_valid_reset_token(db: AsyncSession, raw_token: str) -> PasswordResetToken:
@@ -92,6 +141,16 @@ async def reset_password(db: AsyncSession, raw_token: str, new_password: str) ->
     a forced password change, and signs the account out on every device (one commit)."""
     token = await get_valid_reset_token(db, raw_token)
     validate_password(new_password)  # before the token is used up, so it can be tried again
+    new_hash = await hash_password_async(new_password)  # before any row is locked
+    # The account's row first, as in ``revoke_all_sessions`` (FOR NO KEY UPDATE): an admin
+    # disabling the account locks it first too, and would otherwise wait for the token row below
+    # while this waits for the account's. Read afresh (``populate_existing``), so that a caller
+    # that has the account loaded does not set a lockout it holds stale back to what it was.
+    user = await db.get(
+        User, token.user_id, with_for_update={"key_share": True}, populate_existing=True
+    )
+    if user is None:  # deleted meanwhile
+        raise NotFound(INVALID_RESET_LINK)
     # Conditional, so two concurrent resets cannot both use it.
     used = await db.scalar(
         update(PasswordResetToken)
@@ -101,8 +160,7 @@ async def reset_password(db: AsyncSession, raw_token: str, new_password: str) ->
     )
     if used is None:
         raise NotFound(INVALID_RESET_LINK)
-    user = await db.get_one(User, token.user_id)
-    user.password_hash = hash_password(new_password)
+    user.password_hash = new_hash
     user.must_change_password = False
     user.failed_login_count = 0
     user.locked_until = None

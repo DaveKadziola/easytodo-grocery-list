@@ -3,6 +3,10 @@
     python -m easytodo.cli create-admin --email you@example.com [--password-stdin]
     python -m easytodo.cli import-legacy --legacy-dsn postgresql://user@host:5432/todo_grocery
         --schema prod --owner-email you@example.com [--board-name NAME] [--legacy-tz ZONE]
+    python -m easytodo.cli purge
+
+``purge`` deletes what is past its retention (the app does it by itself every
+``EASYTODO_PURGE_INTERVAL_HOURS`` hours, unless that is 0) and prints what it deleted.
 
 In the compose setup: ``docker compose exec app python -m easytodo.cli create-admin --email
 you@example.com``. Keep the v1 database's password out of ``--legacy-dsn`` (shell history, the
@@ -14,14 +18,17 @@ import argparse
 import asyncio
 import getpass
 import sys
-from datetime import UTC
+from datetime import UTC, datetime
 
 import asyncpg
 from sqlalchemy import func, select
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from easytodo.attachments.storage import AttachmentStore
 from easytodo.auth.service import normalize_email
 from easytodo.config import get_settings
+from easytodo.content.validation import CATEGORY_NAME_MAX_LENGTH
 from easytodo.db import create_engine
 from easytodo.errors import ValidationFailed
 from easytodo.legacy_import import (
@@ -31,8 +38,15 @@ from easytodo.legacy_import import (
     ImportReport,
     import_legacy,
 )
-from easytodo.models import User, UserSession
+from easytodo.maintenance import PURGE_BUSY, PURGE_LOCK_TIMEOUT, purge
+from easytodo.models import User, UserSession, UserStatus
 from easytodo.security.passwords import hash_password, validate_password
+
+ACCOUNT_EXISTS = "An account with this email already exists."
+DISABLED_WARNING = (
+    "warning: {email} is disabled and cannot sign in until an admin enables it at /admin/users."
+)
+_LOCK_NOT_AVAILABLE = "55P03"  # the PostgreSQL SQLSTATE of a lock_timeout
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -76,12 +90,23 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_LEGACY_TZ,
         help="the time zone v1's server ran in; its timestamps have none (default: %(default)s)",
     )
+    commands.add_parser(
+        "purge",
+        help="delete what is past its retention now",
+        description="Delete the archived boards and categories past their owner's retention, the "
+        "tasks deleted more than 10 minutes ago, the notifications older than 30 days and the "
+        "files no task refers to any more. The app does this by itself every "
+        "EASYTODO_PURGE_INTERVAL_HOURS hours; this runs it now.",
+    )
     args = parser.parse_args(argv)
     try:
-        if args.command == "create-admin":
-            output = asyncio.run(_create_admin(args.email, password_stdin=args.password_stdin))
-        else:
-            output = asyncio.run(_import_legacy(args))
+        match args.command:
+            case "create-admin":
+                output = asyncio.run(_create_admin(args.email, password_stdin=args.password_stdin))
+            case "import-legacy":
+                output = asyncio.run(_import_legacy(args))
+            case "purge":
+                output = asyncio.run(_purge())
         print(output)
     except ValidationFailed as exc:
         print(f"error: {exc.message}", file=sys.stderr)
@@ -97,21 +122,54 @@ async def _create_admin(email: str, *, password_stdin: bool) -> str:
     try:
         async with AsyncSession(engine) as db:
             user = await db.scalar(select(User).where(User.email == email))
+            # A disabled account stays as it is: enabling it is an admin's decision.
+            disabled = user is not None and user.status == UserStatus.DISABLED
             if user is not None and user.is_admin:
+                _warn_if_disabled(email, disabled)
                 return f"{email} is already an admin."
             if user is not None:
                 warning = await _promotion_warning(db, user, password_stdin=password_stdin)
                 user.is_admin = True
                 await db.commit()
                 print(warning, file=sys.stderr)
+                _warn_if_disabled(email, disabled)
                 return f"{email} is now an admin. Their password is unchanged."
             password = _read_password(from_stdin=password_stdin)
             validate_password(password)
             db.add(User(email=email, password_hash=hash_password(password), is_admin=True))
-            await db.commit()
+            try:
+                await db.commit()
+            except IntegrityError as exc:  # registered while the password was being typed
+                raise ValidationFailed(ACCOUNT_EXISTS) from exc
             return f"Created the admin account {email}."
     finally:
         await engine.dispose()
+
+
+def _warn_if_disabled(email: str, disabled: bool) -> None:
+    """Tell the operator that a disabled account cannot sign in, admin or not."""
+    if disabled:
+        print(DISABLED_WARNING.format(email=email), file=sys.stderr)
+
+
+async def _purge() -> str:
+    """Delete what is past its retention now; returns what was deleted."""
+    settings = get_settings()
+    engine = create_engine(settings)
+    try:
+        async with AsyncSession(engine) as db:
+            report = await purge(
+                db, AttachmentStore(settings.attachments_dir), now=datetime.now(UTC)
+            )
+    except DBAPIError as exc:  # only a row lock held too long; any other error is a bug
+        if getattr(exc.orig, "sqlstate", None) != _LOCK_NOT_AVAILABLE:
+            raise
+        raise ValidationFailed(PURGE_LOCK_TIMEOUT) from exc
+    finally:
+        await engine.dispose()
+    if report is None:
+        raise ValidationFailed(PURGE_BUSY)
+    return report.summary()
 
 
 async def _import_legacy(args: argparse.Namespace) -> str:
@@ -136,7 +194,7 @@ async def _read_legacy_into(
 ) -> ImportReport:
     try:
         legacy = await asyncpg.connect(args.legacy_dsn)
-    except (asyncpg.PostgresError, OSError) as exc:
+    except (asyncpg.PostgresError, OSError, ValueError) as exc:  # ValueError: a malformed DSN
         raise ValidationFailed(f"Could not connect to the legacy database: {exc}") from exc
     try:
         return await import_legacy(
@@ -165,8 +223,8 @@ def _describe(report: ImportReport, board_name: str, email: str) -> str:
     if report.renamed_categories:
         renamed = _count(len(report.renamed_categories), "category", "categories")
         lines.append(
-            f"{renamed} got another name in v2 (names are tidied, cut to 120 characters and "
-            "unique ignoring case). In v1:"
+            f"{renamed} got another name in v2 (names are tidied, cut to "
+            f"{CATEGORY_NAME_MAX_LENGTH} characters and unique ignoring case). In v1:"
         )
         lines.extend(f"  {name}" for name in report.renamed_categories)
     return "\n".join(lines)

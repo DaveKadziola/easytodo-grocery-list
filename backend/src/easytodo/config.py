@@ -1,5 +1,6 @@
 import re
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -48,7 +49,9 @@ class Settings(BaseSettings):
     # extra="ignore": the shared .env also holds compose-only keys (POSTGRES_PASSWORD, ...).
     model_config = SettingsConfigDict(env_prefix="EASYTODO_", env_file=".env", extra="ignore")
 
-    database_url: str  # postgresql+asyncpg://user:password@host:port/dbname
+    # postgresql+asyncpg://user:password@host:port/dbname. A SecretStr: it holds the database
+    # password, and a Settings is easy to print, log or hand to a template by mistake.
+    database_url: SecretStr
     secret_key: SecretStr = Field(min_length=32)
     public_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
     # More addresses the app is opened at (comma-separated in EASYTODO_EXTRA_ORIGINS), stored
@@ -57,6 +60,9 @@ class Settings(BaseSettings):
     env: Literal["dev", "test", "prod"] = "dev"
     registration_open: bool = True
     session_ttl_days: int = 30
+    # How often, in hours, the app deletes what is past its retention (see easytodo.maintenance);
+    # 0 turns it off (the CLI's ``purge`` still works).
+    purge_interval_hours: int = Field(default=24, ge=0)
     mail_backend: Literal["console", "smtp"] = "console"
     smtp_host: str | None = None
     smtp_port: int = 587
@@ -65,6 +71,12 @@ class Settings(BaseSettings):
     smtp_from: str = "EasyToDo <noreply@localhost>"
     smtp_starttls: bool = True
     forwarded_allow_ips: str = "127.0.0.1"
+    # Where attached files are kept (relative to the working directory, unless absolute), and the
+    # limits on them: bytes per file, files per task and bytes in all.
+    attachments_dir: Path = Path("data/attachments")
+    attachment_max_bytes: int = 10 * 1024 * 1024
+    attachments_per_item: int = 20
+    attachments_total_bytes: int = 2 * 1024**3
 
     @field_validator("extra_origins", mode="before")
     @classmethod

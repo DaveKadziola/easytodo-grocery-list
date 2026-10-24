@@ -22,7 +22,7 @@ type SignIn = Callable[[LiveServer, str], Awaitable[httpx.AsyncClient]]
 @pytest.fixture
 async def listener_probe(settings: Settings) -> AsyncIterator[asyncio.Queue[str]]:
     """Every payload notified on the board events channel from now on, in order."""
-    connection = await asyncpg.connect(listener_dsn(settings.database_url))
+    connection = await asyncpg.connect(listener_dsn(settings.database_url.get_secret_value()))
     payloads: asyncio.Queue[str] = asyncio.Queue()
     await connection.add_listener(
         NOTIFY_CHANNEL, lambda _connection, _pid, _channel, payload: payloads.put_nowait(payload)
@@ -55,16 +55,22 @@ async def sign_in() -> AsyncIterator[SignIn]:
         yield device
 
 
-@pytest.fixture
-def subscribed(live_server: LiveServer, monkeypatch) -> list[Subscriber]:  # noqa: F811
-    """Every socket the live server's hub subscribes from now on."""
-    hub = live_server.app.state.hub
+def spy_subscribe(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> list[Subscriber]:
+    """Every socket ``server``'s hub is asked to subscribe from now on, refused ones too (the
+    hub's answer still goes to the route)."""
+    hub = server.app.state.hub
     subscribe = hub.subscribe
     calls: list[Subscriber] = []
 
-    def spy(subscriber: Subscriber) -> None:
+    def spy(subscriber: Subscriber) -> bool:
         calls.append(subscriber)
-        subscribe(subscriber)
+        return subscribe(subscriber)
 
     monkeypatch.setattr(hub, "subscribe", spy)
     return calls
+
+
+@pytest.fixture
+def subscribed(live_server: LiveServer, monkeypatch) -> list[Subscriber]:  # noqa: F811
+    """Every socket the live server's hub subscribes from now on."""
+    return spy_subscribe(live_server, monkeypatch)

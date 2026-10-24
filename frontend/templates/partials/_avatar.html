@@ -1,0 +1,17 @@
+{#- {% from "partials/_avatar.html" import avatar %} {{ avatar(user.id, name) }}: a round badge with the
+    initials of ``name``, in the palette colour of ``user_id`` (a person keeps theirs). ``size`` is
+    "sm" or "md". Decoration (aria-hidden): the name is written out beside it, and in its title.
+    The classes are whole words so that Tailwind finds them. -#}
+{% macro avatar(user_id, name, size="sm") -%}
+{%- set palette = [
+  "bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-100",
+  "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-100",
+  "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100",
+  "bg-lime-100 text-lime-800 dark:bg-lime-900 dark:text-lime-100",
+  "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100",
+  "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-100",
+  "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-100",
+  "bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-900 dark:text-fuchsia-100",
+] -%}
+<span class="avatar {{ palette[avatar_color(user_id)] }}{% if size == 'md' %} size-8 text-sm{% endif %}" aria-hidden="true" title="{{ name }}">{{ initials(name) }}</span>
+{%- endmacro %}

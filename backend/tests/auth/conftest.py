@@ -9,6 +9,7 @@ import httpx
 import pyotp
 import pytest
 from factories import create_user
+from helpers import login
 from live_server import live_server  # noqa: F401 (fixture)
 from starlette.types import ASGIApp
 
@@ -53,3 +54,11 @@ async def client_from_ip(
             return await stack.enter_async_context(client)
 
         yield factory
+
+
+@pytest.fixture
+async def account_client(client: httpx.AsyncClient, db) -> httpx.AsyncClient:
+    """``client`` signed in as a new dave@example.com (all settings at their defaults)."""
+    await create_user(db, "dave@example.com")
+    await login(client, "dave@example.com")
+    return client

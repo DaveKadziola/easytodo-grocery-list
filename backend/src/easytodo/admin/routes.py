@@ -27,7 +27,7 @@ from easytodo.auth.deps import CurrentUser, DbSession, FormField
 from easytodo.auth.reset import request_password_reset
 from easytodo.errors import Conflict, NotFound, ValidationFailed
 from easytodo.models import User, UserStatus
-from easytodo.web import flash, is_htmx, render
+from easytodo.web import flash, is_htmx, no_store, render
 
 USERS_PATH = "/admin/users"
 ACCOUNT_DISABLED = "This account is disabled."
@@ -76,9 +76,9 @@ async def new_user(
             "error": exc.message,
         }
         return render(request, "admin/users.html", context, status_code=exc.status_code)
-    response = render(request, "admin/user_created.html", {"user": user, "password": password})
-    response.headers["Cache-Control"] = "no-store"  # the password is on this page only
-    return response
+    return no_store(  # the password is on this page only
+        render(request, "admin/user_created.html", {"user": user, "password": password})
+    )
 
 
 async def _answer(

@@ -1,0 +1,2 @@
+{# The bell's badge, swapped over the one in the header (GET /notifications/badge, POST /notifications/read). Context: count (the number of unread notifications; 0: nothing to show, but the element stays, for the next swap). -#}
+{% if count %}<span id="notifications-badge" class="notifications-badge">{{ count }}<span class="sr-only"> unread</span></span>{% else %}<span id="notifications-badge" hidden></span>{% endif %}
