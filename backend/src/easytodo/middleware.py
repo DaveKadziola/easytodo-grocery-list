@@ -9,7 +9,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from easytodo.attachments.service import too_large
 from easytodo.config import Settings
-from easytodo.errors import app_error_handler
+from easytodo.errors import PayloadTooLarge, app_error_handler
 from easytodo.realtime.events import current_origin
 from easytodo.security.csrf import CSRF_COOKIE
 from easytodo.security.headers import security_headers
@@ -112,14 +112,22 @@ class SecurityHeadersMiddleware:
 
 UPLOAD_PATH = re.compile(r"/items/\d+/attachments")
 FORM_OVERHEAD = 64 * 1024  # what the rest of the upload form (field names, boundaries) may add
+# What any other request that has a body may carry. The largest form is a few KB (a description is
+# at most 2000 characters; a new order lists the ids of one board's categories or one checklist),
+# so 1 MiB is far more than a person can send and far less than a body of any size.
+BODY_LIMIT = 1024 * 1024
+REQUEST_TOO_LARGE = "The request is too large."
+_WITH_BODY = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 class UploadSizeLimitMiddleware:
-    """Stops an attachment upload that is far too large before the app has read it all.
+    """Stops a request body that is far too large before the app has read it all.
 
-    The form is parsed (and spooled to a temporary file) before the route runs, so without this
-    anyone could make the server take in a body of any size. The limit is the largest file plus
-    ``FORM_OVERHEAD``; the service then checks the file itself against its limit.
+    The form is parsed (and, for a multipart one, spooled to a temporary file) before the route
+    runs, and the CSRF check reads it too, so without this anyone, signed in or not, could make
+    the server take in a body of any size. An attachment upload (``UPLOAD_PATH``) may carry the
+    largest file plus ``FORM_OVERHEAD``; the service then checks the file itself against its
+    limit. Every other POST, PUT, PATCH or DELETE may carry ``BODY_LIMIT``.
 
     A request that says it is larger (``Content-Length``) is answered 413 at once, unread. One
     that does not say (chunked) is read up to the limit; then the app is told the client is gone,
@@ -129,19 +137,19 @@ class UploadSizeLimitMiddleware:
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
         self.app = app
         self.settings = settings
-        self.limit = settings.attachment_max_bytes + FORM_OVERHEAD
+        self.upload_limit = settings.attachment_max_bytes + FORM_OVERHEAD
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            scope["type"] != "http"
-            or scope["method"] != "POST"
-            or not UPLOAD_PATH.fullmatch(scope["path"])
-        ):
+        if scope["type"] != "http" or scope["method"] not in _WITH_BODY:
             await self.app(scope, receive, send)
             return
+        if scope["method"] == "POST" and UPLOAD_PATH.fullmatch(scope["path"]):
+            limit, error = self.upload_limit, too_large(self.settings)
+        else:
+            limit, error = BODY_LIMIT, PayloadTooLarge(REQUEST_TOO_LARGE)
         declared = Headers(scope=scope).get("content-length", "")
-        if declared.isdecimal() and int(declared) > self.limit:
-            await self._refuse(scope, receive, send)
+        if declared.isdecimal() and int(declared) > limit:
+            await self._refuse(scope, receive, send, error)
             return
 
         received = 0
@@ -155,7 +163,7 @@ class UploadSizeLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self.limit:
+                if received > limit:
                     exceeded = True
                     return {"type": "http.disconnect"}
             return message
@@ -166,7 +174,7 @@ class UploadSizeLimitMiddleware:
                 return
             if exceeded and message["type"] == "http.response.start" and message["status"] >= 400:
                 refused = True
-                await self._refuse(scope, receive, send)
+                await self._refuse(scope, receive, send, error)
                 return
             await send(message)
 
@@ -177,9 +185,11 @@ class UploadSizeLimitMiddleware:
             # answer was started.
             if not exceeded or refused:
                 raise
-            await self._refuse(scope, receive, send)
+            await self._refuse(scope, receive, send, error)
 
-    async def _refuse(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def _refuse(
+        self, scope: Scope, receive: Receive, send: Send, error: PayloadTooLarge
+    ) -> None:
         request = Request(scope, receive)
-        response = await app_error_handler(request, too_large(self.settings))
+        response = await app_error_handler(request, error)
         await response(scope, receive, send)

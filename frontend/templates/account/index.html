@@ -15,7 +15,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div>
         <label for="display-name" class="label">Display name</label>
-        <input id="display-name" name="display_name" type="text" value="{{ current_user.display_name or '' }}" placeholder="{{ display_name(current_user.email, None) }}" autocomplete="nickname" aria-describedby="display-name-hint" class="input">
+        <input id="display-name" name="display_name" type="text" value="{{ profile_name if profile_name is defined else (current_user.display_name or '') }}" placeholder="{{ display_name(current_user.email, None) }}" autocomplete="nickname" aria-describedby="display-name-hint" class="input">
         <p id="display-name-hint" class="mt-1 text-sm text-slate-600 dark:text-slate-400">Shown as “{{ display_name(current_user.email, None) }}” if left empty.</p>
       </div>
       <button type="submit" class="btn-secondary">Save name</button>

@@ -307,7 +307,9 @@ async def save_profile(
             else None
         )
     except ValidationFailed as exc:
-        return await _account_page(request, db, user, {"profile_error": exc.message}, 400)
+        # The field keeps what was typed (without the NUL it cannot show), not the saved name.
+        shown = {"profile_error": exc.message, "profile_name": display_name.replace("\x00", "")}
+        return await _account_page(request, db, user, shown, 400)
     user.display_name = name
     await db.commit()
     return _saved(request, PROFILE_SAVED)

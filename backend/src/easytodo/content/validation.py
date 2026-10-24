@@ -1,6 +1,8 @@
 """Cleaning the category and item names and the item descriptions that users type in (and the
 text imported from v1, which follows the same rules)."""
 
+import unicodedata
+
 from easytodo.errors import ValidationFailed
 
 CATEGORY_NAME_MAX_LENGTH = 120  # categories.name is String(120)
@@ -24,10 +26,20 @@ def normalize_description(value: str | None) -> str:
     return _without_nul(value or "").replace("\r\n", "\n").strip()
 
 
+def _has_visible_character(name: str) -> bool:
+    """Whether anything in ``name`` shows: a character that is not white space, a control (Cc) or
+    a format character (Cf: zero-width, bidirectional marks and overrides)."""
+    return any(
+        not char.isspace() and unicodedata.category(char) not in ("Cc", "Cf") for char in name
+    )
+
+
 def clean_name(value: str, *, max_len: int, label: str) -> str:
-    """``value`` as ``normalize_name`` has it, which must be 1 to ``max_len`` characters."""
+    """``value`` as ``normalize_name`` has it, which must be 1 to ``max_len`` characters, and have
+    a visible one among them: a name of zero-width spaces or bidirectional marks is a blank name.
+    (Format characters beside visible ones stay: a joiner is part of an emoji sequence.)"""
     name = normalize_name(value)
-    if not 1 <= len(name) <= max_len:
+    if not 1 <= len(name) <= max_len or not _has_visible_character(name):
         raise ValidationFailed(f"{label} must be 1–{max_len} characters.")
     return name
 

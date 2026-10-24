@@ -89,7 +89,9 @@ async def test_display_name_is_cleaned_saved_and_flashed(account_client, db):
     assert r.status_code == 303 and (await settings(db))[0] is None  # back to the email's part
 
 
-@pytest.mark.parametrize("value", ["x" * 61, "\x00"])
+@pytest.mark.parametrize(
+    "value", ["x" * 61, "\x00", "\u200b\u200d"], ids=["too long", "NUL", "invisible"]
+)
 async def test_invalid_display_name_is_400(account_client, db, value):
     await account_client.post("/account/profile", data={"display_name": "Anna"})
 
@@ -98,8 +100,13 @@ async def test_invalid_display_name_is_400(account_client, db, value):
     assert r.status_code == 400
     assert "Display name must be 1–60 characters." in r.text
     assert FLASH_COOKIE not in r.headers.get("set-cookie", "")
-    assert (await settings(db))[0] == "Anna"
-    assert 'value="Anna"' in r.text  # the page shows what is saved, not the rejected text
+    assert (await settings(db))[0] == "Anna"  # what is saved is as it was
+    # The field shows what was typed, to be corrected, not the name that is saved (a NUL cannot
+    # be shown).
+    assert f'value="{value.strip(chr(0))}"' in r.text
+    assert 'value="Anna"' not in r.text
+    page = await account_client.get("/account")
+    assert 'value="Anna"' in page.text  # and the account page, afterwards, has the saved name
 
 
 async def test_display_name_is_escaped_on_the_account_page(client, db):

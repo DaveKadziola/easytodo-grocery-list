@@ -48,7 +48,12 @@ from easytodo.attachments.storage import AttachmentStore
 from easytodo.boards.permissions import Action, RowLock
 from easytodo.content.service import _category_changed
 from easytodo.errors import SERVER_ERROR
-from easytodo.middleware import FORM_OVERHEAD, UploadSizeLimitMiddleware
+from easytodo.middleware import (
+    BODY_LIMIT,
+    FORM_OVERHEAD,
+    REQUEST_TOO_LARGE,
+    UploadSizeLimitMiddleware,
+)
 from easytodo.models import Attachment, Category, User
 from easytodo.security.csrf import CSRF_HEADER
 
@@ -1138,12 +1143,77 @@ async def test_a_body_of_exactly_the_limit_goes_through(tmp_path):
         ("PUT", "/items/1/attachments"),
     ],
 )
-async def test_the_limit_leaves_other_requests_alone(tmp_path, method, path):
+async def test_the_upload_limit_leaves_other_requests_alone(tmp_path, method, path):
+    """(They have a limit of their own, below.)"""
     reader = Reader()
 
-    r = await send_to(reader, tmp_path, method, path, b"x" * (LIMIT + MEGABYTE))
+    r = await send_to(reader, tmp_path, method, path, b"x" * BODY_LIMIT)
 
     assert (r.status_code, reader.end) == (200, "complete")
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+@pytest.mark.parametrize(
+    "path", ["/login", "/items/1/checklist", "/items/1/attachments/2", "/items/x/attachments"]
+)
+async def test_any_other_body_is_refused_above_one_mebibyte_without_reading_it(
+    tmp_path, method, path
+):
+    reader = Reader()
+
+    r = await send_to(reader, tmp_path, method, path, b"x" * (BODY_LIMIT + 1))
+
+    assert r.status_code == 413
+    assert toast_message(r) == REQUEST_TOO_LARGE
+    assert reader.called == 0
+
+
+async def test_a_body_of_another_route_without_a_declared_size_is_cut_off_at_the_limit(tmp_path):
+    reader = Reader()
+
+    r = await send_to(reader, tmp_path, "POST", "/login", body_of(BODY_LIMIT + MEGABYTE))
+
+    assert r.status_code == 413 and toast_message(r) == REQUEST_TOO_LARGE
+    assert reader.end == "disconnected"
+    assert reader.bytes <= BODY_LIMIT
+
+
+async def test_the_other_limit_is_one_mebibyte_and_a_body_of_exactly_it_goes_through(tmp_path):
+    assert BODY_LIMIT == MEGABYTE
+    reader = Reader()
+
+    r = await send_to(reader, tmp_path, "POST", "/login", b"x" * BODY_LIMIT)
+
+    assert (r.status_code, reader.end, reader.bytes) == (200, "complete", BODY_LIMIT)
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS"])
+async def test_requests_without_a_body_are_not_limited(tmp_path, method):
+    reader = Reader()
+
+    r = await send_to(reader, tmp_path, method, "/login", b"x" * (BODY_LIMIT + 1))
+
+    assert (r.status_code, reader.end) == (200, "complete")
+
+
+async def test_a_form_of_two_mebibytes_to_the_login_is_a_413_in_the_whole_app(client):
+    """Before the CSRF check, which would have read it (and spooled it, were it multipart)."""
+    r = await client.post(
+        "/login",
+        content=b"email=a%40b.c&password=" + b"x" * (2 * MEGABYTE),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+
+    assert r.status_code == 413
+    assert REQUEST_TOO_LARGE in r.text and "413" in r.text
+
+
+async def test_an_ordinary_form_to_another_route_is_not_affected(editor_client, item):
+    r = await editor_client.patch(
+        f"/items/{item.id}", data={"name": "Oat milk", "description": "x" * 2000}, headers=HX
+    )
+
+    assert r.status_code == 200
 
 
 # ---- what a deleted attachment's files do
