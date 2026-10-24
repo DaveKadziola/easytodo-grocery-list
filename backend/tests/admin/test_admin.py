@@ -401,13 +401,14 @@ async def test_deleting_a_member_tells_the_owners_of_active_boards_only(db, admi
     olga = await create_user(db, "olga@example.com")
     mia = await create_user(db, "mia@example.com")
     dave_id, olga_id = dave.id, olga.id
-    # Created in another order than their owners: the events follow the boards' ids.
-    mias_archived = await create_board(
-        db, mia, "Mia's old", {dave: BoardRole.VIEWER}, archived_at=datetime.now(UTC)
-    )
+    mias_archived = await create_board(db, mia, "Mia's old", archived_at=datetime.now(UTC))
     olgas = await create_board(db, olga, "Olga's", {dave: BoardRole.EDITOR})
     admins = await create_board(db, admin, "Family", {dave: BoardRole.EDITOR})
     daves = await create_board(db, dave, "Dave's", {olga: BoardRole.EDITOR})
+    # Dave joins the board with the lowest id last, so his rows are not in id order on disk: the
+    # events come in the boards' id order only because the query sorts them.
+    db.add(BoardMember(board_id=mias_archived.id, user_id=dave_id, role=BoardRole.VIEWER))
+    await db.commit()
     board_ids = (mias_archived.id, olgas.id, admins.id, daves.id)
 
     await delete_user(db, admin, dave_id)

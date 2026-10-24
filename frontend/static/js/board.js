@@ -352,21 +352,27 @@
 
   // A tick (or untick) of an item shows at once, struck through or not, before the server has
   // answered; the answer then replaces the category. If the request fails, it is undone (failed()
-  // below; app.js tells the user), unless a tap on the same checkbox is held back behind it: htmx
-  // sends that next, and its answer shows the state. An entry of the checklist shows its own
-  // state, the checkbox, and nothing else.
+  // below; app.js tells the user): the checkbox goes back to the state the server last rendered
+  // (its checked attribute, which every answer that replaces it carries), unless a tap on the
+  // same checkbox is held back behind it: htmx sends that next, and its answer shows the state,
+  // or, if that fails too, failed() puts the checkbox back. An entry of the checklist shows its
+  // own state, the checkbox, and nothing else.
   function strike(checkbox) {
     checkbox.closest("[data-item-id]").classList.toggle("line-through", checkbox.checked);
   }
 
   // A tap on a checkbox whose last tap is still on its way (a quick double tap): htmx holds the
   // new request back on that checkbox until the answer comes. If that answer fails, htmx sends
-  // the held request (failed() leaves the checkbox as tapped). But an answer may also replace the
-  // category (or the details), checkbox and all, and htmx then drops what it held for an element
-  // that is gone. It need not be the answer to the tick: a request sent earlier (an item added,
-  // done items cleared) can come back first, with the state from before the tick was saved. So the
-  // state its user wants is noted here and always sent from the new checkbox once it is set up
-  // (a toggle that carries its state is idempotent).
+  // the held request (failed() leaves the checkbox as tapped; if the held request fails too, it
+  // puts the checkbox back to the saved state). But an answer may also replace the category (or
+  // the details), checkbox and all, and htmx then drops what it held for an element that is gone.
+  // It need not be the answer to the tick: a request sent earlier (an item added, done items
+  // cleared) can come back first, with the state from before the tick was saved. So the state its
+  // user wants is noted here and always sent from the new checkbox once it is set up
+  // (a toggle that carries its state is idempotent). Accepted: when the answer that replaced the
+  // category was an earlier one (an item added) and the tap sent from the new checkbox fails, the
+  // checkbox goes back to what that answer rendered, which is wrong if the tick before it, still
+  // on its way, gets through (its answer finds the category it was to replace gone).
   const ticking = new WeakSet(); // checkboxes whose request is on its way
   const heldTicks = new Map(); // checkbox id -> {from: checkbox tapped, checked: wanted state}
 
@@ -420,7 +426,9 @@
     const checkbox = event.detail.elt;
     const heldBehind = heldTicks.get(checkbox.id)?.from === checkbox; // htmx sends it right away
     if (checkbox.matches(TICKS) && checkbox.isConnected && !heldBehind) {
-      checkbox.checked = !checkbox.checked;
+      // Not a flip: when two taps in a row fail, the last one's state is the one the first
+      // started from, and flipping it would show the opposite of what the server has.
+      checkbox.checked = checkbox.defaultChecked;
       if (checkbox.matches(TICK)) strike(checkbox);
     }
     const config = event.detail.requestConfig;

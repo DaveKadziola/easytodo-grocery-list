@@ -18,6 +18,7 @@ from sqlalchemy import func, update
 from e2e import test_responsive
 from e2e.conftest import open_board_menu, watch_console
 from e2e.locators import TAP_TARGETS, add_item, category, item, items_of
+from e2e.test_resync import expect_struck
 from easytodo.models import Board, BoardMember, BoardRole, Category, Item
 
 pytestmark = pytest.mark.e2e
@@ -896,6 +897,48 @@ def test_untick_held_behind_a_failed_tick_is_sent(logged_in_page, seed, user, op
     expect(milk).not_to_be_checked()
     page.reload()
     expect(milk).not_to_be_checked()
+    assert len(sent) == 2
+
+
+@pytest.mark.parametrize("failure", ["error", "no answer"])
+@pytest.mark.parametrize("start_done", [False, True], ids=["unticked", "ticked"])
+def test_two_failed_taps_leave_the_state_the_server_has(
+    logged_in_page, seed, user, open_board, failure, start_done
+):
+    """A quick double tap whose two requests both fail: the first leaves the checkbox as tapped
+    (the second is sent next), the second puts it back. The user's last tap equals the state they
+    started from, and it is the saved one that must stay on screen, struck or not."""
+    page = logged_in_page
+    board_id = seed_board(seed, user, {"Dairy": ["Milk"]}, done=("Milk",) if start_done else ())
+    open_board(page, board_id)
+    milk = page.get_by_role("checkbox", name="Milk")
+    sent: list[Request] = []
+    held: list[Route] = []
+
+    def fail(route: Route) -> None:
+        if failure == "error":
+            route.fulfill(status=500, body="boom")
+        else:
+            route.abort()
+
+    def answer(route: Route) -> None:
+        sent.append(route.request)
+        fail(route) if held else held.append(route)  # the first waits for the second tap
+
+    page.route(TOGGLED, answer)
+
+    milk.click()
+    while not held:
+        page.wait_for_timeout(10)
+    milk.click()  # waits in htmx's queue for the first answer
+    fail(held[0])
+
+    expect(page.locator("#toasts > *")).to_have_count(2)  # both failures are in
+    expect(milk).to_be_checked(checked=start_done)
+    expect_struck(item(page, "Milk"), start_done)
+    page.reload()
+    expect(milk).to_be_checked(checked=start_done)
+    expect_struck(item(page, "Milk"), start_done)
     assert len(sent) == 2
 
 

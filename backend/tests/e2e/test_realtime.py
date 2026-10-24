@@ -864,6 +864,41 @@ def test_failed_add_into_a_category_archived_elsewhere_reloads_the_board_while_t
     expect(category(page, "Dairy")).to_be_visible()
 
 
+def test_urgent_reload_dropped_for_an_own_request_is_asked_for_again_urgently(
+    signed_in_page, seed, user, open_board
+):
+    """The answer to the urgent reload is dropped because an own request came meanwhile (it may
+    be older than that request's change). The reload is queued again, and the user is still
+    waiting for it: the text in the focused field holds it back no more than the first time."""
+    board_id = seed_two_categories(seed, user)
+    page = signed_in_page()
+    messages = received_messages(page)
+    open_board(page, board_id)
+    bakery_id = int(category(page, "Bakery").get_attribute("data-category-id"))
+    held: list[Route] = []
+    page.route(
+        re.compile(r"/boards/\d+/content$"),
+        lambda route: route.continue_() if held else held.append(route),
+    )
+    field = category(page, "Bakery").get_by_placeholder("Add item")
+    field.fill("Eggs")
+    seed(lambda db: service.archive_category(db, bakery_id, user))
+    wait_for_message(page, messages, "category.deleted")  # the typing holds the removal
+    field.press("Enter")  # answered 404 with a resync: an urgent reload, whose answer is held
+    wait_until(page, lambda: held, "the board reload's request")
+
+    with page.expect_response(TOGGLED):  # an own request; a click from script keeps the focus
+        page.get_by_role("checkbox", name="Milk").evaluate("(box) => box.click()")
+    expect(field).to_be_focused()
+    reloads = int(board_reloads(page))
+    held[0].continue_()
+
+    expect(category(page, "Bakery")).to_have_count(0, timeout=LIVE_UPDATE_MS)  # not at focusout
+    expect(category(page, "Dairy")).to_be_visible()
+    # Only the answer fetched again was swapped in; the dropped one was not.
+    expect(page.locator("html")).to_have_attribute("data-board-reloads", str(reloads + 1))
+
+
 def test_update_that_could_not_be_fetched_shows_no_error(two_logged_in_pages):
     a, b = two_logged_in_pages
     aborted = []
