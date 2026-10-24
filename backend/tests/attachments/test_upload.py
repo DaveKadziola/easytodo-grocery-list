@@ -37,8 +37,10 @@ from easytodo.attachments.service import (
     NOT_ALLOWED,
     NOT_UTF8,
     PIXEL_BUDGETS,
+    PROGRESSIVE_JPEG_MAX_PIXELS,
     STORAGE_FULL,
     TOO_MANY,
+    TOO_MANY_PIXELS,
     _attachment_lookup,
     clean_filename,
     delete_attachment,
@@ -487,7 +489,7 @@ async def test_an_image_with_too_many_pixels_is_refused_without_a_warning(
         headers=HX,
     )
 
-    assert r.status_code == 422 and toast_message(r) == BROKEN_IMAGE
+    assert r.status_code == 422 and toast_message(r) == TOO_MANY_PIXELS
     assert nothing_left(await attachment_rows(db), store)
     assert [w.message for w in recwarn if "pixels" in str(w.message)] == []  # none emitted
     assert warnings.filters == filters  # and the process's warning filters are as they were
@@ -501,7 +503,7 @@ async def test_an_image_far_over_the_pixel_limit_is_refused(editor_client, item,
         f"/items/{item.id}/attachments", files={"file": ("bomb.png", buffer.getvalue())}, headers=HX
     )
 
-    assert r.status_code == 422 and toast_message(r) == BROKEN_IMAGE
+    assert r.status_code == 422 and toast_message(r) == TOO_MANY_PIXELS
     assert nothing_left(await attachment_rows(db), store)
 
 
@@ -540,7 +542,7 @@ async def test_a_picture_over_the_budget_of_its_format_is_refused_before_it_is_d
         f"/items/{item.id}/attachments", files={"file": (name, content)}, headers=HX
     )
 
-    assert r.status_code == 422 and toast_message(r) == BROKEN_IMAGE
+    assert r.status_code == 422 and toast_message(r) == TOO_MANY_PIXELS
     assert nothing_left(await attachment_rows(db), store)
     assert loaded == []  # nothing was loaded, nothing thumbnailed: the header was enough
 
@@ -556,14 +558,54 @@ async def test_a_picture_with_exactly_the_budget_is_accepted(
     assert len(await attachment_rows(db)) == 1
 
 
-async def test_a_jpeg_has_no_budget_but_the_pillow_limit(
+async def test_a_baseline_jpeg_has_no_budget_but_the_pillow_limit(
     editor_client, item, db, store, monkeypatch
 ):
-    """A JPEG is decoded at a fraction of its size (``draft``): the limit of Pillow is enough."""
+    """A baseline JPEG is decoded at a fraction of its size (``draft``): the limit of Pillow is
+    enough."""
     for fmt in PIXEL_BUDGETS:
         monkeypatch.setitem(PIXEL_BUDGETS, fmt, 1)
+    monkeypatch.setattr(attachments, "PROGRESSIVE_JPEG_MAX_PIXELS", 1)
 
     assert await upload(editor_client, item.id, "photo.jpg", samples.jpeg((12, 12)), "image/jpeg")
+
+
+def progressive_jpeg(size: tuple[int, int] = (12, 12)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, (200, 120, 40)).save(buffer, format="JPEG", progressive=True)
+    return buffer.getvalue()
+
+
+def test_a_progressive_jpeg_has_the_budget_the_memory_notes_assume():
+    """``draft`` does not help a progressive JPEG: it is decoded whole (89 MP took 520 MB)."""
+    assert PROGRESSIVE_JPEG_MAX_PIXELS == 50_000_000
+
+
+@pytest.mark.parametrize("budget, refused", [(100, True), (144, False)], ids=["over", "exactly"])
+async def test_a_progressive_jpeg_over_its_budget_is_refused_before_it_is_decoded(
+    editor_client, item, db, store, monkeypatch, budget, refused
+):
+    content = progressive_jpeg()  # 144 pixels; saving it loads it, so before the watch below
+    monkeypatch.setattr(attachments, "PROGRESSIVE_JPEG_MAX_PIXELS", budget)
+    loaded = []
+    real_load = Image.Image.load
+    monkeypatch.setattr(
+        Image.Image, "load", lambda self, *a, **kw: loaded.append(self) or real_load(self, *a, **kw)
+    )
+
+    r = await editor_client.post(
+        f"/items/{item.id}/attachments",
+        files={"file": ("photo.jpg", content, "image/jpeg")},
+        headers=HX,
+    )
+
+    if refused:
+        assert r.status_code == 422 and toast_message(r) == TOO_MANY_PIXELS
+        assert nothing_left(await attachment_rows(db), store)
+        assert loaded == []  # the header was enough
+    else:
+        assert r.status_code == 200
+        assert len(await attachment_rows(db)) == 1
 
 
 async def test_pictures_are_decoded_one_at_a_time(editor_client, item, db, store, monkeypatch):

@@ -57,6 +57,7 @@ STORAGE_FULL = "Attachment storage is full."
 NOT_ALLOWED = "Only images, PDF, .txt and .md files can be attached."
 NOT_UTF8 = "Text files must be saved as UTF-8."
 BROKEN_IMAGE = "This image could not be read."
+TOO_MANY_PIXELS = "This picture has too many pixels."
 NO_FILE = "Choose a file to attach."
 ATTACHMENT_GONE = "This attachment no longer exists."
 
@@ -67,12 +68,14 @@ PREVIEW_SIZE = (2048, 2048)  # a HEIC photo, as a JPEG that browsers can show
 # before anything is decoded (the same refusal as the pixel limit of Pillow itself). Decoding
 # holds the whole picture, and the peak depends on the format, not on the file: a WebP of 38 bytes
 # with 9449 x 9449 pixels took 1.3 GB, a 64 MP panorama HEIC killed a 512 MiB container. 48 MP
-# phone photos fit. A JPEG has no budget: it is decoded at a fraction of its size (``draft``), so
-# the limit of Pillow is enough. docs/deployment.md ("Memory for photos") has the peaks.
+# phone photos fit. A baseline JPEG has no budget: it is decoded at a fraction of its size
+# (``draft``), so the limit of Pillow is enough. A progressive one is decoded whole (89 MP took
+# 520 MB) and has its own. docs/deployment.md ("Memory for photos") has the peaks.
 WEBP_MAX_PIXELS = 20_000_000
 PNG_MAX_PIXELS = 36_000_000
 GIF_MAX_PIXELS = 36_000_000
 HEIF_MAX_PIXELS = 50_000_000
+PROGRESSIVE_JPEG_MAX_PIXELS = 50_000_000
 PIXEL_BUDGETS = {
     "WEBP": WEBP_MAX_PIXELS,
     "PNG": PNG_MAX_PIXELS,
@@ -208,10 +211,18 @@ def _open(path: Path) -> Image.Image:
         return Image.open(path)
 
 
+def _budget_of(picture: Image.Image) -> int | None:
+    """How many pixels ``picture`` may have beyond Pillow's limit, by its format; None: no budget.
+    Pillow reads a JPEG's ``progressive`` flag from the header."""
+    if picture.format in ("JPEG", "MPO") and picture.info.get("progressive"):
+        return PROGRESSIVE_JPEG_MAX_PIXELS
+    return PIXEL_BUDGETS.get(picture.format or "")
+
+
 def _check_budget(picture: Image.Image) -> None:
     """``Image.DecompressionBombError`` for a picture with more pixels than its format's budget
-    (``PIXEL_BUDGETS``). The size is in the header: nothing has been decoded yet."""
-    budget = PIXEL_BUDGETS.get(picture.format or "")
+    (``_budget_of``). The size is in the header: nothing has been decoded yet."""
+    budget = _budget_of(picture)
     pixels = picture.width * picture.height
     if budget is not None and pixels > budget:
         raise Image.DecompressionBombError(
@@ -223,7 +234,8 @@ def _check_budget(picture: Image.Image) -> None:
 def _decode_images(path: Path, heic: bool) -> tuple[Image.Image | None, Image.Image]:
     """The JPEG preview of a HEIC photo (None for any other picture) and the thumbnail of the
     picture stored at ``path``, in memory. ``ValidationFailed(BROKEN_IMAGE)`` for anything Pillow
-    cannot read (reading and turning only: writing the result is not this)."""
+    cannot read (reading and turning only: writing the result is not this), and
+    ``ValidationFailed(TOO_MANY_PIXELS)`` for a picture over its pixel limit."""
     try:
         with _open(path) as probe:
             _check_budget(probe)
@@ -240,6 +252,8 @@ def _decode_images(path: Path, heic: bool) -> tuple[Image.Image | None, Image.Im
             if thumb.mode not in ("RGB", "RGBA"):
                 thumb = thumb.convert("RGBA" if thumb.has_transparency_data else "RGB")
             return preview, thumb
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise ValidationFailed(TOO_MANY_PIXELS) from exc  # a budget's or Pillow's own limit
     except Exception as exc:  # Pillow's decoders raise all sorts of errors on a corrupt file
         logger.info("An image could not be read: %r", exc)
         raise ValidationFailed(BROKEN_IMAGE) from exc
