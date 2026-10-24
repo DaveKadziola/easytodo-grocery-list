@@ -5,6 +5,7 @@
 set -eu
 
 if ! python - <<'PY'
+import ipaddress
 import os
 import sys
 
@@ -13,21 +14,32 @@ from pydantic import ValidationError
 from easytodo.config import Settings
 
 try:
-    settings = Settings()
+    Settings()
 except ValidationError as exc:
     for error in exc.errors(include_url=False, include_input=False):  # no secret in the log
         name = "EASYTODO_" + "_".join(str(part) for part in error["loc"]).upper()
         print(f"entrypoint: {name}: {error['msg']}", file=sys.stderr)
     sys.exit(1)
 
-# Trusting X-Forwarded-For from everyone ("*" as the whole value, as uvicorn reads it, or a list
-# with 0.0.0.0/0 or ::/0, which uvicorn takes for every IPv4 or IPv6 address) is safe only when
-# nobody but the reverse proxy can connect: a warning, not a refusal (nothing here is a secret).
-allowed = settings.forwarded_allow_ips
-trusts_everyone = allowed == "*" or bool(
-    {"0.0.0.0/0", "::/0"} & {item.strip() for item in allowed.split(",")}
-)
-if trusts_everyone and os.environ.get("EASYTODO_BIND", "").strip() != "127.0.0.1":
+
+def trusts_everyone(allowed):
+    """Whether uvicorn trusts X-Forwarded-For from every peer: "*" as the whole value, or an item
+    that is a network of all addresses (/0 in any spelling: 0::/0, 0.0.0.0/00, 0.0.0.0/0.0.0.0)."""
+    if allowed == "*":
+        return True
+    for item in allowed.split(","):
+        try:
+            if ipaddress.ip_network(item.strip(), strict=False).prefixlen == 0:
+                return True
+        except ValueError:  # a host name: uvicorn takes it as it is
+            pass
+    return False
+
+
+# Trusting X-Forwarded-For from everyone is safe only when nobody but the reverse proxy can
+# connect: a warning, not a refusal. The value is read as the shell below hands it to uvicorn.
+allowed = os.environ.get("EASYTODO_FORWARDED_ALLOW_IPS", "127.0.0.1")
+if trusts_everyone(allowed) and os.environ.get("EASYTODO_BIND", "").strip() != "127.0.0.1":
     print(
         f"entrypoint: warning: EASYTODO_FORWARDED_ALLOW_IPS={allowed} trusts X-Forwarded-For from"
         " anyone who can connect, but EASYTODO_BIND is not 127.0.0.1, so anyone on the network"

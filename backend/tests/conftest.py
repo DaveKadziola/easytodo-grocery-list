@@ -82,7 +82,8 @@ def _no_developer_settings() -> Iterator[None]:
     CI or the working directory holds: a leftover EASYTODO_PUBLIC_URL, say, would change every
     origin the tests build. A test that needs a setting passes it, or sets it with monkeypatch."""
     with pytest.MonkeyPatch.context() as patch:
-        for name in [name for name in os.environ if name.startswith("EASYTODO_")]:
+        # Any case: pydantic-settings reads the names case-insensitively.
+        for name in [name for name in os.environ if name.upper().startswith("EASYTODO_")]:
             patch.delenv(name)
         patch.setitem(Settings.model_config, "env_file", None)
         yield

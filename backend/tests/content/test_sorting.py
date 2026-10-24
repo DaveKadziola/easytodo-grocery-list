@@ -348,8 +348,10 @@ async def test_two_sorts_of_the_same_category_at_once_leave_one_row(
         first = asyncio.create_task(sort("name", False))
         await first_is_writing.wait()
         second = asyncio.create_task(sort("created", True))
-        await wait_until_blocked_by(db, first_pid)  # the second one's upsert, behind the first
-        release_first.set()
+        try:
+            await wait_until_blocked_by(db, first_pid)  # the second one's upsert, behind the first
+        finally:
+            release_first.set()  # also when the wait fails: the first holds its row lock until then
         await asyncio.gather(first, second)  # neither raises
 
     await asyncio.wait_for(race(), timeout=15)

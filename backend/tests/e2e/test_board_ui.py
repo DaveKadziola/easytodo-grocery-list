@@ -180,6 +180,8 @@ def touch_drag(page: Page, source: Locator, target: Locator, landed: Locator | N
         page.wait_for_timeout(20)
     if landed is not None:
         expect(landed).to_have_count(1)  # Sortable looks under the finger every 50 ms
+    else:
+        expect(page.locator(PICKED_UP)).to_have_count(0)  # a swipe picks nothing up
     finger("touchEnd")
 
 
@@ -204,7 +206,7 @@ def test_long_press_drags_an_item_on_a_touch_screen(logged_in_page_mobile, seed,
 
     assert moved.value.status == 200
     expect(items_of(page, "Bakery")).to_have_text([re.compile("Bread"), re.compile("Milk")])
-    assert len(moves) == 1  # the swipe moved nothing
+    assert len(moves) == 1  # only the long press saved a move
 
 
 def test_no_csp_violations(browser, live_server, logged_in_page, seed, user, open_board):

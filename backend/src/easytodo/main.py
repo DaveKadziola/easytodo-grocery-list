@@ -44,8 +44,10 @@ from easytodo.security.ratelimit import RateLimiter
 from easytodo.web import STATIC_DIR
 
 IMMUTABLE = "public, max-age=31536000, immutable"
-# How long /healthz waits for the database, in seconds: less than the 3 s of the Dockerfile's probe,
-# which would otherwise give up first (asyncpg would wait up to 60 s to connect).
+# How long /healthz waits for the database, in seconds, before it answers 503 (asyncpg would wait
+# up to 60 s to connect). When an established connection hangs, SQLAlchemy's graceful close adds up
+# to about 2 s, so the 503 can come after about 4 s: the Dockerfile's probe (timeout 3 s) may give
+# up first, and counts that as unhealthy as well.
 HEALTHZ_TIMEOUT_S = 2.0
 # Already compressed, like the pictures GZipMiddleware leaves alone: a PDF and a HEIC photo.
 NOT_WORTH_COMPRESSING = (*DEFAULT_EXCLUDED_CONTENT_TYPES, "application/pdf", "image/heic")
